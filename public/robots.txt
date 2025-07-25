@@ -1,0 +1,10 @@
+# Main site robots.txt
+User-agent: *
+Allow: /
+
+# Block tracking subdomain completely
+User-agent: *
+Disallow: /tracking
+
+# Sitemap for main site only
+Sitemap: https://parcare-aeroport.ro/sitemap.xml 

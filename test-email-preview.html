@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Preview OTP Parking Email Template</title>
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #ee7f1a, #d67016); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+    
+    .header h1 { color: #ffffff; text-shadow: 2px 2px 4px rgba(0,0,0,0.3); margin: 10px 0; }
+    .header p { color: #f0f8ff; font-size: 16px; margin: 5px 0; }
+    .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+    .booking-details { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .detail-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
+    .detail-label { font-weight: bold; color: #666; }
+    .detail-value { color: #333; }
+    .qr-section { text-align: center; background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .qr-code { max-width: 200px; height: auto; border: 2px solid #ddd; border-radius: 8px; }
+    .warning { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 8px; margin: 20px 0; }
+    .contact-section { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .contact-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+    .contact-item { text-align: center; padding: 10px; }
+    .contact-item h4 { margin: 0 0 5px; color: #ee7f1a; font-size: 14px; }
+    .contact-item p { margin: 0; font-size: 13px; }
+    .footer { text-align: center; color: #666; font-size: 12px; margin-top: 30px; }
+    @media (max-width: 600px) {
+      .contact-grid { grid-template-columns: 1fr; gap: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      
+      <h1>🅿️ Confirmare Rezervare Parcare</h1>
+      <p>Rezervarea dumneavoastră a fost confirmată cu succes!</p>
+    </div>
+    
+    <div class="content">
+      <h2>Detalii Rezervare</h2>
+      <div class="booking-details">
+        <div class="detail-row">
+          <span class="detail-label">Număr Rezervare:</span>
+          <span class="detail-value"><strong>015981</strong></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Număr Înmatriculare:</span>
+          <span class="detail-value">B123ABC</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Data Intrare:</span>
+          <span class="detail-value">2024-01-15 08:00</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Data Ieșire:</span>
+          <span class="detail-value">2024-01-16 08:00</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Durată:</span>
+          <span class="detail-value">1 zi</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Preț Total:</span>
+          <span class="detail-value"><strong>25.00 RON</strong></span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">Status:</span>
+          <span class="detail-value">Confirmat</span>
+        </div>
+      </div>
+      
+      <div class="qr-section">
+        <h3>Cod QR pentru Acces</h3>
+        <p>Prezentați acest cod QR la bariera de acces:</p>
+        <div style="width: 200px; height: 200px; background: #f0f0f0; border: 2px solid #ddd; border-radius: 8px; margin: 0 auto; display: flex; align-items: center; justify-content: center; color: #666;">
+          [QR CODE]<br>MPK_RES=015981
+        </div>
+        <p><small>Cod QR: MPK_RES=015981</small></p>
+      </div>
+      
+      <div class="warning">
+        <strong>⚠️ Importante:</strong><br>
+        • Prezentați-vă cu maximum 2 ore înainte de ora rezervată<br>
+        • Păstrați acest email și codul QR pentru accesul la parcare<br>
+        • Anularea se poate face cu minimum 24 ore înainte<br>
+        • Pentru suport, contactați-ne folosind datele de mai jos
+      </div>
+      
+      <div class="contact-section">
+        <h3 style="text-align: center; color: #ee7f1a; margin-bottom: 20px;">📞 Contactați-ne</h3>
+        <div class="contact-grid">
+          <div class="contact-item">
+            <h4>📞 Telefon</h4>
+            <p><strong>Rezervări:</strong><br>+40 123 456 789</p>
+            <p><strong>Urgențe:</strong><br>+40 123 456 790</p>
+          </div>
+          <div class="contact-item">
+            <h4>📧 Email</h4>
+            <p><strong>Rezervări:</strong><br>rezervari@parcare-aeroport.ro</p>
+            <p><strong>Support:</strong><br>contact.parcareaeroport@gmail.com</p>
+          </div>
+          <div class="contact-item">
+            <h4>🕒 Program</h4>
+            <p><strong>L-V:</strong> 06:00 - 22:00</p>
+            <p><strong>S-D:</strong> 08:00 - 20:00</p>
+          </div>
+          <div class="contact-item">
+            <h4>📍 Locație</h4>
+            <p>Șoseaua București-Ploiești 42A</p>
+            <p>Otopeni, Ilfov</p>
+            <p><small>La 500 metri de Aeroportul Henri Coandă</small></p>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="footer">
+      <p>Acest email a fost trimis automat de sistemul Parcare-Aeroport Otopeni.</p>
+      <p>Rezervarea a fost creată la: 15.01.2024, 10:30:45</p>
+      <p style="margin-top: 10px;">
+        <strong>Parcare-Aeroport SRL</strong> | 
+        Șoseaua București-Ploiești 42A, Otopeni, Ilfov | 
+        contact.parcareaeroport@gmail.com
+      </p>
+    </div>
+  </div>
+</body>
+</html> 
