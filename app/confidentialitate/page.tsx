@@ -3,7 +3,7 @@ import Header from "@/components/header"
 import Footer from "@/components/footer"
 
 export const metadata: Metadata = {
-  title: "Politica de Confidențialitate | Parcare-Aeroport Otopeni",
+  title: "Politica de Confidențialitate | rezervari.otp-parking Otopeni",
   description: "Informații despre modul în care colectăm, utilizăm și protejăm datele dvs. personale.",
   keywords: ["politica confidentialitate", "protectia datelor", "gdpr parcare otopeni"],
   alternates: {
@@ -23,9 +23,9 @@ export default function PrivacyPolicyPage() {
             <p>Ultima actualizare: {new Date().toLocaleDateString("ro-RO")}</p>
 
             <p>
-              Această Politică de Confidențialitate descrie modul în care Parcare-Aeroport SRL ("noi", "nouă" sau
+              Această Politică de Confidențialitate descrie modul în care rezervari.otp-parking SRL ("noi", "nouă" sau
               "nostru") colectează, utilizează și divulgă informațiile dvs. atunci când utilizați serviciul nostru de
-              parcare și site-ul web parcare-aeroport.ro ("Serviciul").
+              parcare și site-ul web rezervari.otp-parking.ro ("Serviciul").
             </p>
 
             <h2>1. Informațiile pe care le colectăm</h2>

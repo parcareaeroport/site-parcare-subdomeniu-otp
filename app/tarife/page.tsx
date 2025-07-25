@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     title: "Tarif OTP Parking - Parcare Otopeni Preț",
     description:
       "Cauți parcare Otopeni preț mic? La noi găsești probabil cel mai avantajos tarif pentru parcarea lângă aeroport. Rezervă acum!",
-    url: "https://parcare-aeroport.ro/tarife",
+    url: "https://rezervari.otp-parking.ro/tarife",
   },
 }
 

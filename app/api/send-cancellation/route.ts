@@ -97,7 +97,7 @@ function generateCancellationEmailHTML(data: CancellationData): string {
         </div>
         
         <div class="footer">
-          <p>Această cerere a fost trimisă automat de pe site-ul Parcare-Aeroport Otopeni.</p>
+          <p>Această cerere a fost trimisă automat de pe site-ul rezervari.otp-parking Otopeni.</p>
           <p>Data și ora: ${new Date().toLocaleString('ro-RO')}</p>
         </div>
       </div>

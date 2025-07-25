@@ -3,8 +3,8 @@ import Header from "@/components/header"
 import Footer from "@/components/footer"
 
 export const metadata: Metadata = {
-  title: "Termeni de Utilizare site | Parcare-Aeroport Otopeni",
-  description: "Termenii și condițiile de utilizare a serviciilor de parcare oferite de Parcare-Aeroport Otopeni.",
+  title: "Termeni de Utilizare site | rezervari.otp-parking Otopeni",
+  description: "Termenii și condițiile de utilizare a serviciilor de parcare oferite de rezervari.otp-parking Otopeni.",
   keywords: ["termeni utilizare", "conditii parcare", "reguli parcare otopeni"],
   alternates: {
     canonical: "/termeni",
@@ -24,7 +24,7 @@ export default function TermsOfServicePage() {
 
             <p>
               Vă rugăm să citiți cu atenție acești Termeni de Utilizare ("Termeni") înainte de a utiliza site-ul web
-              parcare-aeroport.ro și serviciile de parcare oferite de Parcare-Aeroport SRL ("Compania", "noi", "nouă"
+              rezervari.otp-parking.ro și serviciile de parcare oferite de rezervari.otp-parking SRL ("Compania", "noi", "nouă"
               sau "nostru").
             </p>
 
@@ -36,8 +36,8 @@ export default function TermsOfServicePage() {
             <h2>1. Definiții</h2>
             <ul>
               <li>
-                <strong>Serviciul</strong> se referă la site-ul web parcare-aeroport.ro și serviciile de parcare oferite
-                de Parcare-Aeroport SRL.
+                <strong>Serviciul</strong> se referă la site-ul web rezervari.otp-parking.ro și serviciile de parcare oferite
+                de rezervari.otp-parking SRL.
               </li>
               <li>
                 <strong>Utilizator</strong> se referă la persoana care accesează sau utilizează Serviciul.

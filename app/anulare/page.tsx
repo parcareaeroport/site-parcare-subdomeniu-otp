@@ -4,7 +4,7 @@ import Footer from "@/components/footer"
 import CancellationForm from "@/components/cancellation-form"
 
 export const metadata: Metadata = {
-  title: "Anulare Rezervare | Parcare-Aeroport Otopeni",
+  title: "Anulare Rezervare | rezervari.otp-parking Otopeni",
   description:
     "Anulați rezervarea locului de parcare la Aeroportul Otopeni. Completați formularul pentru returnarea costurilor.",
   keywords: [

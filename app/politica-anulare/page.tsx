@@ -3,7 +3,7 @@ import Header from "@/components/header"
 import Footer from "@/components/footer"
 
 export const metadata: Metadata = {
-  title: "Politica de Anulare | Parcare-Aeroport Otopeni",
+  title: "Politica de Anulare | rezervari.otp-parking Otopeni",
   description: "Informații despre politica de anulare a rezervărilor pentru parcarea de lângă Aeroportul Otopeni.",
   keywords: ["politica anulare", "anulare rezervare parcare", "rambursare parcare otopeni"],
   alternates: {
@@ -24,7 +24,7 @@ export default function CancellationPolicyPage() {
 
             <h2>1. Anularea rezervărilor</h2>
             <p>
-              La Parcare-Aeroport Otopeni, înțelegem că planurile de călătorie se pot schimba. Politica noastră de
+              La rezervari.otp-parking Otopeni, înțelegem că planurile de călătorie se pot schimba. Politica noastră de
               anulare este concepută pentru a oferi flexibilitate, asigurând în același timp o gestionare eficientă a
               spațiului nostru de parcare.
             </p>

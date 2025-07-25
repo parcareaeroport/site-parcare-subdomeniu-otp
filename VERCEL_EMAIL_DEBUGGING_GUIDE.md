@@ -29,7 +29,7 @@ Creat: `/api/send-confirmation-email`
 ### **Pas 1: Verifică Configurația Email pe Vercel**
 ```bash
 # Accsează în browser:
-https://parcare-aeroport.ro/api/check-email-config
+https://rezervari.otp-parking.ro/api/check-email-config
 ```
 
 **Verifică că afișează**:
@@ -40,7 +40,7 @@ https://parcare-aeroport.ro/api/check-email-config
 ### **Pas 2: Testează Endpoint-ul de Email Direct**
 ```bash
 # Testează direct API-ul de email:
-curl -X POST https://parcare-aeroport.ro/api/send-confirmation-email \
+curl -X POST https://rezervari.otp-parking.ro/api/send-confirmation-email \
   -H "Content-Type: application/json" \
   -d '{
     "bookingData": {
@@ -150,7 +150,7 @@ GMAIL_APP_PASSWORD=your-16-digit-app-password
 ```javascript
 // Salvează ca test-email.js
 const testEmail = async () => {
-  const response = await fetch('https://parcare-aeroport.ro/api/send-confirmation-email', {
+  const response = await fetch('https://rezervari.otp-parking.ro/api/send-confirmation-email', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

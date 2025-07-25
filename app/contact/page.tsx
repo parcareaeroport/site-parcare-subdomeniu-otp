@@ -24,7 +24,7 @@ export const metadata: Metadata = {
     title: "Contact Parcare Otopeni | Asistență 24/7",
     description:
       "Contactează-ne pentru orice întrebare legată de parcarea de lângă Aeroportul Otopeni. Echipa noastră de suport este disponibilă 24/7 pentru a-ți oferi asistența necesară.",
-    url: "https://parcare-aeroport.ro/contact",
+    url: "https://rezervari.otp-parking.ro/contact",
   },
 }
 
@@ -44,11 +44,11 @@ export default function ContactPage() {
           {
             "@context": "https://schema.org",
             "@type": "ContactPage",
-            "name": "Contact Parcare-Aeroport Otopeni",
+            "name": "Contact rezervari.otp-parking Otopeni",
             "description": "Contactează-ne pentru orice întrebare legată de parcarea de lângă Aeroportul Otopeni.",
             "mainEntity": {
               "@type": "Organization",
-              "name": "Parcare-Aeroport SRL",
+              "name": "rezervari.otp-parking SRL",
               "telephone": "+40734292818",
               "email": "contact.parcareaeroport@gmail.com",
               "address": {

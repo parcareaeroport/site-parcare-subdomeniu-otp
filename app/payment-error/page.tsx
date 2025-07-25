@@ -5,7 +5,7 @@ import Footer from "@/components/footer"
 import PaymentErrorContent from "@/components/payment-error-content"
 
 export const metadata: Metadata = {
-  title: "Eroare Plată | Parcare-Aeroport Otopeni",
+  title: "Eroare Plată | rezervari.otp-parking Otopeni",
   description: "A apărut o problemă cu plata. Încearcă din nou sau contactează-ne pentru suport.",
   robots: "noindex, nofollow"
 }

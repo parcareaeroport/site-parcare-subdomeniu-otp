@@ -38,7 +38,7 @@ export const metadata: Metadata = {
     email: true,
     address: true,
   },
-  metadataBase: new URL("https://parcare-aeroport.ro"),
+  metadataBase: new URL("https://rezervari.otp-parking.ro"),
   alternates: {
     canonical: "/",
     languages: {
@@ -49,7 +49,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "ro_RO",
-    url: "https://parcare-aeroport.ro",
+    url: "https://rezervari.otp-parking.ro",
     title: "OTP Parking - Parcare Privată Otopeni - Tarif Mic",
     description:
       "Alege inteligent, alege siguranța, alege confortul. Alege OTP Parking la un tarif avantajos pentru tine!",
@@ -72,11 +72,11 @@ export const metadata: Metadata = {
     creator: "@parcareaeroport",
   },
   robots: {
-    index: true,
-    follow: true,
+    index: false,
+    follow: false,
     googleBot: {
-      index: true,
-      follow: true,
+      index: false,
+      follow: false,
       "max-video-preview": -1,
       "max-image-preview": "large",
       "max-snippet": -1,
@@ -130,7 +130,7 @@ export default function RootLayout({
             (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
             new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
             j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
-            'https://patrack.parcare-aeroport.ro/6kwxp/c4ti0.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+            'https://patrack.rezervari.otp-parking.ro/6kwxp/c4ti0.js?id='+i+dl;f.parentNode.insertBefore(j,f);
             })(window,document,'script','dataLayer','KRNVVQM6');
             `,
           }}

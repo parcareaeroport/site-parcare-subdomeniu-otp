@@ -170,7 +170,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
           
           <!-- Buton Anulare Rezervare -->
           <div style="text-align: center; margin: 30px 0;">
-            <a href="https://parcare-aeroport.ro/anulare" 
+            <a href="https://rezervari.otp-parking.ro/anulare" 
                style="display: inline-block; background: #dc3545; color: white; padding: 15px 30px; border-radius: 8px; text-decoration: none; font-size: 16px; font-weight: bold; box-shadow: 0 4px 6px rgba(220, 53, 69, 0.3);">
               🚫 Anulează rezervarea
             </a>
@@ -301,7 +301,7 @@ export async function sendBookingConfirmationEmail(bookingData: BookingEmailData
     const mailOptions = {
       from: {
         name: 'OTP Parking',
-        address: process.env.GMAIL_USER || 'noreply@parcare-aeroport.ro'
+        address: process.env.GMAIL_USER || 'noreply@rezervari.otp-parking.ro'
       },
       to: bookingData.clientEmail,
       subject: `Confirmare Rezervare OTP Parking - ${formattedBookingNumber}`,

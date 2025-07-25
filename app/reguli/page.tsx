@@ -18,7 +18,7 @@ export const metadata: Metadata = {
     title: "Regulile Parcării Otopeni | Informații Importante pentru Șoferi",
     description:
       "Consultă regulile parcării de lângă Aeroportul Otopeni. Informații despre intrare, ieșire, plată și alte aspecte importante pentru o experiență fără probleme.",
-    url: "https://parcare-aeroport.ro/reguli",
+    url: "https://rezervari.otp-parking.ro/reguli",
   },
 }
 

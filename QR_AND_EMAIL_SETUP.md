@@ -117,7 +117,7 @@ const result = await retryFailedEmails('booking-id-123')
 
 ```
 🅿️ Confirmare Rezervare Parcare
-[LOGO PARCARE-AEROPORT OTOPENI]
+[LOGO rezervari.otp-parking OTOPENI]
 
 Rezervarea dumneavoastră a fost confirmată cu succes!
 
@@ -145,7 +145,7 @@ Cod QR: MPK_RES=015981
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📞 Telefon                    📧 Email
-Rezervări: +40 123 456 789    Rezervări: rezervari@parcare-aeroport.ro
+Rezervări: +40 123 456 789    Rezervări: rezervari@rezervari.otp-parking.ro
 Urgențe: +40 123 456 790      Support: contact.parcareaeroport@gmail.com
 
 🕒 Program                    📍 Locație
@@ -154,7 +154,7 @@ S-D: 08:00 - 20:00           Otopeni, Ilfov
                              La 500 metri de Aeroportul Henri Coandă
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Parcare-Aeroport SRL | contact.parcareaeroport@gmail.com
+rezervari.otp-parking SRL | contact.parcareaeroport@gmail.com
 Rezervarea a fost creată la: 15.01.2024, 10:30:45
 ```
 

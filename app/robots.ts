@@ -5,21 +5,9 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: '*',
-        allow: '/',
-        disallow: ['/admin/', '/api/', '/_next/', '/static/'],
-      },
-      {
-        userAgent: 'Googlebot',
-        allow: '/',
-        disallow: ['/admin/', '/api/'],
-      },
-      {
-        userAgent: 'Bingbot',
-        allow: '/',
-        disallow: ['/admin/', '/api/'],
+        disallow: '/',
       }
     ],
-    sitemap: 'https://parcare-aeroport.ro/sitemap.xml',
-    host: 'https://parcare-aeroport.ro'
+    // Removing sitemap and host since we don't want any indexing
   }
 }

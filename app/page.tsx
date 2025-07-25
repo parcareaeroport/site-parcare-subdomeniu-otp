@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     title: "OTP Parking - Transfer Gratuit & Securitate 24/7",
     description: "Cea mai convenabilă parcare lângă Aeroportul Otopeni. Transfer gratuit, supraveghere video, locuri asfaltate. Rezervă acum cu reducere!",
     type: "website",
-    url: "https://parcare-aeroport.ro",
+    url: "https://rezervari.otp-parking.ro",
     images: [
       {
         url: "/parcare_otopeni_seo_image.jpg",
@@ -40,18 +40,18 @@ export const metadata: Metadata = {
     images: ["/parcare_otopeni_seo_image.jpg"]
   },
   robots: {
-    index: true,
-    follow: true,
+    index: false,
+    follow: false,
     googleBot: {
-      index: true,
-      follow: true,
+      index: false,
+      follow: false,
       "max-video-preview": -1,
       "max-image-preview": "large",
       "max-snippet": -1,
     },
   },
   alternates: {
-    canonical: "https://parcare-aeroport.ro"
+    canonical: "https://rezervari.otp-parking.ro"
   }
 }
 
@@ -76,9 +76,9 @@ export default function Home() {
           {
             "@context": "https://schema.org",
             "@type": "ParkingFacility",
-            "name": "Parcare-Aeroport Otopeni",
-            "image": "https://parcare-aeroport.ro/images/parking-lot.jpg",
-            "url": "https://parcare-aeroport.ro",
+            "name": "rezervari.otp-parking Otopeni",
+            "image": "https://rezervari.otp-parking.ro/images/parking-lot.jpg",
+            "url": "https://rezervari.otp-parking.ro",
             "telephone": "+40742039955",
             "address": {
               "@type": "PostalAddress",

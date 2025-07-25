@@ -5,7 +5,7 @@ import OrderPlacementForm from "@/components/order-placement-form"
 import CheckoutSteps from "@/components/checkout-steps"
 
 export const metadata: Metadata = {
-  title: "Plasare Comandă | Parcare-Aeroport Otopeni",
+  title: "Plasare Comandă | rezervari.otp-parking Otopeni",
   description:
     "Finalizează rezervarea locului de parcare la Aeroportul Otopeni. Completează datele și alege metoda de plată.",
   keywords: [

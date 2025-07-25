@@ -735,7 +735,7 @@ export async function createBookingWithFirestore(
           
           const emailApiUrl = process.env.NODE_ENV === 'development' 
             ? 'http://localhost:3000/api/send-confirmation-email'
-            : 'https://parcare-aeroport.ro/api/send-confirmation-email'
+            : 'https://rezervari.otp-parking.ro/api/send-confirmation-email'
           
           const emailResponse = await fetch(emailApiUrl, {
             method: 'POST',
