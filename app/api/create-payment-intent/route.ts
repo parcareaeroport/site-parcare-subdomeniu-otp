@@ -31,6 +31,7 @@ export async function POST(request: NextRequest) {
       licensePlate: normalizeLicensePlate(bookingData.licensePlate), // Normalizare pentru siguranță
       startDate: bookingData.startDate,
       endDate: bookingData.endDate,
+      sourceUrl: process.env.NEXT_PUBLIC_APP_URL || "", // Adăugăm sursa pentru identificare
     }
 
     // Adăugăm datele de facturare dacă sunt disponibile

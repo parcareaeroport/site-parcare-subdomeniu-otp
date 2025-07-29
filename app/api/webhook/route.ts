@@ -55,6 +55,7 @@ export async function POST(req: Request) {
     
     if (bookingMetadata) {
       console.log(`📋 [${webhookProcessId}] Booking metadata:`)
+      console.log(`📋 [${webhookProcessId}]   Source URL: ${bookingMetadata.sourceUrl || 'MISSING'}`)
       console.log(`📋 [${webhookProcessId}]   License Plate: ${bookingMetadata.licensePlate || 'MISSING'}`)
       console.log(`📋 [${webhookProcessId}]   Start Date: ${bookingMetadata.startDate || 'MISSING'}`)
       console.log(`📋 [${webhookProcessId}]   End Date: ${bookingMetadata.endDate || 'MISSING'}`)
@@ -64,6 +65,32 @@ export async function POST(req: Request) {
       console.log(`📋 [${webhookProcessId}]   Company: ${bookingMetadata.company || 'N/A'}`)
       console.log(`📋 [${webhookProcessId}]   Need Invoice: ${bookingMetadata.needInvoice || 'N/A'}`)
     }
+
+    // Verificăm dacă acest webhook trebuie să proceseze evenimentul
+    const sourceUrl = bookingMetadata?.sourceUrl || ""
+    const currentAppUrl = process.env.NEXT_PUBLIC_APP_URL || ""
+    
+    console.log(`🔍 [${webhookProcessId}] ===== SOURCE VALIDATION =====`)
+    console.log(`🔍 [${webhookProcessId}] Payment source URL: ${sourceUrl}`)
+    console.log(`🔍 [${webhookProcessId}] Current app URL: ${currentAppUrl}`)
+    
+    if (sourceUrl && currentAppUrl && sourceUrl !== currentAppUrl) {
+      console.log(`⏭️ [${webhookProcessId}] ===== SKIPPING PROCESSING =====`)
+      console.log(`⏭️ [${webhookProcessId}] Payment was made from different domain: ${sourceUrl}`)
+      console.log(`⏭️ [${webhookProcessId}] This webhook is for: ${currentAppUrl}`)
+      console.log(`⏭️ [${webhookProcessId}] Skipping to avoid duplicate processing`)
+      
+      return NextResponse.json({ 
+        received: true, 
+        skipped: true,
+        reason: "Different source domain",
+        sourceUrl,
+        currentUrl: currentAppUrl,
+        webhookProcessId 
+      }, { status: 200 })
+    }
+    
+    console.log(`✅ [${webhookProcessId}] Source validation passed - processing payment`)
 
     if (
       !bookingMetadata ||
