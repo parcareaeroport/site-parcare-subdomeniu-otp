@@ -4,7 +4,7 @@ import { Inter } from "next/font/google"
 import Script from "next/script"
 import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
-import WhatsAppFloating from "@/components/whatsapp-floating"
+import CallFloating from "@/components/whatsapp-floating"
 
 const inter = Inter({ subsets: ["latin"], display: "swap" })
 
@@ -227,7 +227,7 @@ export default function RootLayout({
         {/* End Meta Pixel Code (noscript) */}
         
         {children}
-        <WhatsAppFloating />
+        <CallFloating />
         <Toaster />
       </body>
     </html>
