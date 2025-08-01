@@ -723,12 +723,7 @@ export default function OrderPlacementForm() {
                       <>
                         <div>
                           <h2 className="text-lg font-bold mb-4">Detalii pentru rezervare</h2>
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                            <p className="text-sm text-blue-800 flex items-start">
-                              <Info className="h-4 w-4 mr-2 flex-shrink-0 mt-0.5" />
-                              Pentru plata la parcare sunt necesare doar informațiile de bază pentru confirmarea rezervării.
-                            </p>
-                          </div>
+                         
                         </div>
 
                         <div>
@@ -1279,12 +1274,7 @@ export default function OrderPlacementForm() {
                       <>
                         <div>
                           <h2 className="text-lg font-bold mb-4">Detalii pentru rezervare</h2>
-                          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-                            <p className="text-sm text-blue-800 flex items-start">
-                              <Info className="h-4 w-4 mr-2 flex-shrink-0 mt-0.5" />
-                              Pentru plata la parcare sunt necesare doar informațiile de bază pentru confirmarea rezervării.
-                            </p>
-                          </div>
+                        
                         </div>
 
                         <div>
