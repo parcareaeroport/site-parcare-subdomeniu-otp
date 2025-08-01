@@ -106,7 +106,7 @@ export default function Header() {
             aria-label="Contact rapid telefonic"
           >
             <Phone className="h-4 w-4 md:mr-2" />
-            <span className="hidden md:inline">Contact rapid</span>
+            <span className="hidden md:inline">Contact</span>
           </Link>
           <Button
             variant="ghost"
@@ -209,7 +209,7 @@ export default function Header() {
                 >
                   <Button className="w-full bg-[#ee7f1a] hover:bg-[#d67016] text-white rounded-md text-sm font-medium py-3 transition-all duration-200 shadow-md hover:shadow-lg">
                     <Phone className="h-4 w-4 mr-2" />
-                    Contact rapid
+                    Contact
                   </Button>
                 </Link>
               </div>

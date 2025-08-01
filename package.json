@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test-lpr": "node scripts/test-metrici-lpr.js",
-    "test-lpr-minimal": "node scripts/test-minimal-lpr.js"
+    "test-lpr-minimal": "node scripts/test-minimal-lpr.js",
+    "test-lpr-prod": "LPR_ENDPOINT=metrici-lpr node scripts/test-metrici-lpr.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

@@ -36,9 +36,10 @@ export async function POST(request: NextRequest) {
     
     console.log(`📋 [${requestId}] Form Data Keys:`, Array.from(formData.keys()))
 
-    // Extract all text fields
+    // Extract all text fields - TOATE sunt OPȚIONALE
     const lprData: any = {}
     const imageInfo: any = {}
+    let imageCount = 0
 
     for (const [key, value] of formData.entries()) {
       if (value instanceof File) {
@@ -49,6 +50,7 @@ export async function POST(request: NextRequest) {
           size: value.size,
           type: value.type
         }
+        imageCount++
       } else {
         // It's a text field
         lprData[key] = value.toString()
@@ -56,14 +58,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    console.log(`📊 [${requestId}] Received ${Object.keys(lprData).length} text fields and ${imageCount} images`)
+
     // Log complete data structure în debug mode
     if (debugMode) {
       console.log(`📊 [${requestId}] Complete LPR Text Data:`, JSON.stringify(lprData, null, 2))
       console.log(`📊 [${requestId}] Image Info:`, JSON.stringify(imageInfo, null, 2))
     }
 
-    // Parse specific Metrici fields if present
-    if (lprData.number) {
+    // Verifică datele MINIME necesare
+    const hasLicensePlate = lprData.number && lprData.number.length > 0
+    const hasDirection = lprData.direction && (lprData.direction === "1" || lprData.direction === "2" || lprData.direction === 1 || lprData.direction === 2)
+    
+    console.log(`🔍 [${requestId}] ===== DATA VALIDATION =====`)
+    console.log(`🔍 [${requestId}] Has License Plate: ${hasLicensePlate ? '✅' : '❌'} (${lprData.number || 'MISSING'})`)
+    console.log(`🔍 [${requestId}] Has Direction: ${hasDirection ? '✅' : '❌'} (${lprData.direction || 'MISSING'})`)
+
+    // Parse toate câmpurile Metrici DISPONIBILE (toate opționale)
+    if (hasLicensePlate) {
       console.log(`🔍 [${requestId}] ===== PARSED METRICI DATA =====`)
       console.log(`🔍 [${requestId}] License Plate: ${lprData.number}`)
       console.log(`🔍 [${requestId}] Country Code: ${lprData.country_code || 'N/A'}`)
@@ -77,25 +89,34 @@ export async function POST(request: NextRequest) {
       console.log(`🔍 [${requestId}] Vehicle Maker: ${lprData.vehicle_maker || 'N/A'}`)
       console.log(`🔍 [${requestId}] Transaction Key: ${lprData.transactionkey || 'N/A'}`)
       console.log(`🔍 [${requestId}] Auth Hash: ${lprData.auth || 'N/A'}`)
+      console.log(`🔍 [${requestId}] GPS Coords: ${lprData.gps_latitude && lprData.gps_longitude ? `${lprData.gps_latitude}, ${lprData.gps_longitude}` : 'N/A'}`)
+      console.log(`🔍 [${requestId}] Weight: ${lprData.weight || 'N/A'}`)
+      console.log(`🔍 [${requestId}] Speed: ${lprData.speed || 'N/A'}`)
+    } else {
+      console.log(`⚠️ [${requestId}] NO LICENSE PLATE detected - only logging received data`)
     }
 
     // Determine response based on Metrici documentation and environment
     let responseText = "bb1e8f805814a0b8e46560134687237" // Default reporting response
     const defaultAction = process.env.LPR_DEFAULT_ACTION || 'allow'
     
-    // If this is a check action (when Metrici asks for permission)
-    if (lprData.number && (lprData.direction === "1" || lprData.direction === 1)) {
+    // LOGICA MINIMĂ: Doar dacă avem numărul de înmatriculare și e intrare
+    if (hasLicensePlate && (lprData.direction === "1" || lprData.direction === 1)) {
       if (defaultAction === 'allow' && autoOpenBarrier) {
         responseText = "fbd782b5b1f90875a9773ef20bcc16aa open_barrier"
-        console.log(`🚪 [${requestId}] RESPONSE: Allowing access and opening barrier (auto-open: ${autoOpenBarrier})`)
+        console.log(`🚪 [${requestId}] RESPONSE: Allowing access and opening barrier (plate: ${lprData.number})`)
       } else if (defaultAction === 'allow') {
         responseText = "fbd782b5b1f90875a9773ef20bcc16aa"
-        console.log(`🚪 [${requestId}] RESPONSE: Allowing access (no auto-open)`)
+        console.log(`🚪 [${requestId}] RESPONSE: Allowing access without auto-open (plate: ${lprData.number})`)
       } else {
         console.log(`🛑 [${requestId}] RESPONSE: Default action is '${defaultAction}' - standard acknowledgment`)
       }
+    } else if (hasLicensePlate && (lprData.direction === "2" || lprData.direction === 2)) {
+      console.log(`🚪 [${requestId}] RESPONSE: Exit detected for plate ${lprData.number} - standard acknowledgment`)
+    } else if (hasLicensePlate) {
+      console.log(`📊 [${requestId}] RESPONSE: License plate detected but no direction - standard acknowledgment`)
     } else {
-      console.log(`📊 [${requestId}] RESPONSE: Standard reporting acknowledgment`)
+      console.log(`📊 [${requestId}] RESPONSE: No license plate or minimal data - standard acknowledgment`)
     }
 
     const processingTime = Date.now() - startTime
@@ -109,7 +130,9 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'text/plain',
         'X-Request-ID': requestId,
         'X-Processing-Time': processingTime.toString(),
-        'X-LPR-Mode': debugMode ? 'debug' : 'production'
+        'X-LPR-Mode': debugMode ? 'debug' : 'production',
+        'X-Data-Fields': Object.keys(lprData).length.toString(),
+        'X-Images-Count': imageCount.toString()
       }
     })
 

@@ -2,7 +2,8 @@ const FormData = require('form-data');
 
 async function testMetriciLPR() {
   const API_URL = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
-  const endpoint = `${API_URL}/api/metrici-lpr-test`;
+  const endpointName = process.env.LPR_ENDPOINT || 'metrici-lpr-test';
+  const endpoint = `${API_URL}/api/${endpointName}`;
   const authSecret = process.env.LPR_AUTH_SECRET;
   
   console.log('🧪 Testing Metrici LPR API...');
