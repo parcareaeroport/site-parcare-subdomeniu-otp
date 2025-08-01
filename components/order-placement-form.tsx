@@ -726,24 +726,27 @@ export default function OrderPlacementForm() {
                          
                         </div>
 
-                        <div>
-                          <Label htmlFor="fullName">Nume complet</Label>
-                          <Input
-                            id="fullName"
-                            placeholder="Nume și prenume"
-                            required
-                            value={`${firstName} ${lastName}`.trim()}
-                            onChange={(e) => {
-                              const parts = e.target.value.trim().split(' ')
-                              if (parts.length >= 2) {
-                                setFirstName(parts[0])
-                                setLastName(parts.slice(1).join(' '))
-                              } else {
-                                setFirstName(parts[0] || '')
-                                setLastName('')
-                              }
-                            }}
-                          />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <Label htmlFor="firstName">Prenume</Label>
+                            <Input
+                              id="firstName"
+                              placeholder="Prenumele dvs."
+                              required
+                              value={firstName}
+                              onChange={(e) => setFirstName(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="lastName">Nume</Label>
+                            <Input
+                              id="lastName"
+                              placeholder="Numele dvs."
+                              required
+                              value={lastName}
+                              onChange={(e) => setLastName(e.target.value)}
+                            />
+                          </div>
                         </div>
 
                         <div>
@@ -1243,7 +1246,7 @@ export default function OrderPlacementForm() {
                           <Label htmlFor="card" className="flex-1 cursor-pointer">
                             <div className="flex flex-col">
                               <span className="text-base md:text-sm font-medium">Plată online cu cardul (Stripe)</span>
-                              <span className="text-sm md:text-xs text-green-600 font-medium">10% reducere pentru plata online cu cardul</span>
+                              <span className="text-sm md:text-xs text-red-600 font-medium">10% reducere pentru plata online cu cardul</span>
                             </div>
                           </Label>
                         </div>
@@ -1277,24 +1280,27 @@ export default function OrderPlacementForm() {
                         
                         </div>
 
-                        <div>
-                          <Label htmlFor="fullName">Nume complet</Label>
-                          <Input
-                            id="fullName"
-                            placeholder="Nume și prenume"
-                            required
-                            value={`${firstName} ${lastName}`.trim()}
-                            onChange={(e) => {
-                              const parts = e.target.value.trim().split(' ')
-                              if (parts.length >= 2) {
-                                setFirstName(parts[0])
-                                setLastName(parts.slice(1).join(' '))
-                              } else {
-                                setFirstName(parts[0] || '')
-                                setLastName('')
-                              }
-                            }}
-                          />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div>
+                            <Label htmlFor="firstName">Prenume</Label>
+                            <Input
+                              id="firstName"
+                              placeholder="Prenumele dvs."
+                              required
+                              value={firstName}
+                              onChange={(e) => setFirstName(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor="lastName">Nume</Label>
+                            <Input
+                              id="lastName"
+                              placeholder="Numele dvs."
+                              required
+                              value={lastName}
+                              onChange={(e) => setLastName(e.target.value)}
+                            />
+                          </div>
                         </div>
 
                         <div>
