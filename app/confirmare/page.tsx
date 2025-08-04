@@ -428,7 +428,7 @@ function ConfirmationContent() {
             </Button>
             {status === "success" && (
               <Button asChild variant="outline" className="px-8 py-3">
-                <Link href="/rezerva">Rezervare Nouă</Link>
+                <Link href="/">Rezervare Nouă</Link>
               </Button>
             )}
             {status === "error" && (

@@ -1,148 +1,134 @@
-import { NextRequest, NextResponse } from "next/server"
+// app/api/metrici-lpr/[type]/route.ts
+// ------------------------------------------------------------
+// Metrici LPR integration – unified handler for both "check-action"
+// and "reporting" events, using a dynamic route segment (`check` | `report`).
+// Add the following URLs in the Metrici UI:
+//   • Check‑action URL:   https://<host>/api/metrici-lpr/check
+//   • Reporting URL:     https://<host>/api/metrici-lpr/report
+// ------------------------------------------------------------
+import { NextRequest, NextResponse } from "next/server";
 
-export async function POST(request: NextRequest) {
-  // Verifică dacă LPR este activat
-  if (process.env.LPR_ENABLED === 'false') {
-    console.log('🚫 LPR is disabled via environment variable')
-    return new Response("LPR disabled", { status: 503 })
-  }
+// Run on Node.js to avoid edge body‑size limits and allow larger JPEG payloads
+export const runtime = "nodejs";
+// Allow up to 60 s for very large uploads (optional; tweak as needed)
+export const maxDuration = 60;
 
-  const startTime = Date.now()
-  const requestId = `LPR_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-  const debugMode = process.env.LPR_DEBUG_MODE === 'true'
-  const autoOpenBarrier = process.env.LPR_AUTO_OPEN_BARRIER !== 'false'
-  
-  console.log(`🚗 [${requestId}] ===== METRICI LPR REQUEST RECEIVED =====`)
-  console.log(`🚗 [${requestId}] Timestamp: ${new Date().toISOString()}`)
-  
-  if (debugMode) {
-    console.log(`🐛 [${requestId}] Debug mode enabled`)
-    console.log(`🐛 [${requestId}] Headers:`, Object.fromEntries(request.headers.entries()))
-  }
+// Spec‑defined reply constants
+const CHECK_OK = "fbd782b5b1f90875a9773ef20bcc16aa";
+const REPORTING_OK = "bb1e8f805814a0b8e465601346872377"; // NOTE the trailing 7!
 
-  try {
-    // Verifică autentificare (opțional)
-    if (process.env.LPR_AUTH_SECRET) {
-      const authHeader = request.headers.get('authorization')
-      if (authHeader !== `Bearer ${process.env.LPR_AUTH_SECRET}`) {
-        console.log(`🔒 [${requestId}] Invalid LPR authentication`)
-        return new Response("Unauthorized", { status: 401 })
-      }
-      console.log(`🔐 [${requestId}] Authentication successful`)
-    }
+// Helper: log nicely only when DEBUG enabled
+function dbg(enabled: boolean, ...args: unknown[]) {
+  if (enabled) console.log(...args);
+}
 
-    // Parse multipart/form-data
-    const formData = await request.formData()
-    
-    console.log(`📋 [${requestId}] Form Data Keys:`, Array.from(formData.keys()))
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { type?: string } }
+) {
+  // -----------------------------------------------------------------------
+  // 0. Early exits / runtime flags
+  // -----------------------------------------------------------------------
+  const type = (params.type ?? "report").toLowerCase(); // default to reporting
+  const enabled = process.env.LPR_ENABLED !== "false"; // default TRUE
+  const debug = process.env.LPR_DEBUG_MODE === "true";
+  const autoOpenBarrier = process.env.LPR_AUTO_OPEN_BARRIER !== "false";
+  const defaultAction = process.env.LPR_DEFAULT_ACTION ?? "allow"; // allow | deny | log
 
-    // Extract all text fields - TOATE sunt OPȚIONALE
-    const lprData: any = {}
-    const imageInfo: any = {}
-    let imageCount = 0
-
-    for (const [key, value] of formData.entries()) {
-      if (value instanceof File) {
-        // It's a file (image) - just log info, don't save
-        console.log(`🖼️ [${requestId}] Image: ${key} - ${value.name} (${value.size} bytes, ${value.type})`)
-        imageInfo[key] = {
-          name: value.name,
-          size: value.size,
-          type: value.type
-        }
-        imageCount++
-      } else {
-        // It's a text field
-        lprData[key] = value.toString()
-        console.log(`📝 [${requestId}] ${key}: ${value}`)
-      }
-    }
-
-    console.log(`📊 [${requestId}] Received ${Object.keys(lprData).length} text fields and ${imageCount} images`)
-
-    // Log complete data structure în debug mode
-    if (debugMode) {
-      console.log(`📊 [${requestId}] Complete LPR Text Data:`, JSON.stringify(lprData, null, 2))
-      console.log(`📊 [${requestId}] Image Info:`, JSON.stringify(imageInfo, null, 2))
-    }
-
-    // Verifică datele MINIME necesare
-    const hasLicensePlate = lprData.number && lprData.number.length > 0
-    const hasDirection = lprData.direction && (lprData.direction === "1" || lprData.direction === "2" || lprData.direction === 1 || lprData.direction === 2)
-    
-    console.log(`🔍 [${requestId}] ===== DATA VALIDATION =====`)
-    console.log(`🔍 [${requestId}] Has License Plate: ${hasLicensePlate ? '✅' : '❌'} (${lprData.number || 'MISSING'})`)
-    console.log(`🔍 [${requestId}] Has Direction: ${hasDirection ? '✅' : '❌'} (${lprData.direction || 'MISSING'})`)
-
-    // Parse toate câmpurile Metrici DISPONIBILE (toate opționale)
-    if (hasLicensePlate) {
-      console.log(`🔍 [${requestId}] ===== PARSED METRICI DATA =====`)
-      console.log(`🔍 [${requestId}] License Plate: ${lprData.number}`)
-      console.log(`🔍 [${requestId}] Country Code: ${lprData.country_code || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Direction: ${lprData.direction || 'N/A'} (1=incoming, 2=leaving, 3=unknown)`)
-      console.log(`🔍 [${requestId}] Probability: ${lprData.probability || 'N/A'}`)
-      console.log(`🔍 [${requestId}] First Seen: ${lprData.first_seen || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Last Seen: ${lprData.last_seen || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Camera ID: ${lprData.id || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Vehicle Class: ${lprData.vehicle_class || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Vehicle Color: ${lprData.vehicle_color || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Vehicle Maker: ${lprData.vehicle_maker || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Transaction Key: ${lprData.transactionkey || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Auth Hash: ${lprData.auth || 'N/A'}`)
-      console.log(`🔍 [${requestId}] GPS Coords: ${lprData.gps_latitude && lprData.gps_longitude ? `${lprData.gps_latitude}, ${lprData.gps_longitude}` : 'N/A'}`)
-      console.log(`🔍 [${requestId}] Weight: ${lprData.weight || 'N/A'}`)
-      console.log(`🔍 [${requestId}] Speed: ${lprData.speed || 'N/A'}`)
-    } else {
-      console.log(`⚠️ [${requestId}] NO LICENSE PLATE detected - only logging received data`)
-    }
-
-    // Determine response based on Metrici documentation and environment
-    let responseText = "bb1e8f805814a0b8e46560134687237" // Default reporting response
-    const defaultAction = process.env.LPR_DEFAULT_ACTION || 'allow'
-    
-    // LOGICA MINIMĂ: Doar dacă avem numărul de înmatriculare și e intrare
-    if (hasLicensePlate && (lprData.direction === "1" || lprData.direction === 1)) {
-      if (defaultAction === 'allow' && autoOpenBarrier) {
-        responseText = "fbd782b5b1f90875a9773ef20bcc16aa open_barrier"
-        console.log(`🚪 [${requestId}] RESPONSE: Allowing access and opening barrier (plate: ${lprData.number})`)
-      } else if (defaultAction === 'allow') {
-        responseText = "fbd782b5b1f90875a9773ef20bcc16aa"
-        console.log(`🚪 [${requestId}] RESPONSE: Allowing access without auto-open (plate: ${lprData.number})`)
-      } else {
-        console.log(`🛑 [${requestId}] RESPONSE: Default action is '${defaultAction}' - standard acknowledgment`)
-      }
-    } else if (hasLicensePlate && (lprData.direction === "2" || lprData.direction === 2)) {
-      console.log(`🚪 [${requestId}] RESPONSE: Exit detected for plate ${lprData.number} - standard acknowledgment`)
-    } else if (hasLicensePlate) {
-      console.log(`📊 [${requestId}] RESPONSE: License plate detected but no direction - standard acknowledgment`)
-    } else {
-      console.log(`📊 [${requestId}] RESPONSE: No license plate or minimal data - standard acknowledgment`)
-    }
-
-    const processingTime = Date.now() - startTime
-    console.log(`✅ [${requestId}] Processing completed in ${processingTime}ms`)
-    console.log(`✅ [${requestId}] Response: ${responseText}`)
-    console.log(`🚗 [${requestId}] ===== END METRICI LPR REQUEST =====\n`)
-
-    return new Response(responseText, {
+  // If feature toggled off, still answer with correct token so Metrici stops retrying
+  if (!enabled) {
+    return new Response(type === "check" ? CHECK_OK : REPORTING_OK, {
       status: 200,
-      headers: {
-        'Content-Type': 'text/plain',
-        'X-Request-ID': requestId,
-        'X-Processing-Time': processingTime.toString(),
-        'X-LPR-Mode': debugMode ? 'debug' : 'production',
-        'X-Data-Fields': Object.keys(lprData).length.toString(),
-        'X-Images-Count': imageCount.toString()
-      }
-    })
-
-  } catch (error) {
-    console.error(`❌ [${requestId}] ERROR processing LPR request:`, error)
-    
-    // Return success anyway to avoid breaking Metrici
-    return new Response("bb1e8f805814a0b8e46560134687237", {
-      status: 200,
-      headers: { 'Content-Type': 'text/plain' }
-    })
+      headers: { "Content-Type": "text/plain" },
+    });
   }
-} 
+
+  // -----------------------------------------------------------------------
+  // 1. House‑keeping – request metadata & logging scaffold
+  // -----------------------------------------------------------------------
+  const start = Date.now();
+  const id = `LPR_${start}_${Math.random().toString(36).slice(2, 11)}`;
+
+  console.log(`🚗  [${id}] === ${type.toUpperCase()} LPR EVENT RECEIVED ===`);
+  dbg(debug, `🐛  [${id}] Headers:`, Object.fromEntries(request.headers.entries()));
+
+  // -----------------------------------------------------------------------
+  // 2. Basic auth header (optional)
+  // -----------------------------------------------------------------------
+  if (process.env.LPR_AUTH_SECRET) {
+    const authHeader = request.headers.get("authorization");
+    if (authHeader !== `Bearer ${process.env.LPR_AUTH_SECRET}`) {
+      console.warn(`🔒  [${id}] Invalid auth token – ignoring but acknowledging.`);
+      // Respond with OK token anyway → Metrici won’t retry forever
+      return new Response(type === "check" ? CHECK_OK : REPORTING_OK, {
+        status: 200,
+        headers: { "Content-Type": "text/plain" },
+      });
+    }
+    dbg(debug, `🔐  [${id}] Authentication successful`);
+  }
+
+  // -----------------------------------------------------------------------
+  // 3. Parse multipart/form‑data (text fields + images)
+  // -----------------------------------------------------------------------
+  const formData = await request.formData();
+  const lprData: Record<string, string> = {};
+  let imageCount = 0;
+
+  for (const [key, value] of formData.entries()) {
+    if (value instanceof File) {
+      imageCount++;
+      dbg(debug, `🖼️  [${id}] Image → ${key}: ${value.name} (${value.size} B)`);
+    } else {
+      lprData[key] = value.toString();
+      dbg(debug, `📝  [${id}] ${key}: ${lprData[key]}`);
+    }
+  }
+
+  const hasPlate = Boolean(lprData.number);
+  const dir = lprData.direction ?? ""; // "1"‑in, "2"‑out, "3"‑unknown
+  const isEntering = dir === "1" || dir === 1;
+
+  // -----------------------------------------------------------------------
+  // 4. Decide response token & optional open_barrier flag (SPEC‑driven)
+  // -----------------------------------------------------------------------
+  let responseText = REPORTING_OK; // default for "report"
+
+  if (type === "check") {
+    responseText = CHECK_OK;
+    if (
+      hasPlate &&
+      isEntering &&
+      defaultAction === "allow" &&
+      autoOpenBarrier
+    ) {
+      responseText += " open_barrier";
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // 5. Return – always 200 + raw token string (no CRLF)
+  // -----------------------------------------------------------------------
+  const ms = Date.now() - start;
+  console.log(`✅  [${id}] Done in ${ms} ms – reply: \`${responseText}\``);
+
+  return new Response(responseText, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/plain",
+      "X-LPR-Mode": debug ? "debug" : "production",
+      "X-Request-ID": id,
+      "X-Processing-Time": ms.toString(),
+      "X-Images-Count": imageCount.toString(),
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 6. Non‑POST methods → 405 Method Not Allowed (Metrici never uses these)
+// ---------------------------------------------------------------------------
+export function GET() {
+  return NextResponse.json({ error: "Method Not Allowed" }, { status: 405 });
+}
+export const PUT = GET;
+export const DELETE = GET;
