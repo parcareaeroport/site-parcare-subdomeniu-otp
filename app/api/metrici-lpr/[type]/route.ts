@@ -5,6 +5,11 @@
 //    • Check‑action URL:   https://<host>/api/metrici-lpr/check
 //    • Reporting URL:     https://<host>/api/metrici-lpr/report
 //
+//  ENVIRONMENT VARIABLES:
+//    • LPR_API_ACTIVE="false"     ➜ KILL SWITCH - oprește complet API-ul (503 error)
+//    • LPR_ENABLED="false"        ➜ Returnează token corect dar nu procesează (200 OK)
+//    • LPR_DEBUG_MODE="true"      ➜ Log-uri detaliate pentru debugging
+//
 //  IMPORTANT ➜  This file *must* live at `app/api/metrici-lpr/[type]/route.ts`.
 //  If you still have `app/api/metrici-lpr/route.ts`, delete or rename it –
 //  otherwise Next.js thinks the route is *static* and your second argument
@@ -29,7 +34,15 @@ export async function POST(
   { params }: { params: Promise<{ type: string }> }   // <-- Next.js 15 async params
 ) {
   // ---------------------------------------------------------------------------
-  // 0. Runtime flags & early exit if feature disabled
+  // 0. KILL SWITCH - oprește complet API-ul fără niciun log în Vercel
+  // ---------------------------------------------------------------------------
+  if (process.env.LPR_API_ACTIVE === "false") {
+    // Returnează imediat fără niciun log - complet silent pentru Vercel
+    return new Response("", { status: 204 }); // No Content - nu apare în logs
+  }
+
+  // ---------------------------------------------------------------------------
+  // 1. Runtime flags & early exit if feature disabled
   // ---------------------------------------------------------------------------
   const resolvedParams = await params;
   const type = resolvedParams.type.toLowerCase();           // "check" | "report"
@@ -46,7 +59,7 @@ export async function POST(
   }
 
   // ---------------------------------------------------------------------------
-  // 1. Request metadata & auth
+  // 2. Request metadata & auth
   // ---------------------------------------------------------------------------
   const start = Date.now();
   const reqId = `LPR_${start}_${Math.random().toString(36).slice(2, 11)}`;
@@ -67,7 +80,7 @@ export async function POST(
   }
 
   // ---------------------------------------------------------------------------
-  // 2. Parse multipart/form-data
+  // 3. Parse multipart/form-data
   // ---------------------------------------------------------------------------
   const formData = await request.formData();
   const lpr: Record<string, string> = {};
@@ -88,7 +101,7 @@ export async function POST(
   const isEntering = direction === "1";
 
   // ---------------------------------------------------------------------------
-  // 3. Decide response token
+  // 4. Decide response token
   // ---------------------------------------------------------------------------
   let responseStr = type === "check" ? TOKEN_CHECK_OK : TOKEN_REPORT_OK;
 
@@ -103,7 +116,7 @@ export async function POST(
   }
 
   // ---------------------------------------------------------------------------
-  // 4. Return 200 + raw token (no newline)
+  // 5. Return 200 + raw token (no newline)
   // ---------------------------------------------------------------------------
   const ms = Date.now() - start;
   console.log(`✅ [${reqId}] ${ms} ms → \`${responseStr}\``);
@@ -120,7 +133,7 @@ export async function POST(
   });
 }
 
-// 5. Any other HTTP verb → 405
+// 6. Any other HTTP verb → 405
 export function GET() {
   return NextResponse.json({ error: "Method Not Allowed" }, { status: 405 });
 }
