@@ -1,132 +1,125 @@
-// app/api/metrici-lpr/[type]/route.ts
-// ------------------------------------------------------------
-// Metrici LPR integration – unified handler for both "check-action"
-// and "reporting" events, using a dynamic route segment (`check` | `report`).
-// Add the following URLs in the Metrici UI:
-//   • Check‑action URL:   https://<host>/api/metrici-lpr/check
-//   • Reporting URL:     https://<host>/api/metrici-lpr/report
-// ------------------------------------------------------------
+// -----------------------------------------------------------------------------
+//  Metrici LPR integration – dynamic route "app/api/metrici-lpr/[type]/route.ts"
+// -----------------------------------------------------------------------------
+//  Two URLs you will configure in Metrici UI:
+//    • Check‑action URL:   https://<host>/api/metrici-lpr/check
+//    • Reporting URL:     https://<host>/api/metrici-lpr/report
+//
+//  IMPORTANT ➜  This file *must* live at `app/api/metrici-lpr/[type]/route.ts`.
+//  If you still have `app/api/metrici-lpr/route.ts`, delete or rename it –
+//  otherwise Next.js thinks the route is *static* and your second argument
+//  (`params`) becomes invalid, exactly the error you just saw during build.
+// -----------------------------------------------------------------------------
 import { NextRequest, NextResponse } from "next/server";
 
-// Run on Node.js to avoid edge body‑size limits and allow larger JPEG payloads
-export const runtime = "nodejs";
-// Allow up to 60 s for very large uploads (optional; tweak as needed)
-export const maxDuration = 60;
+export const runtime = "nodejs";      // avoid 4 MB body limit of Edge
+export const maxDuration = 60;        // seconds – tweak as needed
 
-// Spec‑defined reply constants
-const CHECK_OK = "fbd782b5b1f90875a9773ef20bcc16aa";
-const REPORTING_OK = "bb1e8f805814a0b8e465601346872377"; // NOTE the trailing 7!
+// Tokens defined by Metrici spec (July 2024)
+const TOKEN_CHECK_OK = "fbd782b5b1f90875a9773ef20bcc16aa";
+const TOKEN_REPORT_OK = "bb1e8f805814a0b8e465601346872377"; // <- trailing 7!
 
-// Helper: log nicely only when DEBUG enabled
-function dbg(enabled: boolean, ...args: unknown[]) {
-  if (enabled) console.log(...args);
+// Helper – log only when DEBUG enabled
+function dbg(debug: boolean, ...args: unknown[]) {
+  if (debug) console.log(...args);
 }
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { type?: string } }
+  { params }: { params: { type: string } }   // <-- works only in a *dynamic* route
 ) {
-  // -----------------------------------------------------------------------
-  // 0. Early exits / runtime flags
-  // -----------------------------------------------------------------------
-  const type = (params.type ?? "report").toLowerCase(); // default to reporting
-  const enabled = process.env.LPR_ENABLED !== "false"; // default TRUE
-  const debug = process.env.LPR_DEBUG_MODE === "true";
+  // ---------------------------------------------------------------------------
+  // 0. Runtime flags & early exit if feature disabled
+  // ---------------------------------------------------------------------------
+  const type = params.type.toLowerCase();           // "check" | "report"
+  const enabled         = process.env.LPR_ENABLED !== "false";
+  const debug           = process.env.LPR_DEBUG_MODE === "true";
   const autoOpenBarrier = process.env.LPR_AUTO_OPEN_BARRIER !== "false";
-  const defaultAction = process.env.LPR_DEFAULT_ACTION ?? "allow"; // allow | deny | log
+  const defaultAction   = process.env.LPR_DEFAULT_ACTION ?? "allow"; // allow | deny
 
-  // If feature toggled off, still answer with correct token so Metrici stops retrying
   if (!enabled) {
-    return new Response(type === "check" ? CHECK_OK : REPORTING_OK, {
+    return new Response(type === "check" ? TOKEN_CHECK_OK : TOKEN_REPORT_OK, {
       status: 200,
       headers: { "Content-Type": "text/plain" },
     });
   }
 
-  // -----------------------------------------------------------------------
-  // 1. House‑keeping – request metadata & logging scaffold
-  // -----------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 1. Request metadata & auth
+  // ---------------------------------------------------------------------------
   const start = Date.now();
-  const id = `LPR_${start}_${Math.random().toString(36).slice(2, 11)}`;
+  const reqId = `LPR_${start}_${Math.random().toString(36).slice(2, 11)}`;
 
-  console.log(`🚗  [${id}] === ${type.toUpperCase()} LPR EVENT RECEIVED ===`);
-  dbg(debug, `🐛  [${id}] Headers:`, Object.fromEntries(request.headers.entries()));
+  console.log(`🚗 [${reqId}] === ${type.toUpperCase()} LPR EVENT ===`);
+  dbg(debug, `🐛 [${reqId}] Headers:`, Object.fromEntries(request.headers.entries()));
 
-  // -----------------------------------------------------------------------
-  // 2. Basic auth header (optional)
-  // -----------------------------------------------------------------------
   if (process.env.LPR_AUTH_SECRET) {
     const authHeader = request.headers.get("authorization");
     if (authHeader !== `Bearer ${process.env.LPR_AUTH_SECRET}`) {
-      console.warn(`🔒  [${id}] Invalid auth token – ignoring but acknowledging.`);
-      // Respond with OK token anyway → Metrici won’t retry forever
-      return new Response(type === "check" ? CHECK_OK : REPORTING_OK, {
+      console.warn(`🔒 [${reqId}] Invalid Bearer token – acknowledging but skipping.`);
+      return new Response(type === "check" ? TOKEN_CHECK_OK : TOKEN_REPORT_OK, {
         status: 200,
         headers: { "Content-Type": "text/plain" },
       });
     }
-    dbg(debug, `🔐  [${id}] Authentication successful`);
+    dbg(debug, `🔐 [${reqId}] Auth OK`);
   }
 
-  // -----------------------------------------------------------------------
-  // 3. Parse multipart/form‑data (text fields + images)
-  // -----------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 2. Parse multipart/form-data
+  // ---------------------------------------------------------------------------
   const formData = await request.formData();
-  const lprData: Record<string, string> = {};
+  const lpr: Record<string, string> = {};
   let imageCount = 0;
 
   for (const [key, value] of formData.entries()) {
     if (value instanceof File) {
       imageCount++;
-      dbg(debug, `🖼️  [${id}] Image → ${key}: ${value.name} (${value.size} B)`);
+      dbg(debug, `🖼️ [${reqId}] ${key}: ${value.name} (${value.size} B)`);
     } else {
-      lprData[key] = value.toString();
-      dbg(debug, `📝  [${id}] ${key}: ${lprData[key]}`);
+      lpr[key] = value.toString();
+      dbg(debug, `📝 [${reqId}] ${key}: ${lpr[key]}`);
     }
   }
 
-  const hasPlate = Boolean(lprData.number);
-  const dir = lprData.direction ?? ""; // "1"‑in, "2"‑out, "3"‑unknown
-  const isEntering = dir === "1" || dir === 1;
+  const hasPlate   = Boolean(lpr.number);
+  const direction  = lpr.direction ?? "";             // "1" in, "2" out, "3" unknown
+  const isEntering = direction === "1" || direction === 1;
 
-  // -----------------------------------------------------------------------
-  // 4. Decide response token & optional open_barrier flag (SPEC‑driven)
-  // -----------------------------------------------------------------------
-  let responseText = REPORTING_OK; // default for "report"
+  // ---------------------------------------------------------------------------
+  // 3. Decide response token
+  // ---------------------------------------------------------------------------
+  let responseStr = type === "check" ? TOKEN_CHECK_OK : TOKEN_REPORT_OK;
 
-  if (type === "check") {
-    responseText = CHECK_OK;
-    if (
-      hasPlate &&
-      isEntering &&
-      defaultAction === "allow" &&
-      autoOpenBarrier
-    ) {
-      responseText += " open_barrier";
-    }
+  if (
+    type === "check" &&
+    hasPlate &&
+    isEntering &&
+    defaultAction === "allow" &&
+    autoOpenBarrier
+  ) {
+    responseStr += " open_barrier";
   }
 
-  // -----------------------------------------------------------------------
-  // 5. Return – always 200 + raw token string (no CRLF)
-  // -----------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 4. Return 200 + raw token (no newline)
+  // ---------------------------------------------------------------------------
   const ms = Date.now() - start;
-  console.log(`✅  [${id}] Done in ${ms} ms – reply: \`${responseText}\``);
+  console.log(`✅ [${reqId}] ${ms} ms → \`${responseStr}\``);
 
-  return new Response(responseText, {
+  return new Response(responseStr, {
     status: 200,
     headers: {
       "Content-Type": "text/plain",
-      "X-LPR-Mode": debug ? "debug" : "production",
-      "X-Request-ID": id,
+      "X-Request-ID": reqId,
       "X-Processing-Time": ms.toString(),
+      "X-LPR-Mode": debug ? "debug" : "production",
       "X-Images-Count": imageCount.toString(),
     },
   });
 }
 
-// ---------------------------------------------------------------------------
-// 6. Non‑POST methods → 405 Method Not Allowed (Metrici never uses these)
-// ---------------------------------------------------------------------------
+// 5. Any other HTTP verb → 405
 export function GET() {
   return NextResponse.json({ error: "Method Not Allowed" }, { status: 405 });
 }
