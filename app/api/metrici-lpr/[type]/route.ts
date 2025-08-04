@@ -26,12 +26,13 @@ function dbg(debug: boolean, ...args: unknown[]) {
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { type: string } }   // <-- works only in a *dynamic* route
+  { params }: { params: Promise<{ type: string }> }   // <-- Next.js 15 async params
 ) {
   // ---------------------------------------------------------------------------
   // 0. Runtime flags & early exit if feature disabled
   // ---------------------------------------------------------------------------
-  const type = params.type.toLowerCase();           // "check" | "report"
+  const resolvedParams = await params;
+  const type = resolvedParams.type.toLowerCase();           // "check" | "report"
   const enabled         = process.env.LPR_ENABLED !== "false";
   const debug           = process.env.LPR_DEBUG_MODE === "true";
   const autoOpenBarrier = process.env.LPR_AUTO_OPEN_BARRIER !== "false";
@@ -84,7 +85,7 @@ export async function POST(
 
   const hasPlate   = Boolean(lpr.number);
   const direction  = lpr.direction ?? "";             // "1" in, "2" out, "3" unknown
-  const isEntering = direction === "1" || direction === 1;
+  const isEntering = direction === "1";
 
   // ---------------------------------------------------------------------------
   // 3. Decide response token
