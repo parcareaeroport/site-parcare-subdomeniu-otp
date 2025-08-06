@@ -141,6 +141,10 @@ function CheckoutForm({
 }
 
 export default function OrderPlacementForm() {
+  console.log('🔄 [DEBUG] OrderPlacementForm component loaded/re-rendered', {
+    timestamp: new Date().toISOString()
+  })
+  
   const router = useRouter()
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -210,26 +214,44 @@ export default function OrderPlacementForm() {
       window.history.replaceState({}, '', window.location.pathname)
     }
     
+    console.log('🔍 [DEBUG] ORDER-PLACEMENT useEffect START - Încărcare date rezervare', {
+      timestamp: new Date().toISOString(),
+      currentPath: window.location.pathname,
+      sessionStorageKeys: Object.keys(sessionStorage),
+      hasReservationData: !!sessionStorage.getItem("reservationData")
+    })
+    
     try {
       const storedData = sessionStorage.getItem("reservationData")
+      console.log('💾 [DEBUG] Date din sessionStorage:', {
+        exists: !!storedData,
+        dataLength: storedData?.length || 0,
+        preview: storedData ? storedData.substring(0, 200) + '...' : 'null'
+      })
+      
       if (storedData) {
         const parsedData = JSON.parse(storedData)
+        console.log('📋 [DEBUG] Date parsate cu succes:', parsedData)
         setReservationData(parsedData)
+        console.log('✅ [DEBUG] ReservationData setat în state')
       } else {
+        console.log('❌ [DEBUG] Nu s-au găsit date pentru rezervare în sessionStorage')
         toast({
           title: "Eroare",
           description: "Nu s-au găsit date pentru rezervare. Vă rugăm să completați formularul de rezervare.",
           variant: "destructive",
         })
+        console.log('🚀 [DEBUG] Redirecționare către homepage')
         router.push("/")
       }
     } catch (error) {
-      console.error("Error parsing reservation data:", error)
+      console.error("❌ [DEBUG] Error parsing reservation data:", error)
       toast({
         title: "Eroare",
         description: "Nu s-au putut încărca datele rezervării. Vă rugăm să încercați din nou.",
         variant: "destructive",
       })
+      console.log('🚀 [DEBUG] Redirecționare către homepage după eroare parsing')
       router.push("/")
     }
   }, [router, toast])

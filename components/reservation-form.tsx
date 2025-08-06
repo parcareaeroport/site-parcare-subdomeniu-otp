@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
 import { CalendarIcon, Clock, Loader2, AlertTriangle, XCircle, MapPin, Navigation } from "lucide-react" // Adăugăm iconițe noi
 import { Button } from "@/components/ui/button"
@@ -31,6 +31,10 @@ interface ReservationSettings {
 }
 
 export default function ReservationForm() {
+  console.log('🔄 [DEBUG] ReservationForm component loaded/re-rendered', {
+    timestamp: new Date().toISOString()
+  })
+  
   const router = useRouter()
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -84,26 +88,45 @@ export default function ReservationForm() {
         checkLoaded();
       }
     );
-    const unsubStats = onSnapshot(
-      doc(db, "config", "reservationStats"),
-      (statsSnap) => {
-        const statsData = statsSnap.exists() ? statsSnap.data() : {};
-        setActiveBookingsCount(statsData.activeBookingsCount ?? 0);
-        statsLoaded = true;
-        checkLoaded();
-      },
-      (error) => {
-        console.error("Error fetching reservation stats:", error);
-        toast({
-          title: "Eroare de sistem",
-          description: "Nu s-au putut încărca statisticile rezervărilor. Funcționalitatea poate fi limitată.",
-          variant: "destructive",
-        });
-        setActiveBookingsCount(0);
-        statsLoaded = true;
-        checkLoaded();
-      }
-    );
+    // SMART CALCULATION: Calculăm rezervările active direct din bookings (ca în admin)
+    const bookingsCol = collection(db, "bookings")
+    const activeBookingsQuery = query(bookingsCol, where("status", "in", ["confirmed_paid", "confirmed_test", "confirmed", "paid", "confirmed_pay_on_site"]))
+    
+    const unsubStats = onSnapshot(activeBookingsQuery, (snapshot) => {
+      // Calculăm în timp real rezervările care sunt cu adevărat active ACUM
+      const now = new Date()
+      let reallyActiveCount = 0
+      
+      snapshot.forEach(doc => {
+        const booking = doc.data()
+        const endDateTime = new Date(`${booking.endDate}T${booking.endTime}:00`)
+        
+        // Verifică dacă rezervarea este încă activă (nu a expirat)
+        if (endDateTime > now) {
+          reallyActiveCount++
+        }
+      })
+      
+      setActiveBookingsCount(reallyActiveCount)
+      console.log('📊 [RESERVATION-FORM] Smart active bookings count:', {
+        totalWithActiveStatus: snapshot.size,
+        reallyActiveNow: reallyActiveCount,
+        currentTime: now.toISOString()
+      })
+      
+      statsLoaded = true;
+      checkLoaded();
+    }, (error) => {
+      console.error("Error fetching reservation stats:", error);
+      toast({
+        title: "Eroare de sistem",
+        description: "Nu s-au putut încărca statisticile rezervărilor. Funcționalitatea poate fi limitată.",
+        variant: "destructive",
+      });
+      setActiveBookingsCount(0);
+      statsLoaded = true;
+      checkLoaded();
+    });
     // NU mai apela setIsLoadingSystemStatus(false) aici!
     return () => {
       unsubSettings();
@@ -195,11 +218,32 @@ export default function ReservationForm() {
     setTimeError(null)
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()
+    console.log('🚀 [DEBUG] handleSubmit START - Butonul Rezervă a fost apăsat', {
+      timestamp: new Date().toISOString(),
+      formData: {
+        startDate: startDate ? format(startDate, "yyyy-MM-dd") : 'null',
+        endDate: endDate ? format(endDate, "yyyy-MM-dd") : 'null',
+        startTime,
+        endTime,
+        licensePlate,
+        isSubmitting,
+        dateError,
+        timeError,
+        duplicateError
+      }
+    })
     setIsSubmitting(true)
 
     if (!startDate || !endDate || !startTime || !endTime || !licensePlate) {
+      console.log('❌ [DEBUG] Câmpuri obligatorii lipsă:', {
+        startDate: !!startDate,
+        endDate: !!endDate,
+        startTime: !!startTime,
+        endTime: !!endTime,
+        licensePlate: !!licensePlate
+      })
       toast({
         title: "Eroare",
         description: "Vă rugăm să completați toate câmpurile obligatorii.",
@@ -208,9 +252,11 @@ export default function ReservationForm() {
       setIsSubmitting(false)
       return
     }
+    console.log('✅ [DEBUG] Câmpuri obligatorii verificate cu succes')
 
     // Validare pentru ore - nu permite 00:00
     if (startTime === "00:00" || endTime === "00:00") {
+      console.log('❌ [DEBUG] Eroare ore 00:00:', { startTime, endTime })
       setTimeError("VĂ RUGĂM SĂ INDICAȚI ORA DE SOSIRE / PLECARE!")
       toast({
         title: "Eroare de validare",
@@ -220,12 +266,17 @@ export default function ReservationForm() {
       setIsSubmitting(false)
       return
     }
+    console.log('✅ [DEBUG] Validare ore trecută cu succes')
     setTimeError(null)
 
     const startDateTime = getCombinedDateTime(startDate, startTime)
     const endDateTime = getCombinedDateTime(endDate, endTime)
 
     if (endDateTime <= startDateTime) {
+      console.log('❌ [DEBUG] Eroare dată/oră invalid:', {
+        startDateTime: startDateTime.toISOString(),
+        endDateTime: endDateTime.toISOString()
+      })
       setDateError("Dată și oră de ieșire trebuie să fie după Dată și oră de intrare.")
       toast({
         title: "Eroare de validare",
@@ -235,6 +286,7 @@ export default function ReservationForm() {
       setIsSubmitting(false)
       return
     }
+    console.log('✅ [DEBUG] Validare dată/oră trecută cu succes')
     setDateError(null)
 
     // VERIFICARE NOUĂ: Verifică dacă există suprapunere cu rezervări existente pentru același număr de înmatriculare
@@ -286,7 +338,7 @@ export default function ReservationForm() {
       }
       
     } catch (error) {
-      console.error("❌ EROARE la verificarea suprapunerii:", error)
+      console.error("❌ [DEBUG] EROARE la verificarea suprapunerii:", error)
       // În caz de eroare, afișăm un warning dar permitem continuarea
       toast({
         title: "Avertisment",
@@ -295,8 +347,17 @@ export default function ReservationForm() {
       })
     }
 
+    console.log('🎯 [DEBUG] Verificări suprapunere finalizate - continuă cu statusul sistemului')
+
     // Verificări noi pentru statusul sistemului și limita de rezervări
+    console.log('🔍 [DEBUG] Verificare status sistem:', {
+      isLoadingSystemStatus,
+      reservationSettings,
+      activeBookingsCount
+    })
+    
     if (isLoadingSystemStatus) {
+      console.log('⏳ [DEBUG] Sistem încă se încarcă')
       toast({
         title: "Verificare în curs",
         description: "Se verifică disponibilitatea sistemului de rezervări...",
@@ -304,8 +365,10 @@ export default function ReservationForm() {
       setIsSubmitting(false)
       return
     }
+    console.log('✅ [DEBUG] Status sistem verificat - sistemul nu se mai încarcă')
 
     if (!reservationSettings?.reservationsEnabled) {
+      console.log('❌ [DEBUG] Rezervări dezactivate')
       toast({
         title: "Rezervări Oprite",
         description: (
@@ -320,6 +383,19 @@ export default function ReservationForm() {
       setIsSubmitting(false)
       return
     }
+    console.log('✅ [DEBUG] Rezervări activate - verifică limita globală')
+
+    console.log('🧮 [DEBUG] Verificare limită globală:', {
+      reservationSettings: reservationSettings,
+      activeBookingsCount: activeBookingsCount,
+      maxTotalReservations: reservationSettings?.maxTotalReservations,
+      hasLimit: reservationSettings?.maxTotalReservations > 0,
+      isOverLimit: (activeBookingsCount || 0) >= (reservationSettings?.maxTotalReservations || 0),
+      willBlock: reservationSettings && 
+                 activeBookingsCount !== null && 
+                 reservationSettings.maxTotalReservations > 0 && 
+                 activeBookingsCount >= reservationSettings.maxTotalReservations
+    })
 
     if (
       reservationSettings &&
@@ -327,6 +403,7 @@ export default function ReservationForm() {
       reservationSettings.maxTotalReservations > 0 && // Verificăm dacă limita e setată
       activeBookingsCount >= reservationSettings.maxTotalReservations
     ) {
+      console.log('❌ [DEBUG] LIMITĂ GLOBALĂ ATINSĂ - BLOCHEAZĂ REZERVAREA')
       toast({
         title: "Limită Atinsă Global",
         description: (
@@ -341,11 +418,13 @@ export default function ReservationForm() {
       setIsSubmitting(false)
       return
     }
+    console.log('✅ [DEBUG] Limita globală OK - continuă cu verificarea disponibilității')
 
     // VERIFICARE NOUĂ: Disponibilitate pentru perioada specifică selectată
     if (reservationSettings?.maxTotalReservations && reservationSettings.maxTotalReservations > 0) {
+      console.log('🔍 [DEBUG] Verificare disponibilitate - există limită setată')
       try {
-        console.log('🚀 ÎNCEPERE VERIFICARE DISPONIBILITATE - Butón "Continuă" apăsat', {
+        console.log('🚀 [DEBUG] ÎNCEPERE VERIFICARE DISPONIBILITATE - Butón "Continuă" apăsat', {
           timestamp: new Date().toISOString(),
           userInput: {
             startDate: format(startDate, "yyyy-MM-dd"),
@@ -512,12 +591,17 @@ export default function ReservationForm() {
         priceDetails: priceDetailsPayload,
       }
 
+      console.log('💾 [DEBUG] Salvare în sessionStorage:', reservationDetails)
       sessionStorage.setItem("reservationData", JSON.stringify(reservationDetails))
+      
+      console.log('✅ [DEBUG] Date salvate cu succes, afișez toast și navighez')
       toast({
         title: "Rezervare pregătită",
         description: "Datele au fost salvate cu succes. Veți fi redirectat pentru finalizarea comenzii.",
         variant: "default",
       })
+      
+      console.log('🚀 [DEBUG] Navigare către /plasare-comanda')
       router.push("/plasare-comanda")
     } catch (error) {
       console.error("Error preparing reservation data:", error)
@@ -527,9 +611,10 @@ export default function ReservationForm() {
         variant: "destructive",
       })
     } finally {
+      console.log('🏁 [DEBUG] handleSubmit FINALIZAT - setIsSubmitting(false)')
       setIsSubmitting(false)
     }
-  }
+  }, [startDate, endDate, startTime, endTime, licensePlate, isLoadingSystemStatus, reservationSettings, activeBookingsCount, priceTiers, isLoadingPrices, router, toast])
 
   useEffect(() => {
     if (startDate && endDate && startTime && endTime) {
@@ -750,6 +835,16 @@ export default function ReservationForm() {
           
           <Button
             type="submit"
+            onClick={() => {
+              console.log('🖱️ [DEBUG] BUTON REZERVĂ APĂSAT - onClick triggered', {
+                timestamp: new Date().toISOString(),
+                isSubmitting,
+                dateError,
+                isLoadingPrices,
+                isLoadingSystemStatus,
+                disabled: isSubmitting || !!dateError || isLoadingPrices || isLoadingSystemStatus
+              })
+            }}
             className="h-10 w-full px-6 rounded-md bg-[#ee7f1a] hover:bg-[#d67016] text-white font-bold text-base shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all duration-200"
             disabled={isSubmitting || !!dateError || isLoadingPrices || isLoadingSystemStatus}
           >
@@ -764,6 +859,19 @@ export default function ReservationForm() {
         </div>
       </div>
       
+      {/* DEBUG: Afișare rezervări active */}
+      {/* <div className="bg-red-100 border border-red-400 rounded-lg p-3 mb-3">
+        <div className="text-red-800 font-bold text-sm">🔧 DEBUG - Rezervări Active:</div>
+        <div className="text-red-700 text-xs mt-1">
+          <div>activeBookingsCount: {activeBookingsCount}</div>
+          <div>maxTotalReservations: {reservationSettings?.maxTotalReservations}</div>
+          <div>reservationsEnabled: {reservationSettings?.reservationsEnabled ? 'DA' : 'NU'}</div>
+          <div>isLoadingSystemStatus: {isLoadingSystemStatus ? 'DA' : 'NU'}</div>
+          <div>Folosit: {activeBookingsCount || 0} / {reservationSettings?.maxTotalReservations || 0}</div>
+          <div>Procent: {reservationSettings?.maxTotalReservations ? Math.round(((activeBookingsCount || 0) / reservationSettings.maxTotalReservations) * 100) : 0}%</div>
+        </div>
+      </div> */}
+
       {/* Afișare preț calculat */}
       {calculatedDays > 0 && !isLoadingPrices && (
         <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
