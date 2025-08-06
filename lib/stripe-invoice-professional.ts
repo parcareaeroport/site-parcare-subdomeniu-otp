@@ -122,8 +122,8 @@ Plata se poate efectua prin transfer bancar la IBAN: RO49RNCB0000123456789012
 
     // 3. Calculează prețul cu TVA 21%
     const basePrice = Math.round(bookingData.totalCost * 100); // În bani (cents/bani)
-    const priceWithoutVAT = Math.round(basePrice / 1.21); // Preț fără TVA
-    const vatAmount = basePrice - priceWithoutVAT; // TVA 21%
+    const priceWithoutVAT = Math.round(basePrice / 1.21); // Preț fără TVA (în bani)
+    const vatAmount = basePrice - priceWithoutVAT; // TVA 21% (în bani)
 
     // 4. Adaugă item-ul principal
     await stripe.invoiceItems.create({

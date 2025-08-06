@@ -258,8 +258,8 @@ export async function generateInvoiceForBooking(bookingData: any) {
     needInvoice: bookingData.needInvoice,
     
     // Calcule financiare
-    subtotal: Math.round(bookingData.amount / 1.21 * 100) / 100, // Fără TVA
-    tva: Math.round(bookingData.amount * 0.21 / 1.21 * 100) / 100, // TVA 21%
+    subtotal: Math.round(bookingData.amount / 1.21 * 10000) / 10000, // Fără TVA (4 zecimale)
+    tva: Math.round(bookingData.amount * 0.21 / 1.21 * 10000) / 10000, // TVA 21% (4 zecimale)
     total: bookingData.amount // Total cu TVA
   }
   

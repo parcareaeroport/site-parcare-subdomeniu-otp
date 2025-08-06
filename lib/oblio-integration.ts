@@ -158,7 +158,7 @@ class OblioInvoiceService {
   private prepareInvoiceData(invoiceData: OblioInvoiceData) {
     // Calculare preț fără TVA (21% este inclus în totalCost) - ACTUALIZAT pentru noul TVA
     const totalWithVAT = invoiceData.totalCost;
-    const priceWithoutVAT = Math.round((totalWithVAT / 1.21) * 100) / 100;
+    const priceWithoutVAT = Math.round((totalWithVAT / 1.21) * 10000) / 10000;
 
     const baseInvoiceData = {
       cif: this.config.companyCif,
