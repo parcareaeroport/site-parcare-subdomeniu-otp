@@ -164,7 +164,13 @@ class OblioInvoiceService {
       ],
       mentions: `Factură generată automat pentru rezervarea de parcare #${invoiceData.bookingId}. Plata a fost procesată prin Stripe.`,
       internalNote: `Booking ID: ${invoiceData.bookingId} | Stripe Payment`,
-      // Nu mai includem collect aici - îl vom face separat
+      collect: {
+        type: 'Card',
+        documentNumber: `STRIPE-${invoiceData.bookingId}`,
+        value: totalWithVAT, // Acum va fi suma netă corectă din webhook
+        issueDate: new Date().toISOString().split('T')[0],
+        mentions: 'Plată procesată prin Stripe - Suma netă primită',
+      },
     };
 
     return baseInvoiceData;

@@ -136,13 +136,6 @@ class OblioInvoiceService {
         });
         console.log('📧 Email cu factura trimis automat către:', invoiceData.clientEmail);
 
-        // Marchează factura ca fiind complet încasată
-        const collectResult = await this.markInvoiceAsPaid(result.data.seriesName, result.data.number, invoiceData);
-        
-        if (!collectResult.success) {
-          console.warn('⚠️ [OBLIO] Factura a fost creată dar nu s-a putut marca ca încasată:', collectResult.error);
-        }
-
         return {
           success: true,
           invoiceNumber: `${result.data.seriesName} ${result.data.number}`,
@@ -191,7 +184,13 @@ class OblioInvoiceService {
       ],
       mentions: `Factură generată automat pentru rezervarea de parcare #${invoiceData.bookingId}. Plata a fost procesată prin Stripe.`,
       internalNote: `Booking ID: ${invoiceData.bookingId} | Stripe Payment`,
-      // Nu mai includem collect aici - îl vom face separat
+      collect: {
+        type: 'Card',
+        documentNumber: `STRIPE-${invoiceData.bookingId}`,
+        value: totalWithVAT, // Acum va fi suma netă corectă din webhook
+        issueDate: new Date().toISOString().split('T')[0],
+        mentions: 'Plată procesată prin Stripe - Suma netă primită',
+      },
     };
 
     return baseInvoiceData;
@@ -254,56 +253,7 @@ class OblioInvoiceService {
     }
   }
 
-  // 6. Marcarea facturii ca fiind complet încasată
-  async markInvoiceAsPaid(seriesName: string, number: string, invoiceData: OblioInvoiceData): Promise<{ success: boolean; error?: string }> {
-    try {
-      const token = await this.authenticate();
-      const totalWithVAT = invoiceData.totalCost;
 
-      const collectData = {
-        cif: this.config.companyCif,
-        seriesName: seriesName,
-        number: number,
-        type: 'Card',
-        documentNumber: `STRIPE-${invoiceData.bookingId}`,
-        value: totalWithVAT,
-        issueDate: new Date().toISOString().split('T')[0],
-        mentions: 'Plată procesată prin Stripe - Complet încasat',
-      };
-
-      console.log('📝 [OBLIO] Marcarea facturii ca fiind complet încasată:', {
-        seriesName,
-        number,
-        amount: totalWithVAT,
-        bookingId: invoiceData.bookingId
-      });
-
-      const response = await fetch('https://www.oblio.eu/api/docs/collect', {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(collectData),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Failed to mark invoice as paid: ${response.status} - ${errorText}`);
-      }
-
-      const result = await response.json();
-      console.log('✅ [OBLIO] Factura marcată ca fiind complet încasată:', result);
-
-      return { success: true };
-    } catch (error) {
-      console.error('❌ [OBLIO] Error marking invoice as paid:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Eroare necunoscută',
-      };
-    }
-  }
 }
 
 // Configurare serviciu pentru Site Parcări
