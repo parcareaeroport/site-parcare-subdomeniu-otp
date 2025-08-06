@@ -46,8 +46,6 @@ export async function POST(req: Request) {
     console.log(`💳 [${webhookProcessId}] Status: ${paymentIntent.status}`)
     console.log(`💳 [${webhookProcessId}] Payment method: ${paymentIntent.payment_method}`)
     console.log(`💳 [${webhookProcessId}] Customer email: ${paymentIntent.receipt_email || 'N/A'}`)
-    
-
 
     // Extrage datele necesare pentru `createBooking` din metadata PaymentIntent-ului
     const bookingMetadata = paymentIntent.metadata
@@ -140,33 +138,7 @@ export async function POST(req: Request) {
       const startDate = new Date(bookingMetadata.startDate)
       const endDate = new Date(bookingMetadata.endDate)
       const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) || 1
-      const grossAmount = paymentIntent.amount / 100 // Suma brută plătită de client
-      
-      // Calculăm suma netă (fără comisionul Stripe) pentru Oblio
-      let netAmount = grossAmount
-      
-      if (paymentIntent.latest_charge) {
-        try {
-          const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
-          const charge = await stripe.charges.retrieve(paymentIntent.latest_charge)
-          
-          if (charge.balance_transaction) {
-            const balanceTransaction = await stripe.balanceTransactions.retrieve(charge.balance_transaction)
-            netAmount = balanceTransaction.net / 100 // Suma netă primită de merchant
-            
-            console.log(`💰 [${webhookProcessId}] ===== AMOUNT CALCULATION =====`)
-            console.log(`💰 [${webhookProcessId}] Gross amount (client paid): ${grossAmount} RON`)
-            console.log(`💰 [${webhookProcessId}] Stripe fee: ${balanceTransaction.fee / 100} RON`)
-            console.log(`💰 [${webhookProcessId}] Net amount (received): ${netAmount} RON`)
-            console.log(`💰 [${webhookProcessId}] Will use NET amount for Oblio invoice`)
-          }
-        } catch (error) {
-          console.error(`❌ [${webhookProcessId}] Error calculating net amount, using gross:`, error)
-          netAmount = grossAmount
-        }
-      }
-      
-      const amount = netAmount // Folosim suma netă pentru facturare
+      const amount = paymentIntent.amount / 100 // Stripe folosește cenți
 
       console.log(`🏗️ [${webhookProcessId}] Booking data prepared:`)
       console.log(`🏗️ [${webhookProcessId}]   License Plate: ${bookingMetadata.licensePlate}`)

@@ -32,7 +32,7 @@ interface RomanianInvoiceData {
   
   // Date financiare
   subtotal: number // Fără TVA
-  tva: number      // TVA 19%
+  tva: number      // TVA 21%
   total: number    // Cu TVA
 }
 
@@ -212,9 +212,9 @@ export async function createRomanianTaxRate() {
   try {
     const taxRate = await stripe.taxRates.create({
       display_name: 'TVA România',
-      description: 'Taxa pe valoarea adăugată România - 19%',
+      description: 'Taxa pe valoarea adăugată România - 21%',
       jurisdiction: 'RO',
-      percentage: 19.0,
+              percentage: 21.0,
       inclusive: false, // TVA se adaugă la preț
       country: 'RO',
       metadata: {
@@ -258,8 +258,8 @@ export async function generateInvoiceForBooking(bookingData: any) {
     needInvoice: bookingData.needInvoice,
     
     // Calcule financiare
-    subtotal: Math.round(bookingData.amount / 1.19 * 100) / 100, // Fără TVA
-    tva: Math.round(bookingData.amount * 0.19 / 1.19 * 100) / 100, // TVA 19%
+    subtotal: Math.round(bookingData.amount / 1.21 * 100) / 100, // Fără TVA
+    tva: Math.round(bookingData.amount * 0.21 / 1.21 * 100) / 100, // TVA 21%
     total: bookingData.amount // Total cu TVA
   }
   

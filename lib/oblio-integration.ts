@@ -156,9 +156,9 @@ class OblioInvoiceService {
 
   // 3. Pregătire date pentru API Oblio
   private prepareInvoiceData(invoiceData: OblioInvoiceData) {
-    // Calculare preț fără TVA (19% este inclus în totalCost)
+    // Calculare preț fără TVA (21% este inclus în totalCost) - ACTUALIZAT pentru noul TVA
     const totalWithVAT = invoiceData.totalCost;
-    const priceWithoutVAT = Math.round((totalWithVAT / 1.19) * 100) / 100;
+    const priceWithoutVAT = Math.round((totalWithVAT / 1.21) * 100) / 100;
 
     const baseInvoiceData = {
       cif: this.config.companyCif,
@@ -176,7 +176,7 @@ class OblioInvoiceService {
           price: priceWithoutVAT,
           measuringUnit: 'bucată',
           vatName: 'Normala',
-          vatPercentage: 19,
+          vatPercentage: 21,
           vatIncluded: false,
           quantity: 1,
           productType: 'Serviciu',
@@ -187,9 +187,9 @@ class OblioInvoiceService {
       collect: {
         type: 'Card',
         documentNumber: `STRIPE-${invoiceData.bookingId}`,
-        value: totalWithVAT, // Acum va fi suma netă corectă din webhook
+        value: totalWithVAT,
         issueDate: new Date().toISOString().split('T')[0],
-        mentions: 'Plată procesată prin Stripe - Suma netă primită',
+        mentions: 'Plată procesată prin Stripe',
       },
     };
 
@@ -252,8 +252,6 @@ class OblioInvoiceService {
       throw error;
     }
   }
-
-
 }
 
 // Configurare serviciu pentru Site Parcări

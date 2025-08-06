@@ -112,7 +112,7 @@ export async function generateStripeInvoice(
       // Footer legal pentru România
       footer: `
 Factură emisă conform legislației fiscale românești.
-TVA 19% inclusă conform art. 134 din Codul Fiscal.
+    TVA 21% inclusă conform art. 134 din Codul Fiscal.
 Plata se poate efectua prin transfer bancar la IBAN: RO49RNCB0000123456789012
       `.trim(),
 
@@ -120,10 +120,10 @@ Plata se poate efectua prin transfer bancar la IBAN: RO49RNCB0000123456789012
       auto_advance: true,
     });
 
-    // 3. Calculează prețul cu TVA 19%
+    // 3. Calculează prețul cu TVA 21%
     const basePrice = Math.round(bookingData.totalCost * 100); // În bani (cents/bani)
-    const priceWithoutVAT = Math.round(basePrice / 1.19); // Preț fără TVA
-    const vatAmount = basePrice - priceWithoutVAT; // TVA 19%
+    const priceWithoutVAT = Math.round(basePrice / 1.21); // Preț fără TVA
+    const vatAmount = basePrice - priceWithoutVAT; // TVA 21%
 
     // 4. Adaugă item-ul principal
     await stripe.invoiceItems.create({
@@ -195,9 +195,9 @@ async function getTaxRateForRomania(): Promise<string[]> {
     // Creează rata de TVA pentru România dacă nu există
     const newTaxRate = await stripe.taxRates.create({
       display_name: 'TVA România',
-      description: 'Taxa pe valoarea adăugată pentru România (19%)',
+      description: 'Taxa pe valoarea adăugată pentru România (21%)',
       jurisdiction: 'RO',
-      percentage: 19,
+              percentage: 21,
       inclusive: false,
     });
 
