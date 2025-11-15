@@ -113,6 +113,63 @@ function extractFromElementor(body: any): any {
 }
 
 // =========================
+// Helper: parse body from JSON, x-www-form-urlencoded, or multipart/form-data
+// =========================
+async function parseIncomingBody(request: NextRequest, requestId: string): Promise<any> {
+  const contentType = request.headers.get("content-type")?.toLowerCase() || ""
+  console.log(`[WP-BOOKING][${requestId}] Content-Type: ${contentType || "[none]"}`)
+
+  try {
+    if (contentType.includes("application/json")) {
+      const json = await request.json()
+      console.log(`[WP-BOOKING][${requestId}] Parsed as JSON.`)
+      return json
+    }
+    if (contentType.includes("application/x-www-form-urlencoded")) {
+      const text = await request.text()
+      const params = new URLSearchParams(text)
+      const obj = Object.fromEntries(params.entries())
+      console.log(`[WP-BOOKING][${requestId}] Parsed as x-www-form-urlencoded. Keys:`, Object.keys(obj))
+      return obj
+    }
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData()
+      const obj: Record<string, any> = {}
+      for (const [key, value] of form.entries()) {
+        // File vs string – aici avem doar câmpuri text pentru rezervare
+        obj[key] = typeof value === "string" ? value : (value as File).name
+      }
+      console.log(`[WP-BOOKING][${requestId}] Parsed as multipart/form-data. Keys:`, Object.keys(obj))
+      return obj
+    }
+  } catch (e) {
+    console.warn(`[WP-BOOKING][${requestId}] Primary parsing failed:`, e)
+  }
+
+  // Fallbacks: încearcă JSON apoi URLSearchParams din text
+  try {
+    const text = await request.text()
+    try {
+      const json = JSON.parse(text)
+      console.log(`[WP-BOOKING][${requestId}] Fallback parsed as JSON from text.`)
+      return json
+    } catch {
+      const params = new URLSearchParams(text)
+      const obj = Object.fromEntries(params.entries())
+      if (Object.keys(obj).length > 0) {
+        console.log(`[WP-BOOKING][${requestId}] Fallback parsed as URLSearchParams from text. Keys:`, Object.keys(obj))
+        return obj
+      }
+      console.warn(`[WP-BOOKING][${requestId}] Fallback parsing found no usable data.`)
+      return {}
+    }
+  } catch (e) {
+    console.error(`[WP-BOOKING][${requestId}] Ultimate parsing failed:`, e)
+    return {}
+  }
+}
+
+// =========================
 // OPTIONS (preflight CORS)
 // =========================
 export async function OPTIONS() {
@@ -166,7 +223,7 @@ export async function POST(request: NextRequest) {
     // -------------------------
     // 2. Citim body-ul
     // -------------------------
-    const rawBody = await request.json()
+    const rawBody = await parseIncomingBody(request, requestId)
     console.log(
       `[WP-BOOKING][${requestId}] Raw body from WP:`,
       safeStringify(rawBody)
