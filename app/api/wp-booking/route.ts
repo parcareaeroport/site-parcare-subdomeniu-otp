@@ -7,7 +7,7 @@ type PaymentStatus = "paid" | "pending" | "n/a";
 const corsHeaders = {
   "Access-Control-Allow-Origin": process.env.WP_ALLOWED_ORIGIN || "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token",
+  "Access-Control-Allow-Headers": "Content-Type, X-Auth-Token, Authorization",
 };
 
 export async function OPTIONS() {
@@ -58,6 +58,11 @@ function mapElementorFlatToJson(
     companyReg: getField("companyReg"),
     companyAddress: getField("companyAddress"),
 
+    // card extras
+    amount: getField("amount"),
+    days: getField("days"),
+    paymentIntentId: getField("paymentIntentId"),
+    orderNotes: getField("orderNotes"),
     acceptTerms: !!getField("acceptTerms"),
   };
 
@@ -174,6 +179,11 @@ export async function POST(request: NextRequest) {
       companyReg,
       companyAddress,
       acceptTerms,
+      // optional for card
+      amount,
+      days,
+      paymentIntentId,
+      orderNotes,
     } = body || {};
 
     console.log(
@@ -220,8 +230,8 @@ export async function POST(request: NextRequest) {
       fd.append("clientTitle", String(firstName));
     }
 
-    const isPayOnSite =
-      String(paymentMethod || "").toLowerCase() === "pay_on_site";
+    const method = String(paymentMethod || "").toLowerCase();
+    const isPayOnSite = method === "pay_on_site";
 
     const resolvedSource: "webhook" | "pay_on_site" = isPayOnSite
       ? "pay_on_site"
@@ -229,7 +239,7 @@ export async function POST(request: NextRequest) {
 
     const resolvedPaymentStatus: PaymentStatus = isPayOnSite
       ? "pending"
-      : "n/a";
+      : "paid";
 
     console.log(`[WP-BOOKING][${reqId}] Mapped booking core data:`, {
       licensePlate: normalizeLicensePlate(String(licensePlate)),
@@ -244,6 +254,9 @@ export async function POST(request: NextRequest) {
       paymentMethod,
       resolvedSource,
       resolvedPaymentStatus,
+      amount,
+      days,
+      paymentIntentId,
     });
 
     // 5) Apelăm fluxul standard de creare rezervare
@@ -266,6 +279,24 @@ export async function POST(request: NextRequest) {
       companyAddress: needInvoice ? companyAddress : undefined,
       // termeni
       termsAccepted: !!acceptTerms,
+      // card extras
+      amount:
+        typeof amount === "number"
+          ? amount
+          : amount !== undefined
+          ? parseFloat(String(amount)) || undefined
+          : undefined,
+      days:
+        typeof days === "number"
+          ? days
+          : days !== undefined
+          ? parseInt(String(days), 10) || undefined
+          : undefined,
+      paymentIntentId:
+        typeof paymentIntentId === "string" && paymentIntentId.trim()
+          ? paymentIntentId
+          : undefined,
+      orderNotes,
     });
 
     console.log(
