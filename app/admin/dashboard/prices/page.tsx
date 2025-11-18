@@ -785,6 +785,7 @@ export default function PricesPage() {
                       <div className="text-xs text-gray-500 font-normal">editabil ↔</div>
                     </TableHead>
                     <TableHead>Preț Final (RON)</TableHead>
+                    <TableHead>Preț pe Zi (RON)</TableHead>
                     <TableHead className="text-right">Acțiuni</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -847,6 +848,9 @@ export default function PricesPage() {
                       </TableCell>
                         <TableCell className="text-green-600 font-medium">
                           {currentFinalPrice.toFixed(2)}
+                      </TableCell>
+                      <TableCell className="text-blue-600 font-medium">
+                        {price.days > 0 ? (currentFinalPrice / price.days).toFixed(2) : "0.00"}
                       </TableCell>
                       <TableCell className="text-right">
                         {editingId === price.id ? (
