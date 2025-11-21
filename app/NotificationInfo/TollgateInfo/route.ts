@@ -1,38 +1,96 @@
 import { NextRequest, NextResponse } from "next/server";
 
+type Nullable<T> = T | null;
+
+interface PlateData {
+  PlateNumber: string;
+  PlateColor?: string;
+  IsExist?: boolean;
+  Channel?: number;
+  BoundingBox?: number[];
+  PlateType?: string;
+  Region?: string;
+  UploadNum?: number;
+}
+
+interface SnapInfoData {
+  AccurateTime?: string;
+  SnapTime?: string;
+  LanNo?: number;
+  Direction?: string | null;
+  DeviceID?: string;
+  TimeZone?: number;
+  [key: string]: unknown;
+}
+
+interface VehicleData {
+  VehicleBoundingBox?: number[];
+  VehicleColor?: string;
+  VehicleSeries?: string;
+  VehicleSign?: string;
+  VehicleType?: string;
+  [key: string]: unknown;
+}
+
+interface LprPayload {
+  Picture?: {
+    Plate?: PlateData;
+    SnapInfo?: SnapInfoData;
+    Vehicle?: VehicleData;
+  };
+  [key: string]: unknown;
+}
+
+interface LprEvent {
+  plateNumber: Nullable<string>;
+  laneNo: Nullable<number>;
+  snapTime: Nullable<string>;
+  accurateTime: Nullable<string>;
+  deviceId: Nullable<string>;
+  direction: Nullable<string>;
+}
+
+/**
+ * Extrage în siguranță informațiile utile din payload-ul LPR.
+ */
+function extractLprEvent(payload: LprPayload): LprEvent {
+  const plate = payload?.Picture?.Plate;
+  const snapInfo = payload?.Picture?.SnapInfo;
+
+  return {
+    plateNumber: plate?.PlateNumber ?? null,
+    laneNo: snapInfo?.LanNo ?? null,
+    snapTime: snapInfo?.SnapTime ?? null,
+    accurateTime: snapInfo?.AccurateTime ?? null,
+    deviceId: snapInfo?.DeviceID ?? null,
+    direction: (snapInfo?.Direction as string | undefined) ?? null,
+  };
+}
+
 export async function POST(req: NextRequest) {
+  let body: LprPayload;
+
   try {
-    const body = await req.json();
-
-    const plateNumber = body?.Picture?.Plate?.PlateNumber ?? null;
-    const laneNo = body?.Picture?.SnapInfo?.LanNo ?? null;
-    const snapTime = body?.Picture?.SnapInfo?.SnapTime ?? null;
-    const accurateTime = body?.Picture?.SnapInfo?.AccurateTime ?? null;
-    const deviceId = body?.Picture?.SnapInfo?.DeviceID ?? null;
-    const direction = body?.Picture?.SnapInfo?.Direction ?? null;
-
-    // Aici doar logăm orice informație primim
-    console.log("LPR EVENT >>>", {
-      plateNumber,
-      laneNo,
-      snapTime,
-      accurateTime,
-      deviceId,
-      direction,
-      raw: body,
-    });
-
-    // TODO: salvează în DB (Postgres / Firestore etc.)
-
-    return NextResponse.json({ status: "ok" });
-  } catch (err) {
-    console.error("Error parsing LPR payload:", err);
+    body = (await req.json()) as LprPayload;
+  } catch (error) {
+    console.error("Error parsing LPR payload:", error);
     return new NextResponse("Bad Request", { status: 400 });
   }
+
+  const event = extractLprEvent(body);
+
+  console.log("LPR EVENT >>>", {
+    ...event,
+    raw: body,
+  });
+
+  // Aici ulterior poți salva în DB (Postgres / Firestore etc.)
+  // await saveLprEventToDb(event, body);
+
+  return NextResponse.json({ status: "ok" });
 }
 
 export function GET() {
+  // Dispozitivul nu ar trebui să cheme GET, îl blocăm explicit.
   return new NextResponse("Method Not Allowed", { status: 405 });
 }
-
-
