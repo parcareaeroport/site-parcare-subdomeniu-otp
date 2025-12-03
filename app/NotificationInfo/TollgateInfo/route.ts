@@ -72,7 +72,9 @@ export async function POST(req: NextRequest) {
   let body: LprPayload;
 
   try {
+    console.log('[LPR API] Incoming POST - parsing JSON body...')
     body = (await req.json()) as LprPayload;
+    console.log('[LPR API] JSON parsed OK')
   } catch (error) {
     console.error("Error parsing LPR payload:", error);
     return new NextResponse("Bad Request", { status: 400 });
@@ -86,10 +88,12 @@ export async function POST(req: NextRequest) {
   });
 
   try {
+    console.log('[LPR API] Delegating to handleLprEvent...')
     const result = await handleLprEvent({
       ...event,
       raw: body
     });
+    console.log('[LPR API] handleLprEvent result', result)
     return NextResponse.json({ status: "ok", ...result });
   } catch (e) {
     console.error("Failed to handle LPR event:", e);

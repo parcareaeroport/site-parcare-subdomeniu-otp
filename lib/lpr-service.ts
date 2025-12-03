@@ -116,118 +116,211 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
   matchedBookingId?: string
   eventType: LprEventType
 }> {
+  try {
+    console.log('🟦 [LPR] handleLprEvent START', {
+      input: {
+        plateNumber: input.plateNumber,
+        laneNo: input.laneNo,
+        snapTime: input.snapTime,
+        accurateTime: input.accurateTime,
+        deviceId: input.deviceId,
+        direction: input.direction
+      }
+    })
+  } catch {}
+
   const plate = (input.plateNumber || "").trim()
   const normalizedPlate = normalizeLicensePlate(plate)
   const eventType = inferEventType(input.deviceId, input.direction)
   const eventTime = parseToDate(input.accurateTime) || parseToDate(input.snapTime) || new Date()
+  try {
+    console.log('🧮 [LPR] Derived event details', {
+      normalizedPlate,
+      eventType,
+      deviceId: input.deviceId,
+      direction: input.direction,
+      eventTimeIso: eventTime?.toISOString()
+    })
+  } catch {}
 
   // Save raw LPR event
   const eventsCol = collection(db, "lpr_events")
-  const saved = await addDoc(eventsCol, {
-    plateNumber: plate || null,
-    normalizedPlate: normalizedPlate || null,
-    laneNo: input.laneNo ?? null,
-    deviceId: input.deviceId ?? null,
-    direction: input.direction ?? null,
-    snapTime: input.snapTime ?? null,
-    accurateTime: input.accurateTime ?? null,
-    eventType,
-    receivedAt: serverTimestamp(),
-    raw: input.raw ?? null
-  })
+  let saved
+  try {
+    saved = await addDoc(eventsCol, {
+      plateNumber: plate || null,
+      normalizedPlate: normalizedPlate || null,
+      laneNo: input.laneNo ?? null,
+      deviceId: input.deviceId ?? null,
+      direction: input.direction ?? null,
+      snapTime: input.snapTime ?? null,
+      accurateTime: input.accurateTime ?? null,
+      eventType,
+      receivedAt: serverTimestamp(),
+      raw: input.raw ?? null
+    })
+    console.log('💾 [LPR] Event persisted', { lprEventId: saved.id })
+  } catch (e) {
+    console.error('❌ [LPR] Failed to persist LPR event', e)
+    throw e
+  }
 
   // If no plate, skip matching
   if (!normalizedPlate) {
+    console.warn('⚠️ [LPR] Missing plate number - skipping booking match')
     return { savedEventId: saved.id, eventType }
   }
 
   // Try match a booking by plate and time window
-  const matched = await findMatchingActiveBookingByPlate(normalizedPlate, eventTime)
-  if (!matched) {
+  let matched: MatchedBooking | null = null
+  try {
+    console.log('🔍 [LPR] Attempting to match booking', {
+      normalizedPlate,
+      eventTimeIso: eventTime.toISOString()
+    })
+    matched = await findMatchingActiveBookingByPlate(normalizedPlate, eventTime)
+    if (!matched) {
+      console.warn('ℹ️ [LPR] No active booking matched for plate/time window', {
+        normalizedPlate,
+        eventTimeIso: eventTime.toISOString()
+      })
+      return { savedEventId: saved.id, eventType }
+    }
+    console.log('🎯 [LPR] Matched booking', {
+      bookingId: matched.id,
+      licensePlate: matched.licensePlate,
+      start: `${matched.startDate} ${matched.startTime}`,
+      end: `${matched.endDate} ${matched.endTime}`,
+      status: matched.status
+    })
+  } catch (e) {
+    console.error('❌ [LPR] Booking match failed with exception', e)
     return { savedEventId: saved.id, eventType }
   }
 
   // Update booking with LPR info
   const bookingRef = doc(db, "bookings", matched.id)
-  const bookingSnap = await getDoc(bookingRef)
-  const currentLpr = bookingSnap.exists() ? (bookingSnap.data() as any).lpr || {} : {}
-  const wasInside: boolean = currentLpr.isInside === true
-  const lprUpdate: Record<string, any> = {
-    "lpr.lastSeenAt": eventTime.toISOString(),
-    "lpr.lastSeenDeviceId": input.deviceId ?? null,
-    "lpr.lastSeenLaneNo": input.laneNo ?? null,
-    "lpr.lastSeenPlateNumber": normalizedPlate,
-    "lpr.lastEventType": eventType,
-    "lpr.lastEventAccurateTime": input.accurateTime ?? null,
-    lastUpdated: serverTimestamp()
+  let wasInside = false
+  try {
+    const bookingSnap = await getDoc(bookingRef)
+    const currentLpr = bookingSnap.exists() ? (bookingSnap.data() as any).lpr || {} : {}
+    wasInside = currentLpr.isInside === true
+    const lprUpdate: Record<string, any> = {
+      "lpr.lastSeenAt": eventTime.toISOString(),
+      "lpr.lastSeenDeviceId": input.deviceId ?? null,
+      "lpr.lastSeenLaneNo": input.laneNo ?? null,
+      "lpr.lastSeenPlateNumber": normalizedPlate,
+      "lpr.lastEventType": eventType,
+      "lpr.lastEventAccurateTime": input.accurateTime ?? null,
+      lastUpdated: serverTimestamp()
+    }
+    if (eventType === "entry") {
+      lprUpdate["lpr.arrivedAt"] = currentLpr.arrivedAt || eventTime.toISOString()
+      lprUpdate["lpr.isInside"] = true
+    } else if (eventType === "exit") {
+      lprUpdate["lpr.departedAt"] = currentLpr.departedAt || eventTime.toISOString()
+      lprUpdate["lpr.isInside"] = false
+    }
+    console.log('🛠️ [LPR] Updating booking with LPR info', {
+      bookingId: matched.id,
+      wasInside,
+      applying: { ...lprUpdate, lastUpdated: '[serverTimestamp]' }
+    })
+    await updateDoc(bookingRef, lprUpdate)
+    console.log('✅ [LPR] Booking updated with LPR info', { bookingId: matched.id })
+  } catch (e) {
+    console.error('❌ [LPR] Failed to update booking with LPR info', e)
   }
-  if (eventType === "entry") {
-    lprUpdate["lpr.arrivedAt"] = lprUpdate["lpr.arrivedAt"] ?? eventTime.toISOString()
-    lprUpdate["lpr.isInside"] = true
-  } else if (eventType === "exit") {
-    lprUpdate["lpr.departedAt"] = lprUpdate["lpr.departedAt"] ?? eventTime.toISOString()
-    lprUpdate["lpr.isInside"] = false
-  }
-  await updateDoc(bookingRef, lprUpdate)
 
   // Also append event to booking subcollection "gateEvents"
-  const gateEventsCol = collection(bookingRef, "gateEvents")
-  await addDoc(gateEventsCol, {
-    eventType,
-    plateNumber: normalizedPlate,
-    laneNo: input.laneNo ?? null,
-    deviceId: input.deviceId ?? null,
-    direction: input.direction ?? null,
-    snapTime: input.snapTime ?? null,
-    accurateTime: input.accurateTime ?? null,
-    lprEventId: saved.id,
-    createdAt: serverTimestamp()
-  })
+  try {
+    const gateEventsCol = collection(bookingRef, "gateEvents")
+    const gateRef = await addDoc(gateEventsCol, {
+      eventType,
+      plateNumber: normalizedPlate,
+      laneNo: input.laneNo ?? null,
+      deviceId: input.deviceId ?? null,
+      direction: input.direction ?? null,
+      snapTime: input.snapTime ?? null,
+      accurateTime: input.accurateTime ?? null,
+      lprEventId: saved.id,
+      createdAt: serverTimestamp()
+    })
+    console.log('📝 [LPR] Gate event appended to booking', { bookingId: matched.id, gateEventId: gateRef.id })
+  } catch (e) {
+    console.error('❌ [LPR] Failed to append gate event', e)
+  }
 
   // Update live occupancy counter (backward compatible, separate doc)
   if (eventType === "entry" || eventType === "exit") {
     const occupancyDocRef = doc(db, "config", "parkingLive")
-    // Ensure doc exists
-    await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+    try {
+      await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+    } catch (e) {
+      console.error('❌ [LPR] Failed ensuring parkingLive doc', e)
+    }
     // Idempotency: only adjust if state changes
     if (eventType === "entry" && !wasInside) {
-      await updateDoc(occupancyDocRef, {
-        occupiedCount: increment(1),
-        lastUpdated: serverTimestamp(),
-        lastChange: {
-          type: "entry",
-          bookingId: matched.id,
-          plateNumber: normalizedPlate,
-          deviceId: input.deviceId ?? null,
-          at: eventTime.toISOString()
-        }
-      })
+      try {
+        console.log('➕ [LPR] Increment occupiedCount (entry)', { bookingId: matched.id })
+        await updateDoc(occupancyDocRef, {
+          occupiedCount: increment(1),
+          lastUpdated: serverTimestamp(),
+          lastChange: {
+            type: "entry",
+            bookingId: matched.id,
+            plateNumber: normalizedPlate,
+            deviceId: input.deviceId ?? null,
+            at: eventTime.toISOString()
+          }
+        })
+      } catch (e) {
+        console.error('❌ [LPR] Failed to increment occupiedCount', e)
+      }
+    } else if (eventType === "entry" && wasInside) {
+      console.log('⏭️ [LPR] Skip increment: already inside (idempotent)')
     }
     if (eventType === "exit" && wasInside) {
-      await updateDoc(occupancyDocRef, {
-        occupiedCount: increment(-1),
-        lastUpdated: serverTimestamp(),
-        lastChange: {
-          type: "exit",
-          bookingId: matched.id,
-          plateNumber: normalizedPlate,
-          deviceId: input.deviceId ?? null,
-          at: eventTime.toISOString()
-        }
-      })
+      try {
+        console.log('➖ [LPR] Decrement occupiedCount (exit)', { bookingId: matched.id })
+        await updateDoc(occupancyDocRef, {
+          occupiedCount: increment(-1),
+          lastUpdated: serverTimestamp(),
+          lastChange: {
+            type: "exit",
+            bookingId: matched.id,
+            plateNumber: normalizedPlate,
+            deviceId: input.deviceId ?? null,
+            at: eventTime.toISOString()
+          }
+        })
+      } catch (e) {
+        console.error('❌ [LPR] Failed to decrement occupiedCount', e)
+      }
+    } else if (eventType === "exit" && !wasInside) {
+      console.log('⏭️ [LPR] Skip decrement: already outside (idempotent)')
     }
   }
 
   // Backfill lpr_events with matched booking id
-  await updateDoc(doc(db, "lpr_events", saved.id), {
-    matchedBookingId: matched.id
-  })
+  try {
+    await updateDoc(doc(db, "lpr_events", saved.id), {
+      matchedBookingId: matched.id
+    })
+    console.log('🔗 [LPR] Linked lpr_events to booking', { lprEventId: saved.id, bookingId: matched.id })
+  } catch (e) {
+    console.error('❌ [LPR] Failed to backfill lpr_events with matched booking id', e)
+  }
 
-  return {
+  const result = {
     savedEventId: saved.id,
     matchedBookingId: matched.id,
     eventType
   }
+  try {
+    console.log('🏁 [LPR] handleLprEvent DONE', result)
+  } catch {}
+  return result
 }
 
 
