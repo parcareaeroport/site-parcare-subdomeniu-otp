@@ -80,6 +80,20 @@ export interface DashboardStats {
   clientsGrowth: string
 }
 
+export interface PresentVehicle {
+  id: string
+  licensePlate: string
+  source: string
+  status: string
+  arrivedAt?: string
+  startDate?: string
+  startTime?: string
+  endDate?: string
+  endTime?: string
+  isDelayed: boolean
+  isUnmatched: boolean
+}
+
 /**
  * Obține statisticile principale pentru dashboard
  */
@@ -168,14 +182,14 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       currentOccupancy = Math.min(Math.round((occupiedCount / maxReservations) * 100), 100)
       console.log('🚗 Dashboard using LIVE LPR occupancy:', { occupiedCount, currentOccupancy })
     } else {
-      const today = new Date()
-      const activeBookingsQuery = query(
-        bookingsRef,
-        where('startDate', '<=', today.toISOString().split('T')[0]),
-        where('endDate', '>=', today.toISOString().split('T')[0]),
-        where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed_pay_on_site'])
-      )
-      const activeBookingsSnap = await getDocs(activeBookingsQuery)
+    const today = new Date()
+    const activeBookingsQuery = query(
+      bookingsRef,
+      where('startDate', '<=', today.toISOString().split('T')[0]),
+      where('endDate', '>=', today.toISOString().split('T')[0]),
+      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed_pay_on_site'])
+    )
+    const activeBookingsSnap = await getDocs(activeBookingsQuery)
       currentOccupancy = Math.min(Math.round((activeBookingsSnap.size / maxReservations) * 100), 100)
       console.log('📊 Dashboard fallback occupancy (bookings):', { count: activeBookingsSnap.size, currentOccupancy })
     }
@@ -248,6 +262,55 @@ export async function getMonthlyRevenueData(): Promise<MonthlyStats[]> {
   } catch (error) {
     console.error('Error fetching monthly revenue data:', error)
     return []
+  }
+}
+
+/**
+ * Obține lista de vehicule prezente în parcare (LPR)
+ */
+export async function getPresentVehicles(): Promise<{
+  items: PresentVehicle[]
+  presentCount: number
+  delayedCount: number
+}> {
+  try {
+    const now = Date.now()
+    const bookingsRef = collection(db, 'bookings')
+    // Doar cele cu lpr.isInside == true
+    const q = query(bookingsRef, where('lpr.isInside', '==', true))
+    const snap = await getDocs(q)
+    const items: PresentVehicle[] = []
+    let delayedCount = 0
+    snap.forEach(docSnap => {
+      const b: any = docSnap.data()
+      const endTs = b.endDate && b.endTime ? new Date(`${b.endDate}T${b.endTime}:00`).getTime() : NaN
+      const delayed = Number.isFinite(endTs) && endTs < now
+      if (delayed) delayedCount++
+      items.push({
+        id: docSnap.id,
+        licensePlate: b.licensePlate || 'N/A',
+        source: b.source || 'unknown',
+        status: b.status || 'unknown',
+        arrivedAt: b?.lpr?.arrivedAt,
+        startDate: b.startDate,
+        startTime: b.startTime,
+        endDate: b.endDate,
+        endTime: b.endTime,
+        isDelayed: delayed,
+        isUnmatched: b.status === 'unmatched_lpr'
+      })
+    })
+    // Sortează: întârziate primele, apoi după arrivedAt
+    items.sort((a, b) => {
+      if (a.isDelayed !== b.isDelayed) return a.isDelayed ? -1 : 1
+      const atA = a.arrivedAt ? new Date(a.arrivedAt).getTime() : 0
+      const atB = b.arrivedAt ? new Date(b.arrivedAt).getTime() : 0
+      return atA - atB
+    })
+    return { items, presentCount: items.length, delayedCount }
+  } catch (e) {
+    console.error('Error fetching present vehicles:', e)
+    return { items: [], presentCount: 0, delayedCount: 0 }
   }
 }
 

@@ -184,6 +184,103 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
         normalizedPlate,
         eventTimeIso: eventTime.toISOString()
       })
+      // Handle UNMATCHED flow: keep track of presence as a lightweight booking
+      const bookingsRef = collection(db, "bookings")
+      try {
+        // Try to find an open unmatched_lpr record for this plate (still inside)
+        const q = query(
+          bookingsRef,
+          where("status", "==", "unmatched_lpr"),
+          where("lpr.isInside", "==", true),
+          where("licensePlate", "==", normalizedPlate)
+        )
+        const snap = await getDocs(q)
+        if (eventType === "entry") {
+          if (!snap.empty) {
+            console.log('⏭️ [LPR] Unmatched entry but already inside - updating lastSeen', { count: snap.size })
+            // Update last seen on the first doc
+            const docSnap = snap.docs[0]
+            await updateDoc(doc(db, "bookings", docSnap.id), {
+              "lpr.lastSeenAt": eventTime.toISOString(),
+              "lpr.lastSeenDeviceId": input.deviceId ?? null,
+              "lpr.lastEventType": eventType,
+              lastUpdated: serverTimestamp()
+            })
+          } else {
+            console.log('➕ [LPR] Creating unmatched_lpr booking record (entry)')
+            const newDocRef = await addDoc(bookingsRef, {
+              licensePlate: normalizedPlate,
+              source: "lpr",
+              status: "unmatched_lpr",
+              createdAt: serverTimestamp(),
+              lastUpdated: serverTimestamp(),
+              lpr: {
+                isInside: true,
+                arrivedAt: eventTime.toISOString(),
+                lastSeenAt: eventTime.toISOString(),
+                lastSeenDeviceId: input.deviceId ?? null,
+                lastEventType: eventType
+              }
+            })
+            console.log('✅ [LPR] Unmatched booking created', { bookingId: newDocRef.id })
+            // Increment occupancy for unmatched entry
+            try {
+              const occupancyDocRef = doc(db, "config", "parkingLive")
+              await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+              await updateDoc(occupancyDocRef, {
+                occupiedCount: increment(1),
+                lastUpdated: serverTimestamp(),
+                lastChange: {
+                  type: "entry_unmatched",
+                  bookingId: newDocRef.id,
+                  plateNumber: normalizedPlate,
+                  deviceId: input.deviceId ?? null,
+                  at: eventTime.toISOString()
+                }
+              })
+            } catch (e) {
+              console.error('❌ [LPR] Failed to increment occupancy for unmatched entry', e)
+            }
+          }
+        } else if (eventType === "exit") {
+          if (!snap.empty) {
+            const docSnap = snap.docs[0]
+            console.log('🚪 [LPR] Marking unmatched_lpr as exited', { bookingId: docSnap.id })
+            await updateDoc(doc(db, "bookings", docSnap.id), {
+              "lpr.isInside": false,
+              "lpr.departedAt": eventTime.toISOString(),
+              "lpr.lastSeenAt": eventTime.toISOString(),
+              "lpr.lastSeenDeviceId": input.deviceId ?? null,
+              "lpr.lastEventType": eventType,
+              lastUpdated: serverTimestamp()
+            })
+            // Decrement occupancy for unmatched exit
+            try {
+              const occupancyDocRef = doc(db, "config", "parkingLive")
+              await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+              await updateDoc(occupancyDocRef, {
+                occupiedCount: increment(-1),
+                lastUpdated: serverTimestamp(),
+                lastChange: {
+                  type: "exit_unmatched",
+                  bookingId: docSnap.id,
+                  plateNumber: normalizedPlate,
+                  deviceId: input.deviceId ?? null,
+                  at: eventTime.toISOString()
+                }
+              })
+            } catch (e) {
+              console.error('❌ [LPR] Failed to decrement occupancy for unmatched exit', e)
+            }
+          } else {
+            console.log('ℹ️ [LPR] Exit received for unmatched plate but no open record found - skipping')
+          }
+        } else {
+          console.log('ℹ️ [LPR] Unknown eventType for unmatched flow - no state changes')
+        }
+      } catch (e) {
+        console.error('❌ [LPR] Unmatched flow failed', e)
+      }
       return { savedEventId: saved.id, eventType }
     }
     console.log('🎯 [LPR] Matched booking', {

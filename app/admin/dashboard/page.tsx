@@ -31,7 +31,8 @@ import {
   type MonthlyStats,
   type BookingStatusStats,
   type OccupancyStats,
-  type RecentBooking
+  type RecentBooking,
+  getPresentVehicles
 } from "@/lib/admin-stats"
 import { Button } from "@/components/ui/button"
 
@@ -58,6 +59,9 @@ export default function DashboardPage() {
   const [bookingStatusData, setBookingStatusData] = useState<BookingStatusStats[]>([])
   const [occupancyData, setOccupancyData] = useState<OccupancyStats[]>([])
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([])
+  const [presentVehicles, setPresentVehicles] = useState<any[]>([])
+  const [presentCount, setPresentCount] = useState(0)
+  const [delayedCount, setDelayedCount] = useState(0)
 
   useEffect(() => {
     setIsClient(true)
@@ -80,14 +84,16 @@ export default function DashboardPage() {
         monthlyBookings,
         statusData,
         occupancy,
-        recent
+        recent,
+        present
       ] = await Promise.all([
         getDashboardStats(),
         getMonthlyRevenueData(),
         getMonthlyBookingsData(),
         getBookingStatusData(),
         getOccupancyData(),
-        getRecentBookings()
+        getRecentBookings(),
+        getPresentVehicles()
       ])
 
       setDashboardStats(stats)
@@ -96,6 +102,9 @@ export default function DashboardPage() {
       setBookingStatusData(statusData)
       setOccupancyData(occupancy)
       setRecentBookings(recent)
+      setPresentVehicles(present.items)
+      setPresentCount(present.presentCount)
+      setDelayedCount(present.delayedCount)
       
     } catch (error) {
       console.error('Error loading dashboard data:', error)
@@ -244,6 +253,18 @@ export default function DashboardPage() {
             <p className="text-xs text-muted-foreground">{dashboardStats.currentOccupancy} din 100 locuri ocupate</p>
           </CardContent>
         </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Prezenți (LPR)</CardTitle>
+            <Car className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{presentCount}</div>
+            <p className="text-xs text-muted-foreground">
+              Întârziați: {delayedCount}
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       <Tabs defaultValue="revenue" className="space-y-4">
@@ -251,6 +272,7 @@ export default function DashboardPage() {
           <TabsTrigger value="revenue">Venituri</TabsTrigger>
           <TabsTrigger value="bookings">Rezervări</TabsTrigger>
           <TabsTrigger value="occupancy">Ocupare</TabsTrigger>
+          <TabsTrigger value="presence">Prezenți (LPR)</TabsTrigger>
         </TabsList>
         <TabsContent value="revenue" className="space-y-4">
           <Card>
@@ -391,6 +413,95 @@ export default function DashboardPage() {
                     <Legend />
                   </PieChart>
                 </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="presence" className="space-y-4">
+          <Card>
+            <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between">
+              <div>
+                <CardTitle>Prezenți în parcare</CardTitle>
+                <CardDescription>Lista vehiculelor detectate ca fiind în incintă</CardDescription>
+              </div>
+              <div className="flex gap-2 mt-2 md:mt-0">
+                <Button variant="outline" size="sm" onClick={() => window.print()}>
+                  Printează listă
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const header = ['Număr', 'Sursă', 'Status', 'Sosit', 'Interval planificat', 'Întârziat', 'Tip']
+                    const rows = presentVehicles.map((v) => {
+                      const interval = v.startDate && v.startTime && v.endDate && v.endTime
+                        ? `${v.startDate} ${v.startTime} - ${v.endDate} ${v.endTime}`
+                        : ''
+                      return [
+                        v.licensePlate,
+                        v.source,
+                        v.status,
+                        v.arrivedAt || '',
+                        interval,
+                        v.isDelayed ? 'DA' : 'NU',
+                        v.isUnmatched ? 'NEPROGRAMAT' : 'REZERVARE'
+                      ]
+                    })
+                    const csv = [header, ...rows].map(r => r.map(x => `"${(x ?? '').toString().replace(/"/g,'""')}"`).join(',')).join('\n')
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+                    const url = URL.createObjectURL(blob)
+                    const link = document.createElement('a')
+                    link.href = url
+                    link.download = `prezenti_lpr_${new Date().toISOString().slice(0,10)}.csv`
+                    link.click()
+                    URL.revokeObjectURL(url)
+                  }}
+                >
+                  Export CSV
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-muted-foreground">
+                      <th className="py-2 pr-4">Număr</th>
+                      <th className="py-2 pr-4">Sursă</th>
+                      <th className="py-2 pr-4">Status</th>
+                      <th className="py-2 pr-4">Sosit</th>
+                      <th className="py-2 pr-4">Interval planificat</th>
+                      <th className="py-2 pr-4">Întârziat</th>
+                      <th className="py-2 pr-4">Tip</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {presentVehicles.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-6 text-center text-muted-foreground">
+                          Nicio mașină prezentă în acest moment.
+                        </td>
+                      </tr>
+                    ) : (
+                      presentVehicles.map((v, idx) => {
+                        const interval = v.startDate && v.startTime && v.endDate && v.endTime
+                          ? `${v.startDate} ${v.startTime} → ${v.endDate} ${v.endTime}`
+                          : '-'
+                        return (
+                          <tr key={v.id || idx} className="border-t">
+                            <td className="py-2 pr-4 font-medium">{v.licensePlate}</td>
+                            <td className="py-2 pr-4">{v.source}</td>
+                            <td className="py-2 pr-4">{v.status}</td>
+                            <td className="py-2 pr-4">{v.arrivedAt ? new Date(v.arrivedAt).toLocaleString('ro-RO') : '-'}</td>
+                            <td className="py-2 pr-4">{interval}</td>
+                            <td className={`py-2 pr-4 ${v.isDelayed ? 'text-red-600 font-semibold' : ''}`}>{v.isDelayed ? 'DA' : 'NU'}</td>
+                            <td className="py-2 pr-4">{v.isUnmatched ? 'NEPROGRAMAT' : 'REZERVARE'}</td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
               </div>
             </CardContent>
           </Card>

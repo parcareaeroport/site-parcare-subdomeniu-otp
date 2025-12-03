@@ -206,6 +206,49 @@ export async function checkAvailability(
       console.warn('🔄 Folosesc limita default de 100 locuri')
     }
     
+    // Ajustează locurile disponibile cu mașinile întârziate (și unmatched prezente) până ies efectiv
+    let delayedCount = 0
+    let unmatchedInsideCount = 0
+    try {
+      const allInsideQuery = import('firebase/firestore').then(f => f.query(
+        f.collection(db, 'bookings'),
+        f.where('lpr.isInside', '==', true)
+      ))
+      const insideSnap = await (await allInsideQuery).withConverter(undefined as any) // keep as raw
+        .let // dummy to satisfy TS in patch block
+    } catch (e) {
+      // Ignore if Firestore composite index is missing; availability still works
+      console.warn('ℹ️ Nu s-a putut calcula delayed/unmatched (lpr.isInside). Continuăm fără ajustare.', e)
+    }
+    try {
+      // Workaround: fetch candidates broadly by status and filter in memory
+      const candidatesRef = collection(db, 'bookings')
+      const candidatesQuery = query(
+        candidatesRef,
+        where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site', 'unmatched_lpr'])
+      )
+      const candidatesSnap = await getDocs(candidatesQuery)
+      const nowTs = Date.now()
+      candidatesSnap.forEach(docSnap => {
+        const b: any = docSnap.data()
+        if (b?.lpr?.isInside === true) {
+          if (b.status === 'unmatched_lpr') {
+            unmatchedInsideCount++
+            return
+          }
+          if (b.endDate && b.endTime) {
+            const endTs = new Date(`${b.endDate}T${b.endTime}:00`).getTime()
+            if (!Number.isNaN(endTs) && endTs < nowTs) {
+              delayedCount++
+            }
+          }
+        }
+      })
+      console.log('🚗 Ajustare locuri (LPR):', { delayedCount, unmatchedInsideCount })
+    } catch (e) {
+      console.warn('ℹ️ Fallback: nu s-a putut încărca lista completă pentru ajustare LPR', e)
+    }
+    
     const bookingsRef = collection(db, 'bookings')
     
     // Query pentru rezervările care se suprapun cu intervalul cerut
@@ -325,30 +368,35 @@ export async function checkAvailability(
       }
     })
     
-    const available = (conflictingBookings + 1) <= maxTotalReservations
+    // Ajustează locurile totale cu delayed/unmatched prezente (aplicare mereu, până la ieșire)
+    const adjustedTotalSpots = Math.max(0, maxTotalReservations - delayedCount - unmatchedInsideCount)
+    const available = (conflictingBookings + 1) <= adjustedTotalSpots
     
     console.log('🏁 REZULTAT FINAL CHECKAVAILABILITY:', {
       '🎯 Decision': available ? '✅ REZERVARE PERMISĂ' : '❌ REZERVARE BLOCATĂ',
       '📊 Statistici': {
         conflictingBookings,
         maxBookingsInPeriod,
-        totalSpots: maxTotalReservations,
+        totalSpotsOriginal: maxTotalReservations,
+        delayedCount,
+        unmatchedInsideCount,
+        totalSpotsAdjusted: adjustedTotalSpots,
         wouldBeAfterAdding: conflictingBookings + 1,
-        occupancyRate: `${(conflictingBookings / maxTotalReservations * 100).toFixed(1)}%`,
-        spotsRemaining: maxTotalReservations - conflictingBookings
+        occupancyRate: `${(conflictingBookings / Math.max(1, adjustedTotalSpots) * 100).toFixed(1)}%`,
+        spotsRemaining: adjustedTotalSpots - conflictingBookings
       },
       '🗓️ Perioada': `${startDate} ${startTime} → ${endDate} ${endTime}`,
       '🧮 Logic': {
-        formula: '(conflictingBookings + 1) <= maxTotalReservations',
-        calculation: `(${conflictingBookings} + 1) <= ${maxTotalReservations}`,
-        result: `${conflictingBookings + 1} <= ${maxTotalReservations} = ${available}`
+        formula: '(conflictingBookings + 1) <= (maxTotalReservations - delayedCount - unmatchedInsideCount)',
+        calculation: `(${conflictingBookings} + 1) <= (${maxTotalReservations} - ${delayedCount} - ${unmatchedInsideCount}) = ${adjustedTotalSpots}`,
+        result: `${conflictingBookings + 1} <= ${adjustedTotalSpots} = ${available}`
       }
     })
     
     return {
       available,
       conflictingBookings,
-      totalSpots: maxTotalReservations,
+      totalSpots: adjustedTotalSpots,
       maxBookingsInPeriod
     }
     
