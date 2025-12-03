@@ -159,23 +159,26 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       ? `${(((uniqueClients.size - lastYearClients.size) / lastYearClients.size) * 100).toFixed(1)}%`
       : '0%'
 
-    // Calculează ocuparea curentă (rezervări active)
-    const today = new Date()
-    const activeBookingsQuery = query(
-      bookingsRef,
-      where('startDate', '<=', today.toISOString().split('T')[0]),
-      where('endDate', '>=', today.toISOString().split('T')[0]),
-      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed_pay_on_site'])
-    )
-
-    console.log('🔍 Dashboard occupancy check for date:', today.toISOString().split('T')[0])
-
-    const activeBookingsSnap = await getDocs(activeBookingsQuery)
-    console.log('📊 Dashboard active bookings found:', activeBookingsSnap.size)
-    
-    // Obține limita reală de rezervări pentru calcul corect
+    // Calculează ocuparea curentă: preferă contorul LIVE (LPR), fallback pe rezervări
     const maxReservations = await getMaxTotalReservations()
-    const currentOccupancy = Math.min((activeBookingsSnap.size / maxReservations) * 100, 100)
+    let currentOccupancy = 0
+    const liveDoc = await getDoc(doc(db, 'config', 'parkingLive'))
+    if (liveDoc.exists()) {
+      const occupiedCount = Math.max(0, Number(liveDoc.data().occupiedCount || 0))
+      currentOccupancy = Math.min(Math.round((occupiedCount / maxReservations) * 100), 100)
+      console.log('🚗 Dashboard using LIVE LPR occupancy:', { occupiedCount, currentOccupancy })
+    } else {
+      const today = new Date()
+      const activeBookingsQuery = query(
+        bookingsRef,
+        where('startDate', '<=', today.toISOString().split('T')[0]),
+        where('endDate', '>=', today.toISOString().split('T')[0]),
+        where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed_pay_on_site'])
+      )
+      const activeBookingsSnap = await getDocs(activeBookingsQuery)
+      currentOccupancy = Math.min(Math.round((activeBookingsSnap.size / maxReservations) * 100), 100)
+      console.log('📊 Dashboard fallback occupancy (bookings):', { count: activeBookingsSnap.size, currentOccupancy })
+    }
 
     return {
       totalRevenue,
@@ -415,82 +418,51 @@ async function markExpiredBookingsAsInactive() {
  */
 export async function getOccupancyData(): Promise<OccupancyStats[]> {
   try {
-    // Obține limita maximă reală din configurație
+    // Preferă contorul LIVE din Firestore (LPR), cu fallback pe calculul clasic din rezervări
     const totalSpots = await getMaxTotalReservations()
-    
-    // Folosește query-ul inteligent pentru ocuparea curentă
-    const { getCurrentParkingOccupancy } = await import('./booking-utils')
-    const currentOccupancy = await getCurrentParkingOccupancy()
-    
-    // Opțional: cleanup soft dacă e necesar
-    const { softCleanupExpiredBookings } = await import('./booking-utils')
-    const expiredCount = await softCleanupExpiredBookings()
-    if (expiredCount > 0) {
-      console.log(`🔄 Soft cleanup: marked ${expiredCount} expired bookings`)
+    const liveDoc = await getDoc(doc(db, 'config', 'parkingLive'))
+    if (liveDoc.exists()) {
+      const occupiedCount = Math.max(0, Number(liveDoc.data().occupiedCount || 0))
+      const occupiedPercentage = Math.min(100, Math.round((occupiedCount / totalSpots) * 100))
+      const freePercentage = 100 - occupiedPercentage
+      
+      console.log('🚗 Using LIVE LPR occupancy:', {
+        occupiedCount,
+        totalSpots,
+        occupiedPercentage
+      })
+      
+      return [
+        { name: 'Ocupat', value: occupiedPercentage },
+        { name: 'Liber', value: freePercentage }
+      ]
     }
     
+    // Fallback: calculează din rezervări (backward-compatible)
     const bookingsRef = collection(db, 'bookings')
     const now = new Date()
     const currentDateStr = now.toISOString().split('T')[0]
-    const currentTimeStr = now.toTimeString().slice(0, 5)
-
-    console.log('🔍 Checking occupancy for date:', currentDateStr, 'time:', currentTimeStr)
-
-    // Query pentru rezervările REALMENTE active în acest moment
+    const now_timestamp = now.getTime()
     const activeBookingsQuery = query(
       bookingsRef,
       where('startDate', '<=', currentDateStr),
       where('endDate', '>=', currentDateStr),
       where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site'])
     )
-
     const snapshot = await getDocs(activeBookingsQuery)
-    
-    // Filtrează rezervările care sunt REALMENTE active acum (incluzând ora)
     let reallyActiveBookings = 0
-    const now_timestamp = now.getTime()
-    
-    snapshot.forEach(doc => {
-      const booking = doc.data()
+    snapshot.forEach(docSnap => {
+      const booking = docSnap.data()
       const startDateTime = new Date(`${booking.startDate}T${booking.startTime}:00`)
       const endDateTime = new Date(`${booking.endDate}T${booking.endTime}:00`)
-      
-      // Verifică dacă rezervarea este activă chiar acum
       if (startDateTime.getTime() <= now_timestamp && endDateTime.getTime() > now_timestamp) {
         reallyActiveBookings++
-        console.log('📋 Active booking now:', {
-          id: doc.id,
-          licensePlate: booking.licensePlate,
-          start: startDateTime.toISOString(),
-          end: endDateTime.toISOString(),
-          status: booking.status
-        })
-      } else {
-        console.log('⏰ Booking not currently active:', {
-          id: doc.id,
-          licensePlate: booking.licensePlate,
-          start: startDateTime.toISOString(),
-          end: endDateTime.toISOString(),
-          status: booking.status,
-          reason: startDateTime.getTime() > now_timestamp ? 'Not started yet' : 'Already ended'
-        })
       }
     })
-
     const occupiedPercentage = Math.round((reallyActiveBookings / totalSpots) * 100)
-    const freePercentage = 100 - occupiedPercentage
-
-    console.log('📈 Real-time occupancy calculation:', {
-      reallyActiveBookings,
-      totalSpots,
-      occupiedPercentage,
-      freePercentage,
-      currentDateTime: now.toISOString()
-    })
-
     return [
       { name: 'Ocupat', value: occupiedPercentage },
-      { name: 'Liber', value: freePercentage }
+      { name: 'Liber', value: 100 - occupiedPercentage }
     ]
 
   } catch (error) {

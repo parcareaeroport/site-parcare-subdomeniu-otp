@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { handleLprEvent } from "@/lib/lpr-service";
 
 type Nullable<T> = T | null;
 
@@ -84,8 +85,16 @@ export async function POST(req: NextRequest) {
     raw: body,
   });
 
-  // Aici ulterior poți salva în DB (Postgres / Firestore etc.)
-  // await saveLprEventToDb(event, body);
+  try {
+    const result = await handleLprEvent({
+      ...event,
+      raw: body
+    });
+    return NextResponse.json({ status: "ok", ...result });
+  } catch (e) {
+    console.error("Failed to handle LPR event:", e);
+    return new NextResponse("Internal Server Error", { status: 500 });
+  }
 
   return NextResponse.json({ status: "ok" });
 }

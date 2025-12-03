@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createBookingWithFirestore } from "@/app/actions/booking-actions";
 import { normalizeLicensePlate } from "@/lib/utils";
+import { addDoc, collection, serverTimestamp } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 
 type PaymentStatus = "paid" | "pending" | "n/a";
 
@@ -120,6 +122,22 @@ export async function POST(request: NextRequest) {
         `[WP-BOOKING][${reqId}] Raw body from WP (flat form):`,
         flat
       );
+      console.log(
+        `[WP-BOOKING][${reqId}] Incoming keys (flat form):`,
+        Object.keys(flat)
+      );
+      // Persist minimal log with keys only (no PII)
+      try {
+        await addDoc(collection(db, "webhook_logs"), {
+          source: "wp-booking",
+          reqId,
+          contentType,
+          keys: Object.keys(flat),
+          receivedAt: serverTimestamp(),
+        });
+      } catch (e) {
+        console.warn(`[WP-BOOKING][${reqId}] Failed to persist webhook keys log (flat):`, e);
+      }
 
       const hasElementorFields = Object.keys(flat).some((k) =>
         k.startsWith("fields[")
@@ -141,6 +159,22 @@ export async function POST(request: NextRequest) {
           `[WP-BOOKING][${reqId}] Raw JSON body:`,
           body
         );
+        console.log(
+          `[WP-BOOKING][${reqId}] Incoming keys (json):`,
+          body && typeof body === "object" ? Object.keys(body) : []
+        );
+        // Persist minimal log with keys only (no PII)
+        try {
+          await addDoc(collection(db, "webhook_logs"), {
+            source: "wp-booking",
+            reqId,
+            contentType,
+            keys: body && typeof body === "object" ? Object.keys(body) : [],
+            receivedAt: serverTimestamp(),
+          });
+        } catch (e) {
+          console.warn(`[WP-BOOKING][${reqId}] Failed to persist webhook keys log (json):`, e);
+        }
       } catch (e) {
         console.warn(
           `[WP-BOOKING][${reqId}] Could not parse JSON body:`,
