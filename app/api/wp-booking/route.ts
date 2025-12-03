@@ -189,6 +189,89 @@ export async function POST(request: NextRequest) {
       body
     );
 
+    // 2.1) Mapper automat pentru noile chei WP (RO) dacă lipsesc cheile noastre standard
+    const hasStandardKeys =
+      body &&
+      typeof body === "object" &&
+      ("licensePlate" in body ||
+        ("startDate" in body && "endDate" in body && "startTime" in body && "endTime" in body));
+
+    const hasRomanianWpKeys =
+      body &&
+      typeof body === "object" &&
+      ("numar_inmatriculare" in body || "data_intrare_iesire" in body);
+
+    // Util: parse dd.MM.yyyy -> yyyy-MM-dd
+    const parseRoDate = (d?: string): string | undefined => {
+      if (!d) return undefined;
+      const m = d.trim().match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
+      if (!m) return undefined;
+      const [, dd, mm, yyyy] = m;
+      return `${yyyy}-${mm}-${dd}`;
+    };
+
+    // Util: split "dd.MM.yyyy - dd.MM.yyyy"
+    const parseRoDateRange = (r?: string): { start?: string; end?: string } => {
+      if (!r) return { start: undefined, end: undefined };
+      const parts = r.split("-").map((s) => s.trim());
+      if (parts.length !== 2) return { start: undefined, end: undefined };
+      return {
+        start: parseRoDate(parts[0]),
+        end: parseRoDate(parts[1]),
+      };
+    };
+
+    if (!hasStandardKeys && hasRomanianWpKeys) {
+      const ro = body || {};
+      const range = parseRoDateRange(ro.data_intrare_iesire);
+      const mappedFromRo = {
+        // chei obligatorii mapate
+        licensePlate: ro.numar_inmatriculare ? normalizeLicensePlate(String(ro.numar_inmatriculare)) : undefined,
+        startDate: range.start,
+        endDate: range.end,
+        startTime: ro.ora_intrare || undefined,
+        endTime: ro.ora_iesire || undefined,
+        // plată
+        paymentMethod:
+          ro.metoda_de_plata === "2" ? "pay_on_site" : (ro.metoda_de_plata ? "card" : undefined),
+        // date client
+        firstName: ro.prenume || undefined,
+        lastName: ro.nume || undefined,
+        email: ro.e_mail || undefined,
+        phone: ro.telefon || undefined,
+        numberOfPersons: ro.numar_persoane ? parseInt(String(ro.numar_persoane), 10) || undefined : undefined,
+        // adresă
+        address: ro.adresa || undefined,
+        city: ro.oras || undefined,
+        county: ro.judet || undefined,
+        country: ro.tara || undefined,
+        // facturare PJ
+        needInvoice: ro.doresc_factura_pentru_persoana_juridica ? true : false,
+        company: ro.denumire_firma || undefined,
+        companyVAT: ro.cui_cif || undefined,
+        companyReg: ro.numar_registrul_comertului || undefined,
+        companyAddress: ro.adresa_firma || undefined,
+        // observații
+        orderNotes: ro.observatii_rezervare || undefined,
+      };
+
+      console.log(`[WP-BOOKING][${reqId}] Mapped from RO keys → standard:`, mappedFromRo);
+
+      // Doar dacă am obținut minimul obligatoriu, suprascriem body; altfel lăsăm flow-ul să dea 400 cu mesaj clar
+      if (
+        mappedFromRo.licensePlate &&
+        mappedFromRo.startDate &&
+        mappedFromRo.endDate &&
+        mappedFromRo.startTime &&
+        mappedFromRo.endTime
+      ) {
+        body = {
+          ...body,
+          ...mappedFromRo,
+        };
+      }
+    }
+
     // 3) Extragem câmpurile esențiale
     const {
       licensePlate,
