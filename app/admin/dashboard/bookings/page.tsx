@@ -201,6 +201,16 @@ function BookingsPageContent() {
   const [lprClientPhone, setLprClientPhone] = useState("")
   const [lprPersons, setLprPersons] = useState("1")
 
+  // Helper pentru formatarea întârzierilor (X ore Y minute / doar minute)
+  const formatDelay = (minutes: number) => {
+    const abs = Math.abs(minutes)
+    if (abs < 60) return `${abs} min`
+    const h = Math.floor(abs / 60)
+    const m = abs % 60
+    if (m === 0) return `${h} h`
+    return `${h} h ${m} min`
+  }
+
   const fetchBookings = async () => {
     setIsLoading(true)
     try {
@@ -1281,16 +1291,39 @@ function BookingsPageContent() {
                     </TableRow>
                   ) : (
                     filteredBookings.map((booking) => (
-                      <TableRow
-                        key={booking.id}
-                        className={
-                          booking.source === "manual"
+                    <TableRow
+                      key={booking.id}
+                      className={
+                        booking.source === "manual"
                             ? "bg-orange-50 hover:bg-orange-100 border-l-4 border-l-orange-400"
                             : booking.source === "pay_on_site"
                             ? "bg-orange-100 hover:bg-orange-200 border-l-4 border-l-orange-500"
                             : ""
+                      }
+                    >
+                      {/* facem un mic helper în interiorul map-ului */}
+                      {(() => {
+                        const lpr: any = (booking as any).lpr || {}
+                        let earlyLateLabel: string | null = null
+                        let earlyLateClass = ""
+                        if (booking.endDate && booking.endTime && lpr.departedAt) {
+                          const planned = new Date(`${booking.endDate}T${booking.endTime}:00`)
+                          const actual = new Date(lpr.departedAt)
+                          const diffMin = Math.round((actual.getTime() - planned.getTime()) / (1000 * 60))
+                          if (!Number.isNaN(diffMin) && diffMin !== 0) {
+                            if (diffMin < 0) {
+                              earlyLateLabel = `Ieșit mai devreme cu ${Math.abs(diffMin)} min`
+                              earlyLateClass = "text-xs text-blue-700"
+                            } else {
+                              earlyLateLabel = `Întârziat la ieșire cu ${diffMin} min`
+                              earlyLateClass = "text-xs text-red-700 font-semibold"
+                            }
+                          }
                         }
-                      >
+                        ;(booking as any)._earlyLateLabel = earlyLateLabel
+                        ;(booking as any)._earlyLateClass = earlyLateClass
+                        return null
+                      })()}
                         <TableCell className="font-medium">
                           {booking.source === "manual" && (
                             <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 mr-2 text-xs">
@@ -1315,16 +1348,23 @@ function BookingsPageContent() {
                         <TableCell>{booking.licensePlate}</TableCell>
                         <TableCell>{booking.clientName || "N/A"}</TableCell>
                         <TableCell>
-                          {booking.startDate && booking.endDate ? (
-                            <>
-                              {formatDateFn(parseISO(booking.startDate), "dd MMM", { locale: ro })}{" "}
-                              {booking.startTime || "--:--"} -{" "}
-                              {formatDateFn(parseISO(booking.endDate), "dd MMM", { locale: ro })}{" "}
-                              {booking.endTime || "--:--"}
-                            </>
-                          ) : (
-                            <span className="text-xs text-gray-400">Perioadă nesetată (LPR / manuală)</span>
-                          )}
+                          <div className="flex flex-col">
+                            {booking.startDate && booking.endDate ? (
+                              <>
+                                {formatDateFn(parseISO(booking.startDate), "dd MMM", { locale: ro })}{" "}
+                                {booking.startTime || "--:--"} -{" "}
+                                {formatDateFn(parseISO(booking.endDate), "dd MMM", { locale: ro })}{" "}
+                                {booking.endTime || "--:--"}
+                              </>
+                            ) : (
+                              <span className="text-xs text-gray-400">Perioadă nesetată (LPR / manuală)</span>
+                            )}
+                            {(booking as any)._earlyLateLabel && (
+                              <span className={(booking as any)._earlyLateClass}>
+                                {(booking as any)._earlyLateLabel}
+                              </span>
+                            )}
+                          </div>
                         </TableCell>
                         <TableCell>{getStatusBadge(booking.status)}</TableCell>
                         <TableCell>{renderPaymentStatusCell(booking)}</TableCell>
@@ -1516,7 +1556,7 @@ function BookingsPageContent() {
                                 ? "-"
                                 : delayMinutes <= 0
                                 ? "La timp"
-                                : `${delayMinutes} min`}
+                                : formatDelay(delayMinutes)}
                             </TableCell>
                           </TableRow>
                         )
@@ -1576,7 +1616,7 @@ function BookingsPageContent() {
                                 ? "-"
                                 : delayMinutes <= 0
                                 ? "La timp"
-                                : `${delayMinutes} min`}
+                                : formatDelay(delayMinutes)}
                             </TableCell>
                           </TableRow>
                         )
@@ -1631,6 +1671,39 @@ function BookingsPageContent() {
                         }`
                       : "Nesetată"}
                   </p>
+                  {(() => {
+                    const lpr: any = (selectedBooking as any).lpr || {}
+                        if (selectedBooking.endDate && selectedBooking.endTime && lpr.departedAt) {
+                      const planned = new Date(`${selectedBooking.endDate}T${selectedBooking.endTime}:00`)
+                      const actual = new Date(lpr.departedAt)
+                      const diffMin = Math.round((actual.getTime() - planned.getTime()) / (1000 * 60))
+                      if (!Number.isNaN(diffMin) && diffMin !== 0) {
+                        if (diffMin < 0) {
+                          return (
+                            <p className="text-xs text-blue-700">
+                                  <strong>Ieșire LPR:</strong> {actual.toLocaleString("ro-RO")} (mai devreme cu{" "}
+                                  {formatDelay(diffMin)})
+                            </p>
+                          )
+                        }
+                        return (
+                          <p className="text-xs text-red-700">
+                                <strong>Ieșire LPR:</strong> {actual.toLocaleString("ro-RO")} (întârziat cu{" "}
+                                {formatDelay(diffMin)})
+                          </p>
+                        )
+                      }
+                    }
+                    if (lpr.departedAt) {
+                      const actual = new Date(lpr.departedAt)
+                      return (
+                        <p className="text-xs text-gray-600">
+                          <strong>Ieșire LPR:</strong> {actual.toLocaleString("ro-RO")}
+                        </p>
+                      )
+                    }
+                    return null
+                  })()}
                   <p>
                     <strong>Creată la:</strong>{" "}
                     {selectedBooking.createdAt
