@@ -1304,23 +1304,51 @@ function BookingsPageContent() {
                       {/* facem un mic helper în interiorul map-ului */}
                       {(() => {
                         const lpr: any = (booking as any).lpr || {}
+                        let entryLabel: string | null = null
+                        let entryClass = ""
                         let earlyLateLabel: string | null = null
                         let earlyLateClass = ""
+
+                        // Diferență la INTRARE (față de ora programată)
+                        if (booking.startDate && booking.startTime && lpr.arrivedAt) {
+                          const plannedStart = new Date(`${booking.startDate}T${booking.startTime}:00`)
+                          const actualArr = new Date(lpr.arrivedAt)
+                          const diffStartMin = Math.round(
+                            (actualArr.getTime() - plannedStart.getTime()) / (1000 * 60)
+                          )
+                          if (!Number.isNaN(diffStartMin) && diffStartMin !== 0) {
+                            const formattedStart = formatDelay(diffStartMin)
+                            const actualArrLabel = formatDateFn(actualArr, "dd MMM yyyy, HH:mm", { locale: ro })
+                            if (diffStartMin < 0) {
+                              entryLabel = `Intrat mai devreme cu ${formattedStart} (LPR: ${actualArrLabel})`
+                              entryClass = "text-xs text-blue-700"
+                            } else {
+                              entryLabel = `Întârziat la intrare cu ${formattedStart} (LPR: ${actualArrLabel})`
+                              entryClass = "text-xs text-red-700 font-semibold"
+                            }
+                          }
+                        }
+
+                        // Diferență la IEȘIRE (față de ora programată)
                         if (booking.endDate && booking.endTime && lpr.departedAt) {
                           const planned = new Date(`${booking.endDate}T${booking.endTime}:00`)
                           const actual = new Date(lpr.departedAt)
                           const diffMin = Math.round((actual.getTime() - planned.getTime()) / (1000 * 60))
                           if (!Number.isNaN(diffMin) && diffMin !== 0) {
                             const formatted = formatDelay(diffMin)
+                            const actualLabel = formatDateFn(actual, "dd MMM yyyy, HH:mm", { locale: ro })
                             if (diffMin < 0) {
-                              earlyLateLabel = `Ieșit mai devreme cu ${formatted}`
+                              earlyLateLabel = `Ieșit mai devreme cu ${formatted} (LPR: ${actualLabel})`
                               earlyLateClass = "text-xs text-blue-700"
                             } else {
-                              earlyLateLabel = `Întârziat la ieșire cu ${formatted}`
+                              earlyLateLabel = `Întârziat la ieșire cu ${formatted} (LPR: ${actualLabel})`
                               earlyLateClass = "text-xs text-red-700 font-semibold"
                             }
                           }
                         }
+
+                        ;(booking as any)._entryLprLabel = entryLabel
+                        ;(booking as any)._entryLprClass = entryClass
                         ;(booking as any)._earlyLateLabel = earlyLateLabel
                         ;(booking as any)._earlyLateClass = earlyLateClass
                         return null
@@ -1359,6 +1387,11 @@ function BookingsPageContent() {
                               </>
                             ) : (
                               <span className="text-xs text-gray-400">Perioadă nesetată (LPR / manuală)</span>
+                            )}
+                            {(booking as any)._entryLprLabel && (
+                              <span className={(booking as any)._entryLprClass}>
+                                {(booking as any)._entryLprLabel}
+                              </span>
                             )}
                             {(booking as any)._earlyLateLabel && (
                               <span className={(booking as any)._earlyLateClass}>
@@ -1672,6 +1705,39 @@ function BookingsPageContent() {
                         }`
                       : "Nesetată"}
                   </p>
+                  {(() => {
+                    const lpr: any = (selectedBooking as any).lpr || {}
+                    if (selectedBooking.startDate && selectedBooking.startTime && lpr.arrivedAt) {
+                      const plannedStart = new Date(`${selectedBooking.startDate}T${selectedBooking.startTime}:00`)
+                      const actualArr = new Date(lpr.arrivedAt)
+                      const diffMin = Math.round((actualArr.getTime() - plannedStart.getTime()) / (1000 * 60))
+                      if (!Number.isNaN(diffMin) && diffMin !== 0) {
+                        if (diffMin < 0) {
+                          return (
+                            <p className="text-xs text-blue-700">
+                              <strong>Intrare LPR:</strong> {actualArr.toLocaleString("ro-RO")} (intrat mai devreme cu{" "}
+                              {formatDelay(diffMin)})
+                            </p>
+                          )
+                        }
+                        return (
+                          <p className="text-xs text-red-700">
+                            <strong>Intrare LPR:</strong> {actualArr.toLocaleString("ro-RO")} (întârziat la intrare cu{" "}
+                            {formatDelay(diffMin)})
+                          </p>
+                        )
+                      }
+                    }
+                    if (lpr.arrivedAt) {
+                      const actualArr = new Date(lpr.arrivedAt)
+                      return (
+                        <p className="text-xs text-gray-600">
+                          <strong>Intrare LPR:</strong> {actualArr.toLocaleString("ro-RO")}
+                        </p>
+                      )
+                    }
+                    return null
+                  })()}
                   {(() => {
                     const lpr: any = (selectedBooking as any).lpr || {}
                         if (selectedBooking.endDate && selectedBooking.endTime && lpr.departedAt) {
