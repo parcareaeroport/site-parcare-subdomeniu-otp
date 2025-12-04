@@ -1201,8 +1201,16 @@ function BookingsPageContent() {
                       <TableCell>{booking.licensePlate}</TableCell>
                       <TableCell>{booking.clientName || "N/A"}</TableCell>
                       <TableCell>
-                        {formatDateFn(parseISO(booking.startDate), "dd MMM", { locale: ro })} {booking.startTime} -{" "}
-                        {formatDateFn(parseISO(booking.endDate), "dd MMM", { locale: ro })} {booking.endTime}
+                        {booking.startDate && booking.endDate ? (
+                          <>
+                            {formatDateFn(parseISO(booking.startDate), "dd MMM", { locale: ro })}{" "}
+                            {booking.startTime || "--:--"} -{" "}
+                            {formatDateFn(parseISO(booking.endDate), "dd MMM", { locale: ro })}{" "}
+                            {booking.endTime || "--:--"}
+                          </>
+                        ) : (
+                          <span className="text-xs text-gray-400">Perioadă nesetată (LPR / manuală)</span>
+                        )}
                       </TableCell>
                       <TableCell>{getStatusBadge(booking.status)}</TableCell>
                       <TableCell>{renderPaymentStatusCell(booking)}</TableCell>
@@ -1342,13 +1350,19 @@ function BookingsPageContent() {
                   </p>
                   <p>
                     <strong>Data Intrare:</strong>{" "}
-                    {formatDateFn(parseISO(selectedBooking.startDate), "dd MMM yyyy", { locale: ro })}, Ora:{" "}
-                    {selectedBooking.startTime}
+                    {selectedBooking.startDate
+                      ? `${formatDateFn(parseISO(selectedBooking.startDate), "dd MMM yyyy", { locale: ro })}, Ora: ${
+                          selectedBooking.startTime || "--:--"
+                        }`
+                      : "Nesetată"}
                   </p>
                   <p>
                     <strong>Data Ieșire:</strong>{" "}
-                    {formatDateFn(parseISO(selectedBooking.endDate), "dd MMM yyyy", { locale: ro })}, Ora:{" "}
-                    {selectedBooking.endTime}
+                    {selectedBooking.endDate
+                      ? `${formatDateFn(parseISO(selectedBooking.endDate), "dd MMM yyyy", { locale: ro })}, Ora: ${
+                          selectedBooking.endTime || "--:--"
+                        }`
+                      : "Nesetată"}
                   </p>
                   <p>
                     <strong>Creată la:</strong>{" "}
