@@ -32,7 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Calendar } from "@/components/ui/calendar" // Shadcn Calendar
 import { format as formatDateFn, parseISO } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
@@ -142,6 +142,7 @@ function BookingsPageContent() {
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
   const [unmatchedEntries, setUnmatchedEntries] = useState<UnmatchedLprEntry[]>([])
   const [isLoadingUnmatched, setIsLoadingUnmatched] = useState(true)
+  const [viewMode, setViewMode] = useState<"bookings" | "unmatched">("bookings")
   
   // State pentru actualizarea statusului de plată manual
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -1134,28 +1135,75 @@ function BookingsPageContent() {
 
       <Tabs defaultValue="all" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="all" onClick={() => setStatusFilter("all")}>
+          <TabsTrigger
+            value="all"
+            onClick={() => {
+              setViewMode("bookings")
+              setStatusFilter("all")
+            }}
+          >
             Toate
           </TabsTrigger>
-          <TabsTrigger value="confirmed_paid" onClick={() => setStatusFilter("confirmed_paid")}>
+          <TabsTrigger
+            value="confirmed_paid"
+            onClick={() => {
+              setViewMode("bookings")
+              setStatusFilter("confirmed_paid")
+            }}
+          >
             Confirmate (Plătit)
           </TabsTrigger>
-          <TabsTrigger value="confirmed_test" onClick={() => setStatusFilter("confirmed_test")}>
+          <TabsTrigger
+            value="confirmed_test"
+            onClick={() => {
+              setViewMode("bookings")
+              setStatusFilter("confirmed_test")
+            }}
+          >
             Confirmate (Test)
           </TabsTrigger>
-          <TabsTrigger value="manual" onClick={() => setStatusFilter("manual")}>
+          <TabsTrigger
+            value="manual"
+            onClick={() => {
+              setViewMode("bookings")
+              setStatusFilter("manual")
+            }}
+          >
                             <span className="text-orange-700">Manual</span>
           </TabsTrigger>
-          <TabsTrigger value="pay_on_site" onClick={() => setStatusFilter("pay_on_site")}>
+          <TabsTrigger
+            value="pay_on_site"
+            onClick={() => {
+              setViewMode("bookings")
+              setStatusFilter("pay_on_site")
+            }}
+          >
             <span className="text-orange-700">Plată la parcare</span>
           </TabsTrigger>
-          <TabsTrigger value="cancelled_by_admin" onClick={() => setStatusFilter("cancelled_by_admin")}>
+          <TabsTrigger
+            value="cancelled_by_admin"
+            onClick={() => {
+              setViewMode("bookings")
+              setStatusFilter("cancelled_by_admin")
+            }}
+          >
             Anulate
           </TabsTrigger>
-          <TabsTrigger value="expired" onClick={() => setStatusFilter("expired")}>
+          <TabsTrigger
+            value="expired"
+            onClick={() => {
+              setViewMode("bookings")
+              setStatusFilter("expired")
+            }}
+          >
             Expirate
           </TabsTrigger>
-          <TabsTrigger value="unmatched_lpr">
+          <TabsTrigger
+            value="unmatched_lpr"
+            onClick={() => {
+              setViewMode("unmatched")
+            }}
+          >
             <span className="text-purple-700">Fără rezervare (LPR)</span>
           </TabsTrigger>
         </TabsList>
@@ -1199,185 +1247,191 @@ function BookingsPageContent() {
           </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Lista Rezervărilor</CardTitle>
-            <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Nr. API</TableHead>
-                  <TableHead>Nr. Înmatriculare</TableHead>
-                  <TableHead>Client</TableHead>
-                  <TableHead>Perioada</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Plată</TableHead>
-                  <TableHead>T&C</TableHead>
-                  <TableHead>Creată la</TableHead>
-                  <TableHead className="text-right">Acțiuni</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredBookings.length === 0 ? (
+        {viewMode === "bookings" && (
+          <Card>
+            <CardHeader>
+              <CardTitle>Lista Rezervărilor</CardTitle>
+              <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-gray-500">
-                      Nu s-au găsit rezervări.
-                    </TableCell>
+                    <TableHead>Nr. API</TableHead>
+                    <TableHead>Nr. Înmatriculare</TableHead>
+                    <TableHead>Client</TableHead>
+                    <TableHead>Perioada</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Plată</TableHead>
+                    <TableHead>T&C</TableHead>
+                    <TableHead>Creată la</TableHead>
+                    <TableHead className="text-right">Acțiuni</TableHead>
                   </TableRow>
-                ) : (
-                  filteredBookings.map((booking) => (
-                    <TableRow 
-                      key={booking.id}
-                      className={
-                        booking.source === "manual" 
-                          ? "bg-orange-50 hover:bg-orange-100 border-l-4 border-l-orange-400" 
-                          : booking.source === "pay_on_site"
-                          ? "bg-orange-100 hover:bg-orange-200 border-l-4 border-l-orange-500"
-                          : ""
-                      }
-                    >
-                      <TableCell className="font-medium">
-                        {booking.source === "manual" && (
-                          <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 mr-2 text-xs">
-                            MANUAL
-                          </Badge>
-                        )}
-                        {booking.source === "pay_on_site" && (
-                          <Badge variant="outline" className="text-orange-800 border-orange-500 bg-orange-200 mr-2 text-xs">
-                            PLATĂ LA PARCARE
-                          </Badge>
-                        )}
-                        {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}
-                        {booking.source !== "pay_on_site" && (booking.apiBookingNumber || booking.id.substring(0, 6))}
-                      </TableCell>
-                      <TableCell>{booking.licensePlate}</TableCell>
-                      <TableCell>{booking.clientName || "N/A"}</TableCell>
-                      <TableCell>
-                        {booking.startDate && booking.endDate ? (
-                          <>
-                            {formatDateFn(parseISO(booking.startDate), "dd MMM", { locale: ro })}{" "}
-                            {booking.startTime || "--:--"} -{" "}
-                            {formatDateFn(parseISO(booking.endDate), "dd MMM", { locale: ro })}{" "}
-                            {booking.endTime || "--:--"}
-                          </>
-                        ) : (
-                          <span className="text-xs text-gray-400">Perioadă nesetată (LPR / manuală)</span>
-                        )}
-                      </TableCell>
-                      <TableCell>{getStatusBadge(booking.status)}</TableCell>
-                      <TableCell>{renderPaymentStatusCell(booking)}</TableCell>
-                      <TableCell className="text-center">
-                        {booking.termsAccepted ? (
-                          <span className="text-green-600" title="Termeni acceptați">✅</span>
-                        ) : (
-                          <span className="text-red-600" title="Termeni nu au fost acceptați">❌</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {booking.createdAt
-                          ? formatDateFn(booking.createdAt.toDate(), "dd MMM yyyy, HH:mm", { locale: ro })
-                          : "N/A"}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem 
-                              onClick={() => handleViewBooking(booking)}
-                              className="hover:text-white focus:text-white"
-                            >
-                              <Eye className="mr-2 h-4 w-4" /> Vizualizează
-                            </DropdownMenuItem>
-                            
-                            {/* Buton pentru trimiterea email-ului cu QR code */}
-                            {booking.clientEmail && (booking.apiBookingNumber || booking.source === "pay_on_site") && (
-                              <DropdownMenuItem
-                                onClick={() => handleSendEmail(booking)}
-                                disabled={isSendingEmail}
-                                className="text-blue-600 focus:text-white focus:bg-blue-600 hover:text-white hover:bg-blue-600"
-                              >
-                                {isSendingEmail && sendingEmailBookingId === booking.id ? (
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Mail className="mr-2 h-4 w-4" />
-                                )}
-                                {booking.source === "pay_on_site" ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
-                              </DropdownMenuItem>
-                            )}
-                            {booking.status === "api_error" && booking.paymentStatus === "paid" && (
-                              <>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  onClick={() => handleRecoverBooking(booking)}
-                                  className="text-blue-600 focus:text-white focus:bg-blue-600 hover:text-white hover:bg-blue-600"
-                                  disabled={isRecovering}
-                                >
-                                  {isRecovering && selectedBooking?.id === booking.id ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  ) : null}
-                                  Recuperează Rezervarea
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                            
-                            {isAdmin &&
-                              booking.status !== "cancelled_by_admin" &&
-                              booking.status !== "cancelled_by_api" &&
-                              booking.apiBookingNumber &&
-                              booking.source !== "pay_on_site" && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => handleCancelBooking(booking)}
-                                    disabled={isCancelling}
-                                    className="text-red-600 hover:text-white hover:bg-red-600 focus:text-white focus:bg-red-600"
-                                  >
-                                    {isCancelling && selectedBooking?.id === booking.id ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : null}
-                                    Anulează (API)
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                            
-                            {/* Buton anulare pentru rezervările pay-on-site */}
-                            {isAdmin &&
-                              booking.source === "pay_on_site" &&
-                              booking.status !== "cancelled_by_admin" &&
-                              booking.status !== "cancelled_by_api" && (
-                                <>
-                                  <DropdownMenuSeparator />
-                                  <DropdownMenuItem
-                                    onClick={() => handleCancelPayOnSiteBooking(booking)}
-                                    disabled={isCancellingPayOnSite}
-                                    className="text-red-600 hover:text-white hover:bg-red-600 focus:text-white focus:bg-red-600"
-                                  >
-                                    {isCancellingPayOnSite && cancellingPayOnSiteBookingId === booking.id ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : null}
-                                    Anulează (Local)
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                </TableHeader>
+                <TableBody>
+                  {filteredBookings.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={9} className="text-center py-8 text-gray-500">
+                        Nu s-au găsit rezervări.
                       </TableCell>
                     </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+                  ) : (
+                    filteredBookings.map((booking) => (
+                      <TableRow
+                        key={booking.id}
+                        className={
+                          booking.source === "manual"
+                            ? "bg-orange-50 hover:bg-orange-100 border-l-4 border-l-orange-400"
+                            : booking.source === "pay_on_site"
+                            ? "bg-orange-100 hover:bg-orange-200 border-l-4 border-l-orange-500"
+                            : ""
+                        }
+                      >
+                        <TableCell className="font-medium">
+                          {booking.source === "manual" && (
+                            <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 mr-2 text-xs">
+                              MANUAL
+                            </Badge>
+                          )}
+                          {booking.source === "pay_on_site" && (
+                            <Badge variant="outline" className="text-orange-800 border-orange-500 bg-orange-200 mr-2 text-xs">
+                              PLATĂ LA PARCARE
+                            </Badge>
+                          )}
+                          {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}
+                          {booking.source !== "pay_on_site" && (booking.apiBookingNumber || booking.id.substring(0, 6))}
+                        </TableCell>
+                        <TableCell>{booking.licensePlate}</TableCell>
+                        <TableCell>{booking.clientName || "N/A"}</TableCell>
+                        <TableCell>
+                          {booking.startDate && booking.endDate ? (
+                            <>
+                              {formatDateFn(parseISO(booking.startDate), "dd MMM", { locale: ro })}{" "}
+                              {booking.startTime || "--:--"} -{" "}
+                              {formatDateFn(parseISO(booking.endDate), "dd MMM", { locale: ro })}{" "}
+                              {booking.endTime || "--:--"}
+                            </>
+                          ) : (
+                            <span className="text-xs text-gray-400">Perioadă nesetată (LPR / manuală)</span>
+                          )}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(booking.status)}</TableCell>
+                        <TableCell>{renderPaymentStatusCell(booking)}</TableCell>
+                        <TableCell className="text-center">
+                          {booking.termsAccepted ? (
+                            <span className="text-green-600" title="Termeni acceptați">
+                              ✅
+                            </span>
+                          ) : (
+                            <span className="text-red-600" title="Termeni nu au fost acceptați">
+                              ❌
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {booking.createdAt
+                            ? formatDateFn(booking.createdAt.toDate(), "dd MMM yyyy, HH:mm", { locale: ro })
+                            : "N/A"}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => handleViewBooking(booking)}
+                                className="hover:text-white focus:text-white"
+                              >
+                                <Eye className="mr-2 h-4 w-4" /> Vizualizează
+                              </DropdownMenuItem>
 
-        {/* TAB pentru mașinile detectate de LPR fără rezervare */}
-        <TabsContent value="unmatched_lpr">
+                              {/* Buton pentru trimiterea email-ului cu QR code */}
+                              {booking.clientEmail && (booking.apiBookingNumber || booking.source === "pay_on_site") && (
+                                <DropdownMenuItem
+                                  onClick={() => handleSendEmail(booking)}
+                                  disabled={isSendingEmail}
+                                  className="text-blue-600 focus:text-white focus:bg-blue-600 hover:text-white hover:bg-blue-600"
+                                >
+                                  {isSendingEmail && sendingEmailBookingId === booking.id ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Mail className="mr-2 h-4 w-4" />
+                                  )}
+                                  {booking.source === "pay_on_site" ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
+                                </DropdownMenuItem>
+                              )}
+                              {booking.status === "api_error" && booking.paymentStatus === "paid" && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleRecoverBooking(booking)}
+                                    className="text-blue-600 focus:text-white focus:bg-blue-600 hover:text-white hover:bg-blue-600"
+                                    disabled={isRecovering}
+                                  >
+                                    {isRecovering && selectedBooking?.id === booking.id ? (
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : null}
+                                    Recuperează Rezervarea
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+
+                              {isAdmin &&
+                                booking.status !== "cancelled_by_admin" &&
+                                booking.status !== "cancelled_by_api" &&
+                                booking.apiBookingNumber &&
+                                booking.source !== "pay_on_site" && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      onClick={() => handleCancelBooking(booking)}
+                                      disabled={isCancelling}
+                                      className="text-red-600 hover:text-white hover:bg-red-600 focus:text-white focus:bg-red-600"
+                                    >
+                                      {isCancelling && selectedBooking?.id === booking.id ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      ) : null}
+                                      Anulează (API)
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
+
+                              {/* Buton anulare pentru rezervările pay-on-site */}
+                              {isAdmin &&
+                                booking.source === "pay_on_site" &&
+                                booking.status !== "cancelled_by_admin" &&
+                                booking.status !== "cancelled_by_api" && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      onClick={() => handleCancelPayOnSiteBooking(booking)}
+                                      disabled={isCancellingPayOnSite}
+                                      className="text-red-600 hover:text-white hover:bg-red-600 focus:text-white focus:bg-red-600"
+                                    >
+                                      {isCancellingPayOnSite && cancellingPayOnSiteBookingId === booking.id ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      ) : null}
+                                      Anulează (Local)
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Secțiune pentru mașinile detectate de LPR fără rezervare */}
+        {viewMode === "unmatched" && (
           <Card>
             <CardHeader>
               <CardTitle>Mașini fără rezervare (LPR)</CardTitle>
@@ -1431,7 +1485,7 @@ function BookingsPageContent() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
+        )}
       </Tabs>
 
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
