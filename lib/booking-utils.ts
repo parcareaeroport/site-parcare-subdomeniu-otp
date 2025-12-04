@@ -210,17 +210,6 @@ export async function checkAvailability(
     let delayedCount = 0
     let unmatchedInsideCount = 0
     try {
-      const allInsideQuery = import('firebase/firestore').then(f => f.query(
-        f.collection(db, 'bookings'),
-        f.where('lpr.isInside', '==', true)
-      ))
-      const insideSnap = await (await allInsideQuery).withConverter(undefined as any) // keep as raw
-        .let // dummy to satisfy TS in patch block
-    } catch (e) {
-      // Ignore if Firestore composite index is missing; availability still works
-      console.warn('ℹ️ Nu s-a putut calcula delayed/unmatched (lpr.isInside). Continuăm fără ajustare.', e)
-    }
-    try {
       // Workaround: fetch candidates broadly by status and filter in memory
       const candidatesRef = collection(db, 'bookings')
       const candidatesQuery = query(
