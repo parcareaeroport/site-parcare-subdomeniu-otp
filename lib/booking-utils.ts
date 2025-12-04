@@ -206,7 +206,7 @@ export async function checkAvailability(
       console.warn('🔄 Folosesc limita default de 100 locuri')
     }
     
-    // Ajustează locurile disponibile cu mașinile întârziate (și unmatched prezente) până ies efectiv
+    // Ajustează locurile disponibile cu mașinile întârziate (și mașinile fără rezervare) până ies efectiv
     let delayedCount = 0
     let unmatchedInsideCount = 0
     try {
@@ -214,17 +214,13 @@ export async function checkAvailability(
       const candidatesRef = collection(db, 'bookings')
       const candidatesQuery = query(
         candidatesRef,
-        where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site', 'unmatched_lpr'])
+        where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site'])
       )
       const candidatesSnap = await getDocs(candidatesQuery)
       const nowTs = Date.now()
       candidatesSnap.forEach(docSnap => {
         const b: any = docSnap.data()
         if (b?.lpr?.isInside === true) {
-          if (b.status === 'unmatched_lpr') {
-            unmatchedInsideCount++
-            return
-          }
           if (b.endDate && b.endTime) {
             const endTs = new Date(`${b.endDate}T${b.endTime}:00`).getTime()
             if (!Number.isNaN(endTs) && endTs < nowTs) {
@@ -233,9 +229,18 @@ export async function checkAvailability(
           }
         }
       })
+    } catch (e) {
+      console.warn('ℹ️ Fallback: nu s-a putut încărca lista completă pentru delayed (booking-uri)', e)
+    }
+    try {
+      // Mașini fără rezervare, dar prezente în parcare (lpr_unmatched)
+      const unmatchedRef = collection(db, 'lpr_unmatched')
+      const unmatchedQuery = query(unmatchedRef, where('isInside', '==', true))
+      const unmatchedSnap = await getDocs(unmatchedQuery)
+      unmatchedInsideCount = unmatchedSnap.size
       console.log('🚗 Ajustare locuri (LPR):', { delayedCount, unmatchedInsideCount })
     } catch (e) {
-      console.warn('ℹ️ Fallback: nu s-a putut încărca lista completă pentru ajustare LPR', e)
+      console.warn('ℹ️ Fallback: nu s-a putut încărca lista completă pentru lpr_unmatched', e)
     }
     
     const bookingsRef = collection(db, 'bookings')

@@ -114,6 +114,16 @@ interface Booking {
   payOnSiteStatus?: "pending" | "paid" | "cancelled" // Adaugă status special pentru pay-on-site
 }
 
+interface UnmatchedLprEntry {
+  id: string
+  licensePlate: string
+  laneNo?: number | null
+  isInside: boolean
+  arrivedAt?: string
+  lastSeenAt?: string
+  lastSeenDeviceId?: string
+}
+
 function BookingsPageContent() {
   const { toast } = useToast()
   const { user, loading: authLoading, isAdmin } = useAuth()
@@ -130,6 +140,8 @@ function BookingsPageContent() {
   const [isCleaningUp, setIsCleaningUp] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
+  const [unmatchedEntries, setUnmatchedEntries] = useState<UnmatchedLprEntry[]>([])
+  const [isLoadingUnmatched, setIsLoadingUnmatched] = useState(true)
   
   // State pentru actualizarea statusului de plată manual
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -216,11 +228,50 @@ function BookingsPageContent() {
     }
   }
 
+  const fetchUnmatchedLpr = async () => {
+    setIsLoadingUnmatched(true)
+    try {
+      const colRef = collection(db, "lpr_unmatched")
+      const data = await getDocs(colRef)
+      const items: UnmatchedLprEntry[] = data.docs.map((docSnap) => {
+        const d: any = docSnap.data()
+        return {
+          id: docSnap.id,
+          licensePlate: d.licensePlate || "N/A",
+          laneNo: d.laneNo ?? null,
+          isInside: d.isInside === true,
+          arrivedAt: d.arrivedAt,
+          lastSeenAt: d.lastSeenAt,
+          lastSeenDeviceId: d.lastSeenDeviceId,
+        }
+      })
+      // sort: inside first, then by arrivedAt
+      items.sort((a, b) => {
+        if (a.isInside !== b.isInside) return a.isInside ? -1 : 1
+        const atA = a.arrivedAt ? new Date(a.arrivedAt).getTime() : 0
+        const atB = b.arrivedAt ? new Date(b.arrivedAt).getTime() : 0
+        return atA - atB
+      })
+      setUnmatchedEntries(items)
+    } catch (error) {
+      console.error("Error fetching unmatched LPR entries:", error)
+      toast({
+        title: "Eroare",
+        description: "Nu s-au putut încărca intrările LPR fără rezervare.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoadingUnmatched(false)
+    }
+  }
+
   useEffect(() => {
     if (!authLoading && user) {
       fetchBookings()
+      fetchUnmatchedLpr()
     } else if (!authLoading && !user) {
       setIsLoading(false)
+      setIsLoadingUnmatched(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading])
@@ -1104,6 +1155,9 @@ function BookingsPageContent() {
           <TabsTrigger value="expired" onClick={() => setStatusFilter("expired")}>
             Expirate
           </TabsTrigger>
+          <TabsTrigger value="unmatched_lpr">
+            <span className="text-purple-700">Fără rezervare (LPR)</span>
+          </TabsTrigger>
         </TabsList>
 
         <div className="flex flex-col sm:flex-row gap-4 items-center">
@@ -1321,6 +1375,63 @@ function BookingsPageContent() {
             </Table>
           </CardContent>
         </Card>
+
+        {/* TAB pentru mașinile detectate de LPR fără rezervare */}
+        <TabsContent value="unmatched_lpr">
+          <Card>
+            <CardHeader>
+              <CardTitle>Mașini fără rezervare (LPR)</CardTitle>
+              <CardDescription>
+                Evidență separată a numerelor de înmatriculare detectate de camere, dar fără rezervare asociată.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isLoadingUnmatched ? (
+                <div className="flex justify-center items-center h-32">
+                  <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                  <span>Se încarcă datele LPR...</span>
+                </div>
+              ) : unmatchedEntries.length === 0 ? (
+                <div className="text-center text-sm text-gray-500 py-6">
+                  Nu există înregistrări LPR fără rezervare activă.
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Nr. Înmatriculare</TableHead>
+                      <TableHead>Bandă / Lană</TableHead>
+                      <TableHead>Stare</TableHead>
+                      <TableHead>Prima intrare</TableHead>
+                      <TableHead>Ultima detecție</TableHead>
+                      <TableHead>Ultimul dispozitiv</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {unmatchedEntries.map((e) => (
+                      <TableRow key={e.id}>
+                        <TableCell className="font-medium">{e.licensePlate}</TableCell>
+                        <TableCell>{e.laneNo ?? "-"}</TableCell>
+                        <TableCell>
+                          <Badge className={e.isInside ? "bg-green-500 text-white" : "bg-gray-400 text-white"}>
+                            {e.isInside ? "ÎN PARCARE" : "IEȘIT"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {e.arrivedAt ? new Date(e.arrivedAt).toLocaleString("ro-RO") : "-"}
+                        </TableCell>
+                        <TableCell>
+                          {e.lastSeenAt ? new Date(e.lastSeenAt).toLocaleString("ro-RO") : "-"}
+                        </TableCell>
+                        <TableCell>{e.lastSeenDeviceId || "-"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
       </Tabs>
 
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
