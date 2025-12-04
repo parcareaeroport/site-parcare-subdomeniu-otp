@@ -114,16 +114,6 @@ interface Booking {
   payOnSiteStatus?: "pending" | "paid" | "cancelled" // Adaugă status special pentru pay-on-site
 }
 
-interface UnmatchedLprEntry {
-  id: string
-  licensePlate: string
-  laneNo?: number | null
-  isInside: boolean
-  arrivedAt?: string
-  lastSeenAt?: string
-  lastSeenDeviceId?: string
-}
-
 function BookingsPageContent() {
   const { toast } = useToast()
   const { user, loading: authLoading, isAdmin } = useAuth()
@@ -140,9 +130,6 @@ function BookingsPageContent() {
   const [isCleaningUp, setIsCleaningUp] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
-  const [unmatchedEntries, setUnmatchedEntries] = useState<UnmatchedLprEntry[]>([])
-  const [isLoadingUnmatched, setIsLoadingUnmatched] = useState(true)
-  const [viewMode, setViewMode] = useState<"bookings" | "unmatched">("bookings")
   
   // State pentru actualizarea statusului de plată manual
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -205,6 +192,15 @@ function BookingsPageContent() {
     originalError?: string
   } | null>(null)
 
+  // State pentru completarea rezervărilor unmatched_lpr din LPR
+  const [isLprCompleteDialogOpen, setIsLprCompleteDialogOpen] = useState(false)
+  const [lprBookingToComplete, setLprBookingToComplete] = useState<Booking | null>(null)
+  const [lprExitDate, setLprExitDate] = useState<Date | undefined>(new Date())
+  const [lprExitTime, setLprExitTime] = useState("12:00")
+  const [lprClientName, setLprClientName] = useState("")
+  const [lprClientPhone, setLprClientPhone] = useState("")
+  const [lprPersons, setLprPersons] = useState("1")
+
   const fetchBookings = async () => {
     setIsLoading(true)
     try {
@@ -212,12 +208,41 @@ function BookingsPageContent() {
       // TODO: Adaugă filtre mai complexe dacă e nevoie (ex: query by date range)
       const q = query(bookingsCollectionRef, orderBy("createdAt", "desc"))
       const data = await getDocs(q)
-      const fetchedBookings: Booking[] = data.docs.map(
-        (doc) =>
-          ({
-            id: doc.id,
-            ...doc.data(),
-          }) as Booking,
+      const now = new Date()
+      const nowTs = now.getTime()
+      const fetchedBookings: Booking[] = await Promise.all(
+        data.docs.map(async (docSnap) => {
+          const raw: any = { id: docSnap.id, ...docSnap.data() }
+
+          // Calculează și marchează întârzierea pentru pay_on_site (>3h după end)
+          try {
+            const isPayOnSite = raw.source === "pay_on_site" || raw.status === "confirmed_pay_on_site"
+            if (isPayOnSite && raw.endDate && raw.endTime && !raw.payOnSiteOverdueLocked) {
+              const plannedEnd = new Date(`${raw.endDate}T${raw.endTime}:00`)
+              const diffMinutes = Math.floor((nowTs - plannedEnd.getTime()) / (1000 * 60))
+              const overdueMoreThan3h = diffMinutes > 180
+              raw.payOnSiteOverdueMinutes = diffMinutes
+              raw.payOnSiteOverdueMoreThan3h = overdueMoreThan3h
+
+              // Persistăm în Firestore doar dacă este clar întârziată
+              if (overdueMoreThan3h) {
+                try {
+                  await updateDoc(doc(db, "bookings", raw.id), {
+                    payOnSiteOverdueMinutes: diffMinutes,
+                    payOnSiteOverdueMoreThan3h: true,
+                    lastUpdated: serverTimestamp(),
+                  })
+                } catch (e) {
+                  console.error("Error updating pay_on_site overdue flag:", e)
+                }
+              }
+            }
+          } catch (e) {
+            console.error("Error computing overdue for pay_on_site booking:", e)
+          }
+
+          return raw as Booking
+        }),
       )
       setBookings(fetchedBookings)
       setFilteredBookings(fetchedBookings) // Inițial, afișează toate
@@ -229,50 +254,11 @@ function BookingsPageContent() {
     }
   }
 
-  const fetchUnmatchedLpr = async () => {
-    setIsLoadingUnmatched(true)
-    try {
-      const colRef = collection(db, "lpr_unmatched")
-      const data = await getDocs(colRef)
-      const items: UnmatchedLprEntry[] = data.docs.map((docSnap) => {
-        const d: any = docSnap.data()
-        return {
-          id: docSnap.id,
-          licensePlate: d.licensePlate || "N/A",
-          laneNo: d.laneNo ?? null,
-          isInside: d.isInside === true,
-          arrivedAt: d.arrivedAt,
-          lastSeenAt: d.lastSeenAt,
-          lastSeenDeviceId: d.lastSeenDeviceId,
-        }
-      })
-      // sort: inside first, then by arrivedAt
-      items.sort((a, b) => {
-        if (a.isInside !== b.isInside) return a.isInside ? -1 : 1
-        const atA = a.arrivedAt ? new Date(a.arrivedAt).getTime() : 0
-        const atB = b.arrivedAt ? new Date(b.arrivedAt).getTime() : 0
-        return atA - atB
-      })
-      setUnmatchedEntries(items)
-    } catch (error) {
-      console.error("Error fetching unmatched LPR entries:", error)
-      toast({
-        title: "Eroare",
-        description: "Nu s-au putut încărca intrările LPR fără rezervare.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsLoadingUnmatched(false)
-    }
-  }
-
   useEffect(() => {
     if (!authLoading && user) {
       fetchBookings()
-      fetchUnmatchedLpr()
     } else if (!authLoading && !user) {
       setIsLoading(false)
-      setIsLoadingUnmatched(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, authLoading])
@@ -306,6 +292,26 @@ function BookingsPageContent() {
     }
     setFilteredBookings(filtered)
   }, [bookings, searchTerm, statusFilter, dateFilter])
+
+  // Statistici rapide pentru bara de sus (în funcție de data selectată)
+  const statsBookings = (() => {
+    if (!dateFilter) return bookings
+    const filterDateStr = formatDateFn(dateFilter, "yyyy-MM-dd")
+    return bookings.filter(
+      (b) => b.startDate === filterDateStr || b.endDate === filterDateStr,
+    )
+  })()
+
+  const totalCount = statsBookings.length
+  const totalAmount = statsBookings.reduce((sum, b) => sum + (b.amount || 0), 0)
+  const onlinePaid = statsBookings.filter(
+    (b) => b.source !== "pay_on_site" && b.paymentStatus === "paid",
+  )
+  const onlinePaidCount = onlinePaid.length
+  const onlinePaidAmount = onlinePaid.reduce((s, b) => s + (b.amount || 0), 0)
+  const payOnSite = statsBookings.filter((b) => b.source === "pay_on_site")
+  const payOnSiteCount = payOnSite.length
+  const payOnSiteAmount = payOnSite.reduce((s, b) => s + (b.amount || 0), 0)
 
   const handleViewBooking = (booking: Booking) => {
     setSelectedBooking(booking)
@@ -1133,77 +1139,76 @@ function BookingsPageContent() {
         </div>
       </div>
 
+      {/* Bara de statistici rapide */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Total Rezervări</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{totalCount}</div>
+            <p className="text-xs text-muted-foreground">
+              Valoare totală:{" "}
+              <span className="font-semibold">
+                {totalAmount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+              </span>
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Achitate Online</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">{onlinePaidCount}</div>
+            <p className="text-xs text-muted-foreground">
+              Sumă:{" "}
+              <span className="font-semibold text-green-700">
+                {onlinePaidAmount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+              </span>
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Cu Plata la Parcare</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-600">{payOnSiteCount}</div>
+            <p className="text-xs text-muted-foreground">
+              Sumă:{" "}
+              <span className="font-semibold text-orange-700">
+                {payOnSiteAmount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+              </span>
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
       <Tabs defaultValue="all" className="space-y-4">
         <TabsList>
-          <TabsTrigger
-            value="all"
-            onClick={() => {
-              setViewMode("bookings")
-              setStatusFilter("all")
-            }}
-          >
+          <TabsTrigger value="all" onClick={() => setStatusFilter("all")}>
             Toate
           </TabsTrigger>
-          <TabsTrigger
-            value="confirmed_paid"
-            onClick={() => {
-              setViewMode("bookings")
-              setStatusFilter("confirmed_paid")
-            }}
-          >
+          <TabsTrigger value="confirmed_paid" onClick={() => setStatusFilter("confirmed_paid")}>
             Confirmate (Plătit)
           </TabsTrigger>
-          <TabsTrigger
-            value="confirmed_test"
-            onClick={() => {
-              setViewMode("bookings")
-              setStatusFilter("confirmed_test")
-            }}
-          >
+          <TabsTrigger value="confirmed_test" onClick={() => setStatusFilter("confirmed_test")}>
             Confirmate (Test)
           </TabsTrigger>
-          <TabsTrigger
-            value="manual"
-            onClick={() => {
-              setViewMode("bookings")
-              setStatusFilter("manual")
-            }}
-          >
+          <TabsTrigger value="manual" onClick={() => setStatusFilter("manual")}>
                             <span className="text-orange-700">Manual</span>
           </TabsTrigger>
-          <TabsTrigger
-            value="pay_on_site"
-            onClick={() => {
-              setViewMode("bookings")
-              setStatusFilter("pay_on_site")
-            }}
-          >
+          <TabsTrigger value="pay_on_site" onClick={() => setStatusFilter("pay_on_site")}>
             <span className="text-orange-700">Plată la parcare</span>
           </TabsTrigger>
-          <TabsTrigger
-            value="cancelled_by_admin"
-            onClick={() => {
-              setViewMode("bookings")
-              setStatusFilter("cancelled_by_admin")
-            }}
-          >
+          <TabsTrigger value="cancelled_by_admin" onClick={() => setStatusFilter("cancelled_by_admin")}>
             Anulate
           </TabsTrigger>
-          <TabsTrigger
-            value="expired"
-            onClick={() => {
-              setViewMode("bookings")
-              setStatusFilter("expired")
-            }}
-          >
+          <TabsTrigger value="expired" onClick={() => setStatusFilter("expired")}>
             Expirate
           </TabsTrigger>
-          <TabsTrigger
-            value="unmatched_lpr"
-            onClick={() => {
-              setViewMode("unmatched")
-            }}
-          >
+          <TabsTrigger value="unmatched_lpr" onClick={() => setStatusFilter("unmatched_lpr")}>
             <span className="text-purple-700">Fără rezervare (LPR)</span>
           </TabsTrigger>
         </TabsList>
@@ -1247,8 +1252,7 @@ function BookingsPageContent() {
           </div>
         </div>
 
-        {viewMode === "bookings" && (
-          <Card>
+        <Card>
             <CardHeader>
               <CardTitle>Lista Rezervărilor</CardTitle>
               <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
@@ -1294,8 +1298,15 @@ function BookingsPageContent() {
                             </Badge>
                           )}
                           {booking.source === "pay_on_site" && (
-                            <Badge variant="outline" className="text-orange-800 border-orange-500 bg-orange-200 mr-2 text-xs">
-                              PLATĂ LA PARCARE
+                            <Badge
+                              variant="outline"
+                              className={`mr-2 text-xs ${
+                                (booking as any).payOnSiteOverdueMoreThan3h
+                                  ? "text-red-800 border-red-500 bg-red-100"
+                                  : "text-orange-800 border-orange-500 bg-orange-200"
+                              }`}
+                            >
+                              { (booking as any).payOnSiteOverdueMoreThan3h ? "PLATĂ LA PARCARE (>3h)" : "PLATĂ LA PARCARE" }
                             </Badge>
                           )}
                           {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}
@@ -1363,6 +1374,29 @@ function BookingsPageContent() {
                                   {booking.source === "pay_on_site" ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
                                 </DropdownMenuItem>
                               )}
+
+                              {/* Completează din LPR pentru rezervările unmatched_lpr */}
+                              {booking.status === "unmatched_lpr" && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      setLprBookingToComplete(booking)
+                                      setLprExitDate(new Date())
+                                      setLprExitTime("12:00")
+                                      setLprClientName(booking.clientName || "")
+                                      setLprClientPhone(booking.clientPhone || "")
+                                      setLprPersons(
+                                        (booking.numberOfPersons || 1).toString(),
+                                      )
+                                      setIsLprCompleteDialogOpen(true)
+                                    }}
+                                    className="text-purple-700 hover:text-white hover:bg-purple-600 focus:text-white focus:bg-purple-600"
+                                  >
+                                    Completează din LPR
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                               {booking.status === "api_error" && booking.paymentStatus === "paid" && (
                                 <>
                                   <DropdownMenuSeparator />
@@ -1428,63 +1462,131 @@ function BookingsPageContent() {
               </Table>
             </CardContent>
           </Card>
-        )}
 
-        {/* Secțiune pentru mașinile detectate de LPR fără rezervare */}
-        {viewMode === "unmatched" && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Mașini fără rezervare (LPR)</CardTitle>
-              <CardDescription>
-                Evidență separată a numerelor de înmatriculare detectate de camere, dar fără rezervare asociată.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {isLoadingUnmatched ? (
-                <div className="flex justify-center items-center h-32">
-                  <Loader2 className="h-6 w-6 animate-spin mr-2" />
-                  <span>Se încarcă datele LPR...</span>
-                </div>
-              ) : unmatchedEntries.length === 0 ? (
-                <div className="text-center text-sm text-gray-500 py-6">
-                  Nu există înregistrări LPR fără rezervare activă.
-                </div>
-              ) : (
+        {/* Secțiunea Intrări/Ieșiri pentru data selectată */}
+        {dateFilter && (
+          <div className="grid gap-4 md:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Intrări pentru {formatDateFn(dateFilter, "dd.MM.yyyy")}</CardTitle>
+                <CardDescription>Rezervări care încep în această zi (programate vs. efective LPR).</CardDescription>
+              </CardHeader>
+              <CardContent>
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead>Ora programată</TableHead>
+                      <TableHead>Ora efectivă (LPR)</TableHead>
                       <TableHead>Nr. Înmatriculare</TableHead>
-                      <TableHead>Bandă / Lană</TableHead>
-                      <TableHead>Stare</TableHead>
-                      <TableHead>Prima intrare</TableHead>
-                      <TableHead>Ultima detecție</TableHead>
-                      <TableHead>Ultimul dispozitiv</TableHead>
+                      <TableHead>Tel</TableHead>
+                      <TableHead>Nr. Pers.</TableHead>
+                      <TableHead>Întârziere</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {unmatchedEntries.map((e) => (
-                      <TableRow key={e.id}>
-                        <TableCell className="font-medium">{e.licensePlate}</TableCell>
-                        <TableCell>{e.laneNo ?? "-"}</TableCell>
-                        <TableCell>
-                          <Badge className={e.isInside ? "bg-green-500 text-white" : "bg-gray-400 text-white"}>
-                            {e.isInside ? "ÎN PARCARE" : "IEȘIT"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {e.arrivedAt ? new Date(e.arrivedAt).toLocaleString("ro-RO") : "-"}
-                        </TableCell>
-                        <TableCell>
-                          {e.lastSeenAt ? new Date(e.lastSeenAt).toLocaleString("ro-RO") : "-"}
-                        </TableCell>
-                        <TableCell>{e.lastSeenDeviceId || "-"}</TableCell>
-                      </TableRow>
-                    ))}
+                    {(() => {
+                      const filterDateStr = formatDateFn(dateFilter, "yyyy-MM-dd")
+                      const rows = bookings.filter((b) => b.startDate === filterDateStr)
+                      if (rows.length === 0) {
+                        return (
+                          <TableRow>
+                            <TableCell colSpan={6} className="text-center py-4 text-sm text-gray-500">
+                              Nu există intrări pentru această dată.
+                            </TableCell>
+                          </TableRow>
+                        )
+                      }
+                      return rows.map((b) => {
+                        const lpr: any = (b as any).lpr || {}
+                        const scheduled = b.startDate && b.startTime ? new Date(`${b.startDate}T${b.startTime}:00`) : null
+                        const actual = lpr.arrivedAt ? new Date(lpr.arrivedAt) : null
+                        let delayMinutes: number | null = null
+                        if (scheduled && actual) {
+                          delayMinutes = Math.floor((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+                        }
+                        return (
+                          <TableRow key={b.id}>
+                            <TableCell>{b.startTime || "--:--"}</TableCell>
+                            <TableCell>{actual ? actual.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" }) : "-"}</TableCell>
+                            <TableCell>{b.licensePlate}</TableCell>
+                            <TableCell>{b.clientPhone || "-"}</TableCell>
+                            <TableCell>{b.numberOfPersons || "-"}</TableCell>
+                            <TableCell className={delayMinutes && delayMinutes > 0 ? "text-red-600 font-semibold" : ""}>
+                              {delayMinutes === null
+                                ? "-"
+                                : delayMinutes <= 0
+                                ? "La timp"
+                                : `${delayMinutes} min`}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    })()}
                   </TableBody>
                 </Table>
-              )}
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Ieșiri pentru {formatDateFn(dateFilter, "dd.MM.yyyy")}</CardTitle>
+                <CardDescription>Rezervări care se termină în această zi (programate vs. efective LPR).</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Ora programată</TableHead>
+                      <TableHead>Ora efectivă (LPR)</TableHead>
+                      <TableHead>Nr. Înmatriculare</TableHead>
+                      <TableHead>Tel</TableHead>
+                      <TableHead>Nr. Pers.</TableHead>
+                      <TableHead>Întârziere</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(() => {
+                      const filterDateStr = formatDateFn(dateFilter, "yyyy-MM-dd")
+                      const rows = bookings.filter((b) => b.endDate === filterDateStr)
+                      if (rows.length === 0) {
+                        return (
+                          <TableRow>
+                            <TableCell colSpan={6} className="text-center py-4 text-sm text-gray-500">
+                              Nu există ieșiri pentru această dată.
+                            </TableCell>
+                          </TableRow>
+                        )
+                      }
+                      return rows.map((b) => {
+                        const lpr: any = (b as any).lpr || {}
+                        const scheduled = b.endDate && b.endTime ? new Date(`${b.endDate}T${b.endTime}:00`) : null
+                        const actual = lpr.departedAt ? new Date(lpr.departedAt) : null
+                        let delayMinutes: number | null = null
+                        if (scheduled && actual) {
+                          delayMinutes = Math.floor((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+                        }
+                        return (
+                          <TableRow key={b.id}>
+                            <TableCell>{b.endTime || "--:--"}</TableCell>
+                            <TableCell>{actual ? actual.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" }) : "-"}</TableCell>
+                            <TableCell>{b.licensePlate}</TableCell>
+                            <TableCell>{b.clientPhone || "-"}</TableCell>
+                            <TableCell>{b.numberOfPersons || "-"}</TableCell>
+                            <TableCell className={delayMinutes && delayMinutes > 0 ? "text-red-600 font-semibold" : ""}>
+                              {delayMinutes === null
+                                ? "-"
+                                : delayMinutes <= 0
+                                ? "La timp"
+                                : `${delayMinutes} min`}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    })()}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </div>
         )}
       </Tabs>
 
@@ -1769,6 +1871,177 @@ function BookingsPageContent() {
               Închide
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog pentru completarea rezervărilor unmatched_lpr din LPR */}
+      <Dialog
+        open={isLprCompleteDialogOpen}
+        onOpenChange={(open) => {
+          setIsLprCompleteDialogOpen(open)
+          if (!open) {
+            setLprBookingToComplete(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Completează rezervare din LPR</DialogTitle>
+          </DialogHeader>
+          {lprBookingToComplete && (
+            <form
+              className="space-y-4"
+              onSubmit={async (e) => {
+                e.preventDefault()
+                if (!lprExitDate || !lprExitTime) {
+                  toast({
+                    title: "Câmpuri lipsă",
+                    description: "Data și ora de ieșire sunt obligatorii.",
+                    variant: "destructive",
+                  })
+                  return
+                }
+                const exitDateStr = formatDateFn(lprExitDate, "yyyy-MM-dd")
+                const exitTimeStr = lprExitTime
+                const persons = parseInt(lprPersons || "1", 10) || 1
+                try {
+                  const startDate = lprBookingToComplete.startDate
+                  const startTime = lprBookingToComplete.startTime
+                  let durationMinutes = lprBookingToComplete.durationMinutes || 0
+                  if (startDate && startTime) {
+                    const startTs = new Date(`${startDate}T${startTime}:00`).getTime()
+                    const endTs = new Date(`${exitDateStr}T${exitTimeStr}:00`).getTime()
+                    if (!Number.isNaN(startTs) && endTs > startTs) {
+                      durationMinutes = Math.floor((endTs - startTs) / (1000 * 60))
+                    }
+                  }
+
+                  const bookingRef = doc(db, "bookings", lprBookingToComplete.id)
+                  await updateDoc(bookingRef, {
+                    endDate: exitDateStr,
+                    endTime: exitTimeStr,
+                    durationMinutes,
+                    clientName: lprClientName || lprBookingToComplete.clientName || "",
+                    clientPhone: lprClientPhone || lprBookingToComplete.clientPhone || "",
+                    numberOfPersons: persons,
+                    source: "pay_on_site",
+                    status: "confirmed_pay_on_site",
+                    paymentStatus: "pending",
+                    lastUpdated: serverTimestamp(),
+                  })
+
+                  toast({
+                    title: "Rezervare completată",
+                    description: `Rezervarea pentru ${lprBookingToComplete.licensePlate} a fost completată cu succes.`,
+                  })
+                  setIsLprCompleteDialogOpen(false)
+                  setLprBookingToComplete(null)
+                  await fetchBookings()
+                } catch (error) {
+                  console.error("Error completing LPR booking:", error)
+                  toast({
+                    title: "Eroare",
+                    description: "Nu s-a putut completa rezervarea din LPR.",
+                    variant: "destructive",
+                  })
+                }
+              }}
+            >
+              <div className="space-y-2 text-sm">
+                <p>
+                  <strong>Nr. înmatriculare:</strong> {lprBookingToComplete.licensePlate}
+                </p>
+                <p>
+                  <strong>Intrare (din LPR):</strong>{" "}
+                  {lprBookingToComplete.startDate && lprBookingToComplete.startTime
+                    ? `${formatDateFn(
+                        parseISO(lprBookingToComplete.startDate),
+                        "dd.MM.yyyy",
+                        { locale: ro },
+                      )} ${lprBookingToComplete.startTime}`
+                    : "N/A"}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 mt-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Data ieșire *</label>
+                  <Input
+                    type="date"
+                    value={lprExitDate ? formatDateFn(lprExitDate, "yyyy-MM-dd") : ""}
+                    onChange={(e) =>
+                      setLprExitDate(e.target.value ? new Date(e.target.value) : undefined)
+                    }
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Ora ieșire *</label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start text-left font-normal h-10 border border-gray-200 bg-transparent hover:border-[#ff0066] focus:border-[#ff0066] focus:ring-2 focus:ring-[#ff0066]/20 hover:bg-transparent focus:bg-transparent text-gray-900 hover:text-gray-900"
+                        type="button"
+                      >
+                        <Clock className="mr-2 h-4 w-4 text-gray-500" />
+                        {lprExitTime}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-4" align="start">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Oră ieșire</label>
+                        <TimePickerDemo
+                          value={lprExitTime}
+                          onChange={(t) => setLprExitTime(t === "00:00" ? "00:05" : t)}
+                        />
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Nume client</label>
+                  <Input
+                    value={lprClientName}
+                    onChange={(e) => setLprClientName(e.target.value)}
+                    placeholder="Ex: Ion Popescu"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Telefon *</label>
+                  <Input
+                    value={lprClientPhone}
+                    onChange={(e) => setLprClientPhone(e.target.value)}
+                    placeholder="Ex: 0722123456"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Număr persoane *</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={lprPersons}
+                    onChange={(e) => setLprPersons(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+              <DialogFooter className="mt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setIsLprCompleteDialogOpen(false)
+                    setLprBookingToComplete(null)
+                  }}
+                >
+                  Anulează
+                </Button>
+                <Button type="submit">Salvează</Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 

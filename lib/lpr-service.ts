@@ -184,40 +184,51 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
         normalizedPlate,
         eventTimeIso: eventTime.toISOString()
       })
-      // Handle UNMATCHED flow: keep track of presence în colecție separată lpr_unmatched
-      const unmatchedRef = collection(db, "lpr_unmatched")
+      // Handle UNMATCHED flow: introducem mașina în lista de rezervări (bookings) cu status special
+      const bookingsRef = collection(db, "bookings")
       try {
         if (eventType === "entry") {
-          // Căutăm dacă există deja o sesiune deschisă pentru această plăcuță
+          // Căutăm dacă există deja o rezervare LPR deschisă pentru această plăcuță
           const q = query(
-            unmatchedRef,
-            where("licensePlate", "==", normalizedPlate),
-            where("isInside", "==", true)
+            bookingsRef,
+            where("status", "==", "unmatched_lpr"),
+            where("lpr.isInside", "==", true),
+            where("licensePlate", "==", normalizedPlate)
           )
           const snap = await getDocs(q)
           if (!snap.empty) {
-            console.log('⏭️ [LPR] Unmatched entry but already inside - updating lastSeen (lpr_unmatched)', { count: snap.size })
+            console.log('⏭️ [LPR] Unmatched entry but already inside - updating lastSeen (booking unmatched_lpr)', { count: snap.size })
             const docSnap = snap.docs[0]
-            await updateDoc(doc(unmatchedRef, docSnap.id), {
-              lastSeenAt: eventTime.toISOString(),
-              lastSeenDeviceId: input.deviceId ?? null,
-              lastEventType: eventType,
-              updatedAt: serverTimestamp()
+            await updateDoc(doc(db, "bookings", docSnap.id), {
+              "lpr.lastSeenAt": eventTime.toISOString(),
+              "lpr.lastSeenDeviceId": input.deviceId ?? null,
+              "lpr.lastEventType": eventType,
+              lastUpdated: serverTimestamp()
             })
           } else {
-            console.log('➕ [LPR] Creating unmatched LPR entry (lpr_unmatched)')
-            const newDocRef = await addDoc(unmatchedRef, {
+            console.log('➕ [LPR] Creating unmatched_lpr booking record (entry)')
+            const startDateStr = eventTime.toISOString().split("T")[0]
+            const timePart = eventTime.toTimeString().slice(0, 5) // HH:mm
+            const newDocRef = await addDoc(bookingsRef, {
               licensePlate: normalizedPlate,
-              laneNo: input.laneNo ?? null,
-              isInside: true,
-              arrivedAt: eventTime.toISOString(),
-              lastSeenAt: eventTime.toISOString(),
-              lastSeenDeviceId: input.deviceId ?? null,
-              lastEventType: eventType,
+              source: "lpr",
+              status: "unmatched_lpr",
+              startDate: startDateStr,
+              startTime: timePart,
+              endDate: "",
+              endTime: "",
+              durationMinutes: 0,
               createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
+              lastUpdated: serverTimestamp(),
+              lpr: {
+                isInside: true,
+                arrivedAt: eventTime.toISOString(),
+                lastSeenAt: eventTime.toISOString(),
+                lastSeenDeviceId: input.deviceId ?? null,
+                lastEventType: eventType
+              }
             })
-            console.log('✅ [LPR] Unmatched LPR entry created', { unmatchedId: newDocRef.id })
+            console.log('✅ [LPR] Unmatched booking created', { bookingId: newDocRef.id })
             // Increment occupancy pentru intrare fără rezervare
             try {
               const occupancyDocRef = doc(db, "config", "parkingLive")
@@ -227,7 +238,7 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
                 lastUpdated: serverTimestamp(),
                 lastChange: {
                   type: "entry_unmatched",
-                  unmatchedId: newDocRef.id,
+                  bookingId: newDocRef.id,
                   plateNumber: normalizedPlate,
                   deviceId: input.deviceId ?? null,
                   at: eventTime.toISOString()
@@ -239,21 +250,38 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
           }
         } else if (eventType === "exit") {
           const q = query(
-            unmatchedRef,
-            where("licensePlate", "==", normalizedPlate),
-            where("isInside", "==", true)
+            bookingsRef,
+            where("status", "==", "unmatched_lpr"),
+            where("lpr.isInside", "==", true),
+            where("licensePlate", "==", normalizedPlate)
           )
           const snap = await getDocs(q)
           if (!snap.empty) {
             const docSnap = snap.docs[0]
-            console.log('🚪 [LPR] Marking unmatched LPR as exited', { unmatchedId: docSnap.id })
-            await updateDoc(doc(unmatchedRef, docSnap.id), {
-              isInside: false,
-              departedAt: eventTime.toISOString(),
-              lastSeenAt: eventTime.toISOString(),
-              lastSeenDeviceId: input.deviceId ?? null,
-              lastEventType: eventType,
-              updatedAt: serverTimestamp()
+            console.log('🚪 [LPR] Marking unmatched_lpr booking as exited', { bookingId: docSnap.id })
+
+            const data: any = docSnap.data()
+            const startDate = data.startDate
+            const startTime = data.startTime
+            let durationMinutes = data.durationMinutes || 0
+            if (startDate && startTime) {
+              const startTs = new Date(`${startDate}T${startTime}:00`).getTime()
+              const endTs = eventTime.getTime()
+              if (!Number.isNaN(startTs) && endTs > startTs) {
+                durationMinutes = Math.round((endTs - startTs) / (1000 * 60))
+              }
+            }
+
+            await updateDoc(doc(db, "bookings", docSnap.id), {
+              "lpr.isInside": false,
+              "lpr.departedAt": eventTime.toISOString(),
+              "lpr.lastSeenAt": eventTime.toISOString(),
+              "lpr.lastSeenDeviceId": input.deviceId ?? null,
+              "lpr.lastEventType": eventType,
+              endDate: eventTime.toISOString().split("T")[0],
+              endTime: eventTime.toTimeString().slice(0, 5),
+              durationMinutes,
+              lastUpdated: serverTimestamp()
             })
             // Decrement occupancy pentru ieșire fără rezervare
             try {
@@ -264,7 +292,7 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
                 lastUpdated: serverTimestamp(),
                 lastChange: {
                   type: "exit_unmatched",
-                  unmatchedId: docSnap.id,
+                  bookingId: docSnap.id,
                   plateNumber: normalizedPlate,
                   deviceId: input.deviceId ?? null,
                   at: eventTime.toISOString()

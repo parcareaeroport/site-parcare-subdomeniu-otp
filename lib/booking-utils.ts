@@ -233,14 +233,18 @@ export async function checkAvailability(
       console.warn('ℹ️ Fallback: nu s-a putut încărca lista completă pentru delayed (booking-uri)', e)
     }
     try {
-      // Mașini fără rezervare, dar prezente în parcare (lpr_unmatched)
-      const unmatchedRef = collection(db, 'lpr_unmatched')
-      const unmatchedQuery = query(unmatchedRef, where('isInside', '==', true))
+      // Mașini fără rezervare, dar prezente în parcare (booking-uri cu status unmatched_lpr)
+      const unmatchedRef = collection(db, 'bookings')
+      const unmatchedQuery = query(
+        unmatchedRef,
+        where('status', '==', 'unmatched_lpr'),
+        where('lpr.isInside', '==', true)
+      )
       const unmatchedSnap = await getDocs(unmatchedQuery)
       unmatchedInsideCount = unmatchedSnap.size
       console.log('🚗 Ajustare locuri (LPR):', { delayedCount, unmatchedInsideCount })
     } catch (e) {
-      console.warn('ℹ️ Fallback: nu s-a putut încărca lista completă pentru lpr_unmatched', e)
+      console.warn('ℹ️ Fallback: nu s-a putut încărca lista completă pentru unmatched_lpr', e)
     }
     
     const bookingsRef = collection(db, 'bookings')
