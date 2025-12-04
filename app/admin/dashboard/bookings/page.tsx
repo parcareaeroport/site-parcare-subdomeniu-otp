@@ -32,7 +32,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Calendar } from "@/components/ui/calendar" // Shadcn Calendar
 import { format as formatDateFn, parseISO } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
