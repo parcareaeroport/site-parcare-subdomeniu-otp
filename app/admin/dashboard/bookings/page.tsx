@@ -201,6 +201,10 @@ function BookingsPageContent() {
   const [lprClientPhone, setLprClientPhone] = useState("")
   const [lprPersons, setLprPersons] = useState("1")
 
+  // Paginare pentru tabelul de rezervări
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+
   // Helper pentru formatarea întârzierilor (X ore Y minute / doar minute)
   const formatDelay = (minutes: number) => {
     const abs = Math.abs(minutes)
@@ -209,6 +213,23 @@ function BookingsPageContent() {
     const m = abs % 60
     if (m === 0) return `${h} h`
     return `${h} h ${m} min`
+  }
+
+  // Helper pentru afișarea orelor LPR.
+  // Camera trimite ora locală, dar serverul (UTC) o salvează ca și cum ar fi UTC,
+  // deci în UI afișăm în timezone UTC ca să vedem exact ora raportată de cameră.
+  const formatLprDateTime = (isoString: string) => {
+    if (!isoString) return "-"
+    const d = new Date(isoString)
+    if (Number.isNaN(d.getTime())) return "-"
+    return d.toLocaleString("ro-RO", {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: "UTC",
+    })
   }
 
   const fetchBookings = async () => {
@@ -301,6 +322,8 @@ function BookingsPageContent() {
       filtered = filtered.filter((b) => b.startDate === filterDateStr || b.endDate === filterDateStr)
     }
     setFilteredBookings(filtered)
+    // Resetăm pagina curentă când se schimbă filtrarea
+    setCurrentPage(1)
   }, [bookings, searchTerm, statusFilter, dateFilter])
 
   // Statistici rapide pentru bara de sus (în funcție de data selectată)
@@ -1263,94 +1286,97 @@ function BookingsPageContent() {
         </div>
 
         <Card>
-            <CardHeader>
-              <CardTitle>Lista Rezervărilor</CardTitle>
-              <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
+          <CardHeader>
+            <CardTitle>Lista Rezervărilor</CardTitle>
+            <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {/* Info paginare (deasupra tabelului) */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-3 text-xs text-gray-600">
+              <div>
+                <span>
+                  Afișezi{" "}
+                  {filteredBookings.length === 0
+                    ? 0
+                    : (currentPage - 1) * pageSize + 1}{" "}
+                  -{" "}
+                  {Math.min(currentPage * pageSize, filteredBookings.length)}{" "}
+                  din {filteredBookings.length} rezervări
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span>Pe pagină:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    const newSize = Number(e.target.value) || 25
+                    setPageSize(newSize)
+                    setCurrentPage(1)
+                  }}
+                  className="border rounded px-2 py-1 text-xs bg-white"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+            </div>
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Nr. API</TableHead>
+                  <TableHead>Nr. Înmatriculare</TableHead>
+                  <TableHead>Client</TableHead>
+                  <TableHead>Perioada</TableHead>
+                  <TableHead className="w-64">LPR Intrare / Ieșire</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Plată</TableHead>
+                  <TableHead>T&C</TableHead>
+                  <TableHead>Creată la</TableHead>
+                  <TableHead className="text-right">Acțiuni</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredBookings.length === 0 ? (
                   <TableRow>
-                    <TableHead>Nr. API</TableHead>
-                    <TableHead>Nr. Înmatriculare</TableHead>
-                    <TableHead>Client</TableHead>
-                    <TableHead>Perioada</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Plată</TableHead>
-                    <TableHead>T&C</TableHead>
-                    <TableHead>Creată la</TableHead>
-                    <TableHead className="text-right">Acțiuni</TableHead>
+                    <TableCell colSpan={10} className="text-center py-8 text-gray-500">
+                      Nu s-au găsit rezervări.
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredBookings.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={9} className="text-center py-8 text-gray-500">
-                        Nu s-au găsit rezervări.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredBookings.map((booking) => (
+                ) : (
+                  filteredBookings
+                    .slice(
+                      (currentPage - 1) * pageSize,
+                      (currentPage - 1) * pageSize + pageSize,
+                    )
+                    .map((booking) => (
                     <TableRow
                       key={booking.id}
                       className={
                         booking.source === "manual"
-                            ? "bg-orange-50 hover:bg-orange-100 border-l-4 border-l-orange-400"
-                            : booking.source === "pay_on_site"
-                            ? "bg-orange-100 hover:bg-orange-200 border-l-4 border-l-orange-500"
-                            : ""
+                          ? "bg-orange-50 hover:bg-orange-100 border-l-4 border-l-orange-400"
+                          : booking.source === "pay_on_site"
+                          ? "bg-orange-100 hover:bg-orange-200 border-l-4 border-l-orange-500"
+                          : ""
                       }
                     >
-                      {/* facem un mic helper în interiorul map-ului */}
+                      {/* helper pentru afișarea simplă a orelor LPR (intrare / ieșire) */}
                       {(() => {
                         const lpr: any = (booking as any).lpr || {}
-                        let entryLabel: string | null = null
-                        let entryClass = ""
-                        let earlyLateLabel: string | null = null
-                        let earlyLateClass = ""
+                        let lprTimesLabel: string | null = null
 
-                        // Diferență la INTRARE (față de ora programată)
-                        if (booking.startDate && booking.startTime && lpr.arrivedAt) {
-                          const plannedStart = new Date(`${booking.startDate}T${booking.startTime}:00`)
-                          const actualArr = new Date(lpr.arrivedAt)
-                          const diffStartMin = Math.round(
-                            (actualArr.getTime() - plannedStart.getTime()) / (1000 * 60)
-                          )
-                          if (!Number.isNaN(diffStartMin) && diffStartMin !== 0) {
-                            const formattedStart = formatDelay(diffStartMin)
-                            const actualArrLabel = formatDateFn(actualArr, "dd MMM yyyy, HH:mm", { locale: ro })
-                            if (diffStartMin < 0) {
-                              entryLabel = `Intrat mai devreme cu ${formattedStart} (LPR: ${actualArrLabel})`
-                              entryClass = "text-xs text-blue-700"
-                            } else {
-                              entryLabel = `Întârziat la intrare cu ${formattedStart} (LPR: ${actualArrLabel})`
-                              entryClass = "text-xs text-red-700 font-semibold"
-                            }
-                          }
-                        }
+                        const entryStr = lpr.arrivedAt
+                          ? formatLprDateTime(lpr.arrivedAt)
+                          : "-"
+                        const exitStr = lpr.departedAt
+                          ? formatLprDateTime(lpr.departedAt)
+                          : "-"
 
-                        // Diferență la IEȘIRE (față de ora programată)
-                        if (booking.endDate && booking.endTime && lpr.departedAt) {
-                          const planned = new Date(`${booking.endDate}T${booking.endTime}:00`)
-                          const actual = new Date(lpr.departedAt)
-                          const diffMin = Math.round((actual.getTime() - planned.getTime()) / (1000 * 60))
-                          if (!Number.isNaN(diffMin) && diffMin !== 0) {
-                            const formatted = formatDelay(diffMin)
-                            const actualLabel = formatDateFn(actual, "dd MMM yyyy, HH:mm", { locale: ro })
-                            if (diffMin < 0) {
-                              earlyLateLabel = `Ieșit mai devreme cu ${formatted} (LPR: ${actualLabel})`
-                              earlyLateClass = "text-xs text-blue-700"
-                            } else {
-                              earlyLateLabel = `Întârziat la ieșire cu ${formatted} (LPR: ${actualLabel})`
-                              earlyLateClass = "text-xs text-red-700 font-semibold"
-                            }
-                          }
-                        }
+                        lprTimesLabel = `${entryStr} / ${exitStr}`
 
-                        ;(booking as any)._entryLprLabel = entryLabel
-                        ;(booking as any)._entryLprClass = entryClass
-                        ;(booking as any)._earlyLateLabel = earlyLateLabel
-                        ;(booking as any)._earlyLateClass = earlyLateClass
+                        ;(booking as any)._lprTimesLabel = lprTimesLabel
                         return null
                       })()}
                         <TableCell className="font-medium">
@@ -1388,15 +1414,16 @@ function BookingsPageContent() {
                             ) : (
                               <span className="text-xs text-gray-400">Perioadă nesetată (LPR / manuală)</span>
                             )}
-                            {(booking as any)._entryLprLabel && (
-                              <span className={(booking as any)._entryLprClass}>
-                                {(booking as any)._entryLprLabel}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-col space-y-1">
+                            {(booking as any)._lprTimesLabel ? (
+                              <span className="text-xs text-gray-800">
+                                {(booking as any)._lprTimesLabel}
                               </span>
-                            )}
-                            {(booking as any)._earlyLateLabel && (
-                              <span className={(booking as any)._earlyLateClass}>
-                                {(booking as any)._earlyLateLabel}
-                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">-</span>
                             )}
                           </div>
                         </TableCell>
@@ -1531,11 +1558,48 @@ function BookingsPageContent() {
                         </TableCell>
                       </TableRow>
                     ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+                )}
+              </TableBody>
+            </Table>
+
+            {/* Controale paginare (sub tabel) */}
+            {filteredBookings.length > 0 && (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mt-4">
+                <div className="text-xs text-gray-600">
+                  Pagina {currentPage} din{" "}
+                  {Math.max(1, Math.ceil(filteredBookings.length / pageSize))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Anterioară
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setCurrentPage((p) =>
+                        Math.min(
+                          Math.max(1, Math.ceil(filteredBookings.length / pageSize)),
+                          p + 1,
+                        ),
+                      )
+                    }
+                    disabled={
+                      currentPage >= Math.ceil(filteredBookings.length / pageSize)
+                    }
+                  >
+                    Următoare
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
         {/* Secțiunea Intrări/Ieșiri pentru data selectată */}
         {dateFilter && (
@@ -1715,24 +1779,23 @@ function BookingsPageContent() {
                         if (diffMin < 0) {
                           return (
                             <p className="text-xs text-blue-700">
-                              <strong>Intrare LPR:</strong> {actualArr.toLocaleString("ro-RO")} (intrat mai devreme cu{" "}
+                              <strong>Intrare LPR:</strong> {formatLprDateTime(lpr.arrivedAt)} (intrat mai devreme cu{" "}
                               {formatDelay(diffMin)})
                             </p>
                           )
                         }
                         return (
                           <p className="text-xs text-red-700">
-                            <strong>Intrare LPR:</strong> {actualArr.toLocaleString("ro-RO")} (întârziat la intrare cu{" "}
+                            <strong>Intrare LPR:</strong> {formatLprDateTime(lpr.arrivedAt)} (întârziat la intrare cu{" "}
                             {formatDelay(diffMin)})
                           </p>
                         )
                       }
                     }
                     if (lpr.arrivedAt) {
-                      const actualArr = new Date(lpr.arrivedAt)
                       return (
                         <p className="text-xs text-gray-600">
-                          <strong>Intrare LPR:</strong> {actualArr.toLocaleString("ro-RO")}
+                          <strong>Intrare LPR:</strong> {formatLprDateTime(lpr.arrivedAt)}
                         </p>
                       )
                     }
@@ -1740,7 +1803,7 @@ function BookingsPageContent() {
                   })()}
                   {(() => {
                     const lpr: any = (selectedBooking as any).lpr || {}
-                        if (selectedBooking.endDate && selectedBooking.endTime && lpr.departedAt) {
+                    if (selectedBooking.endDate && selectedBooking.endTime && lpr.departedAt) {
                       const planned = new Date(`${selectedBooking.endDate}T${selectedBooking.endTime}:00`)
                       const actual = new Date(lpr.departedAt)
                       const diffMin = Math.round((actual.getTime() - planned.getTime()) / (1000 * 60))
@@ -1748,24 +1811,23 @@ function BookingsPageContent() {
                         if (diffMin < 0) {
                           return (
                             <p className="text-xs text-blue-700">
-                                  <strong>Ieșire LPR:</strong> {actual.toLocaleString("ro-RO")} (mai devreme cu{" "}
-                                  {formatDelay(diffMin)})
+                              <strong>Ieșire LPR:</strong> {formatLprDateTime(lpr.departedAt)} (mai devreme cu{" "}
+                              {formatDelay(diffMin)})
                             </p>
                           )
                         }
                         return (
                           <p className="text-xs text-red-700">
-                                <strong>Ieșire LPR:</strong> {actual.toLocaleString("ro-RO")} (întârziat cu{" "}
-                                {formatDelay(diffMin)})
+                            <strong>Ieșire LPR:</strong> {formatLprDateTime(lpr.departedAt)} (întârziat cu{" "}
+                            {formatDelay(diffMin)})
                           </p>
                         )
                       }
                     }
                     if (lpr.departedAt) {
-                      const actual = new Date(lpr.departedAt)
                       return (
                         <p className="text-xs text-gray-600">
-                          <strong>Ieșire LPR:</strong> {actual.toLocaleString("ro-RO")}
+                          <strong>Ieșire LPR:</strong> {formatLprDateTime(lpr.departedAt)}
                         </p>
                       )
                     }

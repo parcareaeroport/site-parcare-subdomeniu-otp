@@ -32,16 +32,18 @@ import {
   MapPin,
   TrendingUp
 } from "lucide-react"
-import { 
-  getDailyStatistics, 
-  getExpiredReservations, 
-  getDailyEntries, 
+import {
+  getDailyStatistics,
+  getExpiredReservations,
+  getDailyEntries,
   getDailyExits,
   getMaxTotalReservations,
   type DailyStatistics,
   type ExpiredReservation,
-  type DailyEntryExit 
+  type DailyEntryExit,
 } from "@/lib/admin-stats"
+import { db } from "@/lib/firebase"
+import { doc, onSnapshot } from "firebase/firestore"
 
 const COLORS = ["#22c55e", "#f59e0b", "#ef4444", "#3b82f6", "#8b5cf6"]
 
@@ -66,6 +68,7 @@ export default function StatisticsPage() {
   const [scheduledEntries, setScheduledEntries] = useState<DailyEntryExit[]>([])
   const [scheduledExits, setScheduledExits] = useState<DailyEntryExit[]>([])
   const [maxTotalReservations, setMaxTotalReservations] = useState<number>(100)
+  const [occupiedLpr, setOccupiedLpr] = useState<number>(0)
 
   useEffect(() => {
     setIsClient(true)
@@ -74,6 +77,28 @@ export default function StatisticsPage() {
     
     // Încarcă limita maximă de rezervări
     getMaxTotalReservations().then(setMaxTotalReservations)
+
+    // Ascultă în timp real ocuparea LIVE din LPR (parkingLive.occupiedCount)
+    const occupancyDocRef = doc(db, "config", "parkingLive")
+    const unsub = onSnapshot(
+      occupancyDocRef,
+      (snap) => {
+        const data = snap.data() || {}
+        const occupiedCount = Math.max(0, Number(data.occupiedCount || 0))
+        setOccupiedLpr(occupiedCount)
+        console.log("📊 [Statistics] Occupancy from LPR:", {
+          occupiedCount,
+          lastUpdated: data.lastUpdated?.toDate?.().toISOString?.() ?? null,
+        })
+      },
+      (err) => {
+        console.error("❌ [Statistics] Error listening to LPR occupancy:", err)
+      },
+    )
+
+    return () => {
+      unsub()
+    }
   }, [])
 
   useEffect(() => {
@@ -129,9 +154,13 @@ export default function StatisticsPage() {
     { name: 'Intrări Rămase', value: dailyStats.remainingEntries },
   ]
 
+  // Locuri disponibile și ocupate DOAR din LPR
+  const occupiedFromLpr = Math.min(occupiedLpr, maxTotalReservations)
+  const availableFromLpr = Math.max(0, maxTotalReservations - occupiedFromLpr)
+
   const occupancyChartData = [
-    { name: 'Locuri Ocupate', value: 100 - dailyStats.availableSpots },
-    { name: 'Locuri Disponibile', value: dailyStats.availableSpots },
+    { name: "Locuri Ocupate", value: occupiedFromLpr },
+    { name: "Locuri Disponibile", value: availableFromLpr },
   ]
 
   if (!isClient) {
@@ -204,7 +233,7 @@ export default function StatisticsPage() {
             <MapPin className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">{dailyStats.availableSpots}</div>
+            <div className="text-2xl font-bold text-green-600">{availableFromLpr}</div>
             <p className="text-xs text-muted-foreground">din {maxTotalReservations} locuri total</p>
           </CardContent>
         </Card>

@@ -69,39 +69,29 @@ export function ReservationLimitManager() {
   }, [toast])
 
   /*──────────────────────────────────┐
-  │   SNAPSHOT: rezervări active (smart)│
+  │   SNAPSHOT: ocupare LIVE (LPR)   │
+  │   Rezervări Active Acum = doar LPR│
   └──────────────────────────────────*/
   useEffect(() => {
-    const col = collection(db, "bookings")
-    
-    // Query mai inteligent: excludem rezervările expirate, anulate și cu erori
-    const q = query(col, where("status", "in", ["confirmed_paid", "confirmed_test", "confirmed", "paid", "confirmed_pay_on_site"]))
-    
-    const unsub = onSnapshot(q, async (snapshot) => {
-      // Calculăm în timp real rezervările care sunt cu adevărat active ACUM
-      const now = new Date()
-      let reallyActiveCount = 0
-      
-      snapshot.forEach(doc => {
-        const booking = doc.data()
-        const endDateTime = new Date(`${booking.endDate}T${booking.endTime}:00`)
-        
-        // Verifică dacă rezervarea este încă activă (nu a expirat)
-        if (endDateTime > now) {
-          reallyActiveCount++
-        }
-      })
-      
-      setActiveBookings(reallyActiveCount)
-      
-      // Debug pentru transparență
-      console.log('📊 Smart active bookings count:', {
-        totalWithActiveStatus: snapshot.size,
-        reallyActiveNow: reallyActiveCount,
-        currentTime: now.toISOString()
-      })
-    })
-    
+    const occupancyDocRef = doc(db, "config", "parkingLive")
+
+    const unsub = onSnapshot(
+      occupancyDocRef,
+      (snap) => {
+        const data = snap.data() || {}
+        const occupiedCount = Number(data.occupiedCount || 0)
+        setActiveBookings(occupiedCount)
+
+        console.log("📊 Active bookings from LPR (parkingLive.occupiedCount):", {
+          occupiedCount,
+          lastUpdated: data.lastUpdated?.toDate?.().toISOString?.() ?? null,
+        })
+      },
+      (err) => {
+        console.error("❌ Error listening to parkingLive occupancy:", err)
+      },
+    )
+
     return () => unsub()
   }, [])
 
