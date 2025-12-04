@@ -29,11 +29,13 @@ export interface RecentBooking {
 
 export interface DailyEntryExit {
   id: string
-  time: string
+  time: string // ora programată (startTime/endTime)
   licensePlate: string
   phone: string
   numberOfPersons: number | string // Poate fi număr sau "N/A" pentru rezervări mai vechi
   source?: string // Pentru a identifica rezervările manuale
+  actualTime?: string // Ora efectivă din LPR (HH:mm)
+  delayMinutes?: number // Diferența (efectiv - programat) în minute
 }
 
 // Noi interfețe pentru statisticile suplimentare
@@ -592,20 +594,35 @@ export async function getDailyEntries(selectedDate: string): Promise<DailyEntryE
     const entries: DailyEntryExit[] = []
 
     snapshot.forEach(doc => {
-      const booking = doc.data()
+      const booking = doc.data() as any
       // Determină sursa rezervării
       let source = booking.source || 'webhook'
       if (booking.status === 'confirmed_pay_on_site') {
         source = 'pay_on_site'
       }
+      const lpr = booking.lpr || {}
+      const scheduledTimeStr: string = booking.startTime || 'N/A'
+      let actualTime: string | undefined
+      let delayMinutes: number | undefined
+      if (lpr.arrivedAt && booking.startDate && booking.startTime) {
+        const scheduled = new Date(`${booking.startDate}T${booking.startTime}:00`)
+        const actual = new Date(lpr.arrivedAt)
+        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+        if (!Number.isNaN(diffMin)) {
+          delayMinutes = diffMin
+        }
+        actualTime = actual.toTimeString().slice(0, 5)
+      }
       
       entries.push({
         id: doc.id,
-        time: booking.startTime || 'N/A',
+        time: scheduledTimeStr,
         licensePlate: booking.licensePlate || 'N/A',
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
-        source: source
+        source,
+        actualTime,
+        delayMinutes
       })
     })
 
@@ -636,20 +653,35 @@ export async function getDailyExits(selectedDate: string): Promise<DailyEntryExi
     const exits: DailyEntryExit[] = []
 
     snapshot.forEach(doc => {
-      const booking = doc.data()
+      const booking = doc.data() as any
       // Determină sursa rezervării
       let source = booking.source || 'webhook'
       if (booking.status === 'confirmed_pay_on_site') {
         source = 'pay_on_site'
       }
+      const lpr = booking.lpr || {}
+      const scheduledTimeStr: string = booking.endTime || 'N/A'
+      let actualTime: string | undefined
+      let delayMinutes: number | undefined
+      if (lpr.departedAt && booking.endDate && booking.endTime) {
+        const scheduled = new Date(`${booking.endDate}T${booking.endTime}:00`)
+        const actual = new Date(lpr.departedAt)
+        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+        if (!Number.isNaN(diffMin)) {
+          delayMinutes = diffMin
+        }
+        actualTime = actual.toTimeString().slice(0, 5)
+      }
       
       exits.push({
         id: doc.id,
-        time: booking.endTime || 'N/A',
+        time: scheduledTimeStr,
         licensePlate: booking.licensePlate || 'N/A',
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
-        source: source
+        source,
+        actualTime,
+        delayMinutes
       })
     })
 

@@ -8,11 +8,7 @@ import { RefreshCw, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
-import {
-  getDailyEntries,
-  getDailyExits,
-  type DailyEntryExit
-} from "@/lib/admin-stats"
+import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
 
 export default function EntriesExitsPage() {
   const [isClient, setIsClient] = useState(false)
@@ -29,6 +25,17 @@ export default function EntriesExitsPage() {
   // State pentru filtrarea pe client
   const [hidePastTimes, setHidePastTimes] = useState(true)
   const [currentTime, setCurrentTime] = useState("")
+
+  const formatDelay = (minutes?: number) => {
+    if (minutes === undefined || minutes === null) return "-"
+    const abs = Math.abs(minutes)
+    if (abs < 1) return "La timp"
+    if (abs < 60) return `${abs} min`
+    const h = Math.floor(abs / 60)
+    const m = abs % 60
+    if (m === 0) return `${h} h`
+    return `${h} h ${m} min`
+  }
 
   useEffect(() => {
     setIsClient(true)
@@ -212,10 +219,12 @@ export default function EntriesExitsPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora programată</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora efectivă (LPR)</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Întârziere</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -226,6 +235,7 @@ export default function EntriesExitsPage() {
                               {entry.time}
                             </span>
                           </td>
+                          <td className="py-3 px-2">{entry.actualTime || "-"}</td>
                           <td className="py-3 px-2">
                             <div className="flex items-center gap-2">
                               {entry.source === "manual" && (
@@ -243,6 +253,13 @@ export default function EntriesExitsPage() {
                           </td>
                           <td className="py-3 px-2">{entry.phone}</td>
                           <td className="py-3 px-2 text-center">{entry.numberOfPersons}</td>
+                          <td className="py-3 px-2">
+                            {entry.delayMinutes === undefined || entry.delayMinutes === null
+                              ? "-"
+                              : entry.delayMinutes > 0
+                              ? formatDelay(entry.delayMinutes)
+                              : `Mai devreme cu ${formatDelay(entry.delayMinutes)}`}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -276,10 +293,12 @@ export default function EntriesExitsPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora programată</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora efectivă (LPR)</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Întârziere</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -290,6 +309,7 @@ export default function EntriesExitsPage() {
                               {exit.time}
                             </span>
                           </td>
+                          <td className="py-3 px-2">{exit.actualTime || "-"}</td>
                           <td className="py-3 px-2">
                             <div className="flex items-center gap-2">
                               {exit.source === "manual" && (
@@ -307,6 +327,13 @@ export default function EntriesExitsPage() {
                           </td>
                           <td className="py-3 px-2">{exit.phone}</td>
                           <td className="py-3 px-2 text-center">{exit.numberOfPersons}</td>
+                          <td className="py-3 px-2">
+                            {exit.delayMinutes === undefined || exit.delayMinutes === null
+                              ? "-"
+                              : exit.delayMinutes > 0
+                              ? formatDelay(exit.delayMinutes)
+                              : `Mai devreme cu ${formatDelay(exit.delayMinutes)}`}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

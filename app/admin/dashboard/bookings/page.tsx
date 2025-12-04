@@ -1311,11 +1311,12 @@ function BookingsPageContent() {
                           const actual = new Date(lpr.departedAt)
                           const diffMin = Math.round((actual.getTime() - planned.getTime()) / (1000 * 60))
                           if (!Number.isNaN(diffMin) && diffMin !== 0) {
+                            const formatted = formatDelay(diffMin)
                             if (diffMin < 0) {
-                              earlyLateLabel = `Ieșit mai devreme cu ${Math.abs(diffMin)} min`
+                              earlyLateLabel = `Ieșit mai devreme cu ${formatted}`
                               earlyLateClass = "text-xs text-blue-700"
                             } else {
-                              earlyLateLabel = `Întârziat la ieșire cu ${diffMin} min`
+                              earlyLateLabel = `Întârziat la ieșire cu ${formatted}`
                               earlyLateClass = "text-xs text-red-700 font-semibold"
                             }
                           }
