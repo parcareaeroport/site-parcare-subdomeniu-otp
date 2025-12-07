@@ -547,9 +547,10 @@ export async function createBooking(formData: FormData) {
   } catch (error) {
     console.error("Booking error:", error)
     if (error instanceof z.ZodError) {
+      const issues = (error.issues || []).map((e) => e.message).join(", ")
       return {
         success: false,
-        message: `Validare eșuată: ${error.issues.map((e) => e.message).join(", ")}`,
+        message: `Validare eșuată: ${issues}`,
       }
     }
     return {

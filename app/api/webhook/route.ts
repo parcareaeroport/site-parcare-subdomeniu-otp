@@ -5,8 +5,9 @@ import { createBookingWithFirestore } from "@/app/actions/booking-actions" // Fo
 
 
 // Inițializăm clientul Stripe cu cheia secretă
+// Folosim versiunea de API suportată de tipurile Stripe instalate
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2025-05-28.basil", // Versiune actualizată
+  apiVersion: "2025-11-17.clover",
 })
 
 export async function POST(req: Request) {

@@ -111,6 +111,10 @@ const ChartTooltipContent = React.forwardRef<
       indicator?: "line" | "dot" | "dashed"
       nameKey?: string
       labelKey?: string
+      // Adăugăm explicit payload pentru compatibilitate cu tipurile Recharts
+      payload?: any[]
+      // Adăugăm explicit label pentru compatibilitate cu tipurile Recharts
+      label?: any
     }
 >(
   (
@@ -260,11 +264,13 @@ const ChartLegend = RechartsPrimitive.Legend
 
 const ChartLegendContent = React.forwardRef<
   HTMLDivElement,
-  React.ComponentProps<"div"> &
-    Pick<RechartsPrimitive.LegendProps, "payload" | "verticalAlign"> & {
-      hideIcon?: boolean
-      nameKey?: string
-    }
+  React.ComponentProps<"div"> & {
+    // Props compatibile cu Legend din Recharts, fără a depinde strict de LegendProps
+    payload?: any[]
+    verticalAlign?: RechartsPrimitive.LegendProps["verticalAlign"]
+    hideIcon?: boolean
+    nameKey?: string
+  }
 >(
   (
     { className, hideIcon = false, payload, verticalAlign = "bottom", nameKey },

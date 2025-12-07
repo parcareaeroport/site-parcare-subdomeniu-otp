@@ -5,16 +5,22 @@ import { collection, query, where, getDocs, orderBy, limit, Timestamp, doc, upda
 export interface MonthlyStats {
   name: string
   value: number
+  // Index signature pentru compatibilitate cu tipurile de date Recharts (ChartDataInput)
+  [key: string]: string | number
 }
 
 export interface BookingStatusStats {
   name: string
   value: number
+  // Index signature pentru compatibilitate cu tipurile de date Recharts (ChartDataInput)
+  [key: string]: string | number
 }
 
 export interface OccupancyStats {
   name: string
   value: number
+  // Index signature pentru compatibilitate cu tipurile de date Recharts (ChartDataInput)
+  [key: string]: string | number
 }
 
 export interface RecentBooking {
