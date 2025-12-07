@@ -92,13 +92,30 @@ export async function POST(request: NextRequest) {
     try {
       const topLevelKeys =
         body && typeof body === "object" ? Object.keys(body) : [];
-      const formDataKeys =
+      // JetForm / JetWoo în WooCommerce trimite detaliile formularului în meta._jf_wc_details.form_data
+      const jfFromMeta =
+        body &&
+        typeof body === "object" &&
+        body.meta &&
+        typeof body.meta === "object" &&
+        body.meta._jf_wc_details &&
+        typeof body.meta._jf_wc_details === "object"
+          ? body.meta._jf_wc_details
+          : undefined;
+      const jfFromRoot =
         body &&
         typeof body === "object" &&
         body._jf_wc_details &&
-        body._jf_wc_details.form_data &&
-        typeof body._jf_wc_details.form_data === "object"
-          ? Object.keys(body._jf_wc_details.form_data)
+        typeof body._jf_wc_details === "object"
+          ? body._jf_wc_details
+          : undefined;
+      const jfSource = jfFromMeta || jfFromRoot || {};
+      const formDataKeys =
+        jfSource &&
+        typeof jfSource === "object" &&
+        jfSource.form_data &&
+        typeof jfSource.form_data === "object"
+          ? Object.keys(jfSource.form_data)
           : [];
 
       await addDoc(collection(db, "webhook_logs"), {
@@ -116,8 +133,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 2) Extragem datele JetForm/JetWoo din _jf_wc_details.form_data
-    const jfDetails = body?._jf_wc_details || {};
+    // 2) Extragem datele JetForm/JetWoo din meta._jf_wc_details.form_data (sau fallback din rădăcină)
+    const jfDetails =
+      body?.meta?._jf_wc_details ||
+      body?._jf_wc_details ||
+      {};
     const ro = jfDetails.form_data || {};
 
     console.log(
@@ -132,16 +152,22 @@ export async function POST(request: NextRequest) {
     //  - "1" = plata cash/card la parcare (pay_on_site)
     //  - "2" = plata online cu cardul
     const roPayment = ro.metoda_de_plata;
+    // În WooCommerce avem și câmpul payment_method la nivel de comandă (ex: 'netopiapayments').
+    const wcPaymentMethod = typeof body?.payment_method === "string" ? body.payment_method : "";
+    const isNetopiaCard = wcPaymentMethod === "netopiapayments";
+
     const resolvedPaymentMethod =
       roPayment === "2"
         ? "card"
         : roPayment === "1"
         ? "pay_on_site"
+        : isNetopiaCard
+        ? "card"
         : undefined;
 
-    if (resolvedPaymentMethod !== "card") {
+    if (resolvedPaymentMethod !== "card" && !isNetopiaCard) {
       console.warn(
-        `[WP-CARD][${reqId}] Payment method is not 'card' (metoda_de_plata=${roPayment}). This endpoint is intended for card payments.`
+        `[WP-CARD][${reqId}] Payment method is not 'card' (metoda_de_plata=${roPayment}, payment_method=${wcPaymentMethod}). This endpoint is intended for card payments.`
       );
     }
 
@@ -151,11 +177,13 @@ export async function POST(request: NextRequest) {
         ? parseInt(String(ro.numar_de_zile_sumar), 10) || undefined
         : undefined;
 
-    // Pentru card: folosim prioritar pret_total_sumar, apoi plata_online_cu_cardul_sumar
+    // Pentru card: folosim prioritar pret_total_sumar, apoi plata_online_cu_cardul_sumar,
+    // iar dacă lipsesc (sau Jet nu le trimite), folosim total-ul comenzii WooCommerce.
     const resolvedAmountRaw =
       ro.pret_total_sumar ??
       ro.plata_online_cu_cardul_sumar ??
-      ro.plata_cash_card_la_parcare_sumar;
+      ro.plata_cash_card_la_parcare_sumar ??
+      body?.total;
 
     // chei obligatorii mapate
     const licensePlate = ro.numar_inmatriculare
