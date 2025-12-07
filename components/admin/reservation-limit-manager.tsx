@@ -28,6 +28,8 @@ export function ReservationLimitManager() {
 
   // statistici
   const [activeBookings, setActiveBookings] = useState<number | null>(null)
+  const [payOnSiteCancelMinutes, setPayOnSiteCancelMinutes] = useState<number | null>(null)
+  const [payOnSiteCancelMinutesInput, setPayOnSiteCancelMinutesInput] = useState("")
 
   // flags
   const [loadingSettings, setLoadingSettings] = useState(true)
@@ -48,12 +50,15 @@ export function ReservationLimitManager() {
         const data = snap.data() ?? {}
         const dbLimit = data.maxTotalReservations ?? 0
         const dbEnabled = data.reservationsEnabled ?? true
+        const dbPayOnSiteMinutes = data.payOnSiteAutoCancelMinutes ?? 180
 
         setCurrentLimit(dbLimit)
         setReservationsEnabled(dbEnabled)
+        setPayOnSiteCancelMinutes(dbPayOnSiteMinutes)
 
         if (!hasLoadedOnce.current && !userTyped.current) {
           setMaxInput(dbLimit.toString())
+          setPayOnSiteCancelMinutesInput(dbPayOnSiteMinutes.toString())
         }
 
         hasLoadedOnce.current = true
@@ -103,6 +108,11 @@ export function ReservationLimitManager() {
     setMaxInput(e.target.value)
   }
 
+  const onPayOnSiteMinutesChange = (e: ChangeEvent<HTMLInputElement>) => {
+    userTyped.current = true
+    setPayOnSiteCancelMinutesInput(e.target.value)
+  }
+
   const saveLimit = async () => {
     const newLimit = Number.parseInt(maxInput, 10)
     if (isNaN(newLimit) || newLimit < 0) {
@@ -122,6 +132,45 @@ export function ReservationLimitManager() {
       console.error(err)
       setCurrentLimit(prev)
       toast({ title: "Eroare", description: "Salvarea a eșuat.", variant: "destructive" })
+    } finally {
+      setSavingLimit(false)
+    }
+  }
+
+  const savePayOnSiteCancelMinutes = async () => {
+    const newMinutes = Number.parseInt(payOnSiteCancelMinutesInput, 10)
+    if (isNaN(newMinutes) || newMinutes <= 0) {
+      toast({
+        title: "Valoare invalidă",
+        description: "Pragul trebuie să fie un număr de minute mai mare decât 0.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const prev = payOnSiteCancelMinutes
+    setPayOnSiteCancelMinutes(newMinutes)
+    setSavingLimit(true)
+
+    try {
+      await setDoc(
+        doc(db, "config", "reservationSettings"),
+        { payOnSiteAutoCancelMinutes: newMinutes },
+        { merge: true },
+      )
+      userTyped.current = false
+      toast({
+        title: "Succes",
+        description: "Pragul pentru anularea rezervărilor cu Plată la Parcare a fost actualizat.",
+      })
+    } catch (err) {
+      console.error(err)
+      setPayOnSiteCancelMinutes(prev)
+      toast({
+        title: "Eroare",
+        description: "Nu s-a putut salva pragul de anulare.",
+        variant: "destructive",
+      })
     } finally {
       setSavingLimit(false)
     }
@@ -256,7 +305,7 @@ export function ReservationLimitManager() {
         </div>
 
         {/* Current Status */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Rezervări Active Acum</Label>
             <div className="flex items-center space-x-2">
@@ -296,6 +345,30 @@ export function ReservationLimitManager() {
           </div>
           <p className="text-sm text-muted-foreground">
             Setează 0 pentru rezervări nelimitate. Limita se aplică doar rezervărilor active (neexpirate).
+          </p>
+        </div>
+
+        {/* Prag anulare Plată la Parcare */}
+        <div className="space-y-2">
+          <Label htmlFor="payonsite-cancel-minutes">Prag anulare „Plată la Parcare” (minute)</Label>
+          <div className="flex space-x-2">
+            <Input
+              id="payonsite-cancel-minutes"
+              type="number"
+              min="1"
+              max="1440"
+              value={payOnSiteCancelMinutesInput}
+              onChange={onPayOnSiteMinutesChange}
+              placeholder="Ex: 180"
+              disabled={loadingSettings}
+            />
+            <Button onClick={savePayOnSiteCancelMinutes} disabled={loadingSettings}>
+              {loadingSettings ? <Loader2 className="h-4 w-4 animate-spin" /> : "Salvează"}
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            După acest număr de minute peste ora de ieșire, rezervările cu <strong>Plată la Parcare</strong> vor fi
+            anulate automat de endpoint-ul de cron.
           </p>
         </div>
 

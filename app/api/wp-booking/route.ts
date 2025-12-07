@@ -224,6 +224,47 @@ export async function POST(request: NextRequest) {
     if (!hasStandardKeys && hasRomanianWpKeys) {
       const ro = body || {};
       const range = parseRoDateRange(ro.data_intrare_iesire);
+
+      // Determinăm metoda de plată pe baza valorii trimise din WP
+      // Conform configurării actuale a formularelor:
+      //  - "1" = plata cash/card la parcare (pay_on_site)
+      //  - "2" = plata online cu cardul
+      const resolvedPaymentMethod =
+        ro.metoda_de_plata === "1"
+          ? "pay_on_site"
+          : ro.metoda_de_plata === "2"
+          ? "card"
+          : undefined;
+
+      // Mapăm numărul de zile și suma totală, în special pentru plata la parcare
+      // Exemplu payload Jet:
+      //  - numar_de_zile_sumar: "3"
+      //  - plata_cash_card_la_parcare_sumar: "120.00"
+      //  - pret_total_sumar: "108.00"
+      // Pentru varianta pay_on_site folosim prioritar plata_cash_card_la_parcare_sumar.
+      const resolvedDays =
+        ro.numar_de_zile_sumar !== undefined
+          ? parseInt(String(ro.numar_de_zile_sumar), 10) || undefined
+          : undefined;
+
+      let resolvedAmount: number | string | undefined;
+      if (resolvedPaymentMethod === "pay_on_site") {
+        resolvedAmount =
+          ro.plata_cash_card_la_parcare_sumar ??
+          ro.pret_total_sumar ??
+          ro.plata_online_cu_cardul_sumar;
+      } else if (resolvedPaymentMethod === "card") {
+        resolvedAmount =
+          ro.pret_total_sumar ??
+          ro.plata_online_cu_cardul_sumar ??
+          ro.plata_cash_card_la_parcare_sumar;
+      } else {
+        resolvedAmount =
+          ro.pret_total_sumar ??
+          ro.plata_cash_card_la_parcare_sumar ??
+          ro.plata_online_cu_cardul_sumar;
+      }
+
       const mappedFromRo = {
         // chei obligatorii mapate
         licensePlate: ro.numar_inmatriculare ? normalizeLicensePlate(String(ro.numar_inmatriculare)) : undefined,
@@ -232,8 +273,10 @@ export async function POST(request: NextRequest) {
         startTime: ro.ora_intrare || undefined,
         endTime: ro.ora_iesire || undefined,
         // plată
-        paymentMethod:
-          ro.metoda_de_plata === "2" ? "pay_on_site" : (ro.metoda_de_plata ? "card" : undefined),
+        paymentMethod: resolvedPaymentMethod,
+        // sumar plată (zile + sumă totală)
+        days: resolvedDays,
+        amount: resolvedAmount,
         // date client
         firstName: ro.prenume || undefined,
         lastName: ro.nume || undefined,

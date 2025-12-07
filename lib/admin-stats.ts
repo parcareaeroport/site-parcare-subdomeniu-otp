@@ -36,6 +36,7 @@ export interface DailyEntryExit {
   source?: string // Pentru a identifica rezervările manuale
   actualTime?: string // Ora efectivă din LPR (HH:mm)
   delayMinutes?: number // Diferența (efectiv - programat) în minute
+  amount?: number // Valoarea de plată (acolo unde este disponibilă)
 }
 
 // Noi interfețe pentru statisticile suplimentare
@@ -622,7 +623,8 @@ export async function getDailyEntries(selectedDate: string): Promise<DailyEntryE
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
         source,
         actualTime,
-        delayMinutes
+        delayMinutes,
+        amount: typeof booking.amount === 'number' ? booking.amount : undefined,
       })
     })
 
@@ -681,7 +683,8 @@ export async function getDailyExits(selectedDate: string): Promise<DailyEntryExi
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
         source,
         actualTime,
-        delayMinutes
+        delayMinutes,
+        amount: typeof booking.amount === 'number' ? booking.amount : undefined,
       })
     })
 

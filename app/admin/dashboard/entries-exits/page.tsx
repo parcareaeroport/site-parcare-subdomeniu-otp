@@ -122,8 +122,8 @@ export default function EntriesExitsPage() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Intrări/Ieșiri</h1>
-          <p className="text-muted-foreground">
-            Statistici detaliate pentru intrările și ieșirile pe data selectată
+          <p className="text-muted-foreground text-xs md:text-sm">
+            Selectează o dată pentru a vedea toate intrările și ieșirile programate și efective (prezente și viitoare).
           </p>
         </div>
         <Button 
@@ -178,7 +178,7 @@ export default function EntriesExitsPage() {
         </div>
         
         {/* Afișează numărul de rezervări filtrate */}
-        {isToday && hidePastTimes && (dailyEntries.length !== filteredEntries.length || dailyExits.length !== filteredExits.length) && (
+          {isToday && hidePastTimes && (dailyEntries.length !== filteredEntries.length || dailyExits.length !== filteredExits.length) && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
             <div className="flex items-center space-x-2">
               <Clock className="h-4 w-4 text-yellow-600" />
@@ -219,12 +219,11 @@ export default function EntriesExitsPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora programată</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora efectivă (LPR)</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Întârziere</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ore întârziate</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -235,7 +234,6 @@ export default function EntriesExitsPage() {
                               {entry.time}
                             </span>
                           </td>
-                          <td className="py-3 px-2">{entry.actualTime || "-"}</td>
                           <td className="py-3 px-2">
                             <div className="flex items-center gap-2">
                               {entry.source === "manual" && (
@@ -293,12 +291,12 @@ export default function EntriesExitsPage() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora programată</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ora efectivă (LPR)</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
                         <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Întârziere</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ore întârziate</th>
+                        <th className="text-left py-2 px-2 font-medium text-gray-700">Valoarea de plată</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -309,7 +307,6 @@ export default function EntriesExitsPage() {
                               {exit.time}
                             </span>
                           </td>
-                          <td className="py-3 px-2">{exit.actualTime || "-"}</td>
                           <td className="py-3 px-2">
                             <div className="flex items-center gap-2">
                               {exit.source === "manual" && (
@@ -333,6 +330,25 @@ export default function EntriesExitsPage() {
                               : exit.delayMinutes > 0
                               ? formatDelay(exit.delayMinutes)
                               : `Mai devreme cu ${formatDelay(exit.delayMinutes)}`}
+                          </td>
+                          <td className="py-3 px-2">
+                            {typeof exit.amount === "number" ? (
+                              <span
+                                className={
+                                  exit.source === "pay_on_site" && exit.delayMinutes !== undefined && exit.delayMinutes > 180
+                                    ? "text-red-700 font-semibold"
+                                    : "text-gray-900"
+                                }
+                              >
+                                {exit.amount.toLocaleString("ro-RO", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}{" "}
+                                LEI
+                              </span>
+                            ) : (
+                              "-"
+                            )}
                           </td>
                         </tr>
                       ))}
