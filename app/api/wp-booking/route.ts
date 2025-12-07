@@ -390,16 +390,10 @@ export async function POST(request: NextRequest) {
       fd.append("clientTitle", String(firstName));
     }
 
-    const method = String(paymentMethod || "").toLowerCase();
-    const isPayOnSite = method === "pay_on_site";
-
-    const resolvedSource: "webhook" | "pay_on_site" = isPayOnSite
-      ? "pay_on_site"
-      : "webhook";
-
-    const resolvedPaymentStatus: PaymentStatus = isPayOnSite
-      ? "pending"
-      : "paid";
+    // Acest endpoint este dedicat fluxului "plata la parcare" (pay on site),
+    // deci NU mai trimitem nimic către Multipark. Lăsăm toată logica doar în Firebase.
+    const resolvedSource: "pay_on_site" = "pay_on_site";
+    const resolvedPaymentStatus: PaymentStatus = "pending";
 
     console.log(`[WP-BOOKING][${reqId}] Mapped booking core data:`, {
       licensePlate: normalizeLicensePlate(String(licensePlate)),
