@@ -549,7 +549,7 @@ export async function createBooking(formData: FormData) {
     if (error instanceof z.ZodError) {
       return {
         success: false,
-        message: `Validare eșuată: ${error.errors.map((e) => e.message).join(", ")}`,
+        message: `Validare eșuată: ${error.issues.map((e) => e.message).join(", ")}`,
       }
     }
     return {
