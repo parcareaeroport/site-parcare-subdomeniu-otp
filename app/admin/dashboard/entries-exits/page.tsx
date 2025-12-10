@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
@@ -9,140 +9,418 @@ import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
+import { doc, serverTimestamp, updateDoc, collection, getDocs, orderBy, query } from "firebase/firestore"
+import { db } from "@/lib/firebase"
+
+type EnrichedRow = DailyEntryExit & {
+  startDate?: string
+  endDate?: string
+  delayMinutesComputed?: number
+  amountDueText?: string
+  amountDueValue?: number
+  isLate?: boolean
+  autoCancelled?: boolean
+  isPayOnSite?: boolean
+  isOnlinePaid?: boolean
+}
+
+const BONUS_MINUTES_ONLINE = 60 // 1h bonus pentru plăți online
+const PAY_ON_SITE_CANCEL_AFTER_MIN = 180 // 3h
+const LATE_FEE_PER_DAY = 30 // lei / zi întârziere (online)
+const ONLINE_BONUS_MINUTES = 60
+
+type PriceEntry = {
+  days: number
+  standardPrice: number
+  discountedPrice?: number
+}
+
+function parseDateTime(date?: string, time?: string) {
+  if (!date || !time) return null
+  const asIso = `${date}T${time.length === 5 ? `${time}:00` : time}`
+  const d = new Date(asIso)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function formatDelay(minutes?: number) {
+  if (minutes === undefined || minutes === null) return "-"
+  if (minutes === 0) return "La timp"
+  const abs = Math.abs(minutes)
+  if (abs < 60) return `${minutes > 0 ? "" : "-"}${abs} min`
+  const h = Math.floor(abs / 60)
+  const m = abs % 60
+  const label = m === 0 ? `${h} h` : `${h} h ${m} min`
+  return minutes > 0 ? label : `- ${label}`
+}
+
+async function autoCancelPayOnSite(id: string) {
+  try {
+    await updateDoc(doc(db, "bookings", id), {
+      status: "cancelled_pay_on_site_timeout",
+      lastUpdated: serverTimestamp(),
+      cancelReason: "Depășire 3h la plată la parcare (auto)"
+    })
+  } catch (e) {
+    console.error("Failed to auto-cancel pay_on_site booking", e)
+  }
+}
 
 export default function EntriesExitsPage() {
   const [isClient, setIsClient] = useState(false)
-  
-  // State pentru intrări/ieșiri
+  const [activeTab, setActiveTab] = useState<"entries" | "exits">("entries")
+  const [includeFuture, setIncludeFuture] = useState(true)
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date()
-    return today.toISOString().split('T')[0] // YYYY-MM-DD format
+    return today.toISOString().split("T")[0]
   })
-  const [dailyEntries, setDailyEntries] = useState<DailyEntryExit[]>([])
-  const [dailyExits, setDailyExits] = useState<DailyEntryExit[]>([])
-  const [loadingDailyStats, setLoadingDailyStats] = useState(false)
-  
-  // State pentru filtrarea pe client
-  const [hidePastTimes, setHidePastTimes] = useState(true)
+  const [entries, setEntries] = useState<DailyEntryExit[]>([])
+  const [exits, setExits] = useState<DailyEntryExit[]>([])
+  const [loading, setLoading] = useState(false)
   const [currentTime, setCurrentTime] = useState("")
-
-  const formatDelay = (minutes?: number) => {
-    if (minutes === undefined || minutes === null) return "-"
-    const abs = Math.abs(minutes)
-    if (abs < 1) return "La timp"
-    if (abs < 60) return `${abs} min`
-    const h = Math.floor(abs / 60)
-    const m = abs % 60
-    if (m === 0) return `${h} h`
-    return `${h} h ${m} min`
+  const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
+  const [entriesView, setEntriesView] = useState<"both" | "main" | "late">("both")
+  const [exitsView, setExitsView] = useState<"both" | "main" | "late">("both")
+  const jumpToTab = (tab: "entries" | "exits") => {
+    setActiveTab(tab)
+    setEntriesView("both")
+    setExitsView("both")
+    setTimeout(() => {
+      const id = tab === "entries" ? "entries-main" : "exits-main"
+      const el = document.getElementById(id)
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+    }, 60)
+  }
+  const scrollToSection = (sectionId: string, tab: "entries" | "exits") => {
+    setActiveTab(tab)
+    if (tab === "entries") {
+      setEntriesView(sectionId === "entries-main" ? "main" : sectionId === "entries-late" ? "late" : "both")
+    } else {
+      setExitsView(sectionId === "exits-main" ? "main" : sectionId === "exits-late" ? "late" : "both")
+    }
+    setTimeout(() => {
+      const el = document.getElementById(sectionId)
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+    }, 60)
   }
 
+  useEffect(() => setIsClient(true), [])
+
   useEffect(() => {
-    setIsClient(true)
+    if (isClient) {
+      loadData()
+      loadPrices()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isClient, selectedDate, includeFuture])
+
+  useEffect(() => {
+    const tick = () => setCurrentTime(new Date().toTimeString().slice(0, 5))
+    tick()
+    const id = setInterval(tick, 60000)
+    return () => clearInterval(id)
   }, [])
 
-  useEffect(() => {
-    if (isClient && selectedDate) {
-      loadDailyStats(selectedDate)
-    }
-  }, [isClient, selectedDate])
-
-  // Actualizează ora curentă la fiecare minut
-  useEffect(() => {
-    const updateCurrentTime = () => {
-      const now = new Date()
-      setCurrentTime(now.toTimeString().slice(0, 5)) // HH:mm
-    }
-
-    updateCurrentTime() // Setează ora inițială
-    const interval = setInterval(updateCurrentTime, 60000) // Actualizează la fiecare minut
-
-    return () => clearInterval(interval)
-  }, [])
-
-  const loadDailyStats = async (date: string) => {
+  const loadData = async () => {
     try {
-      setLoadingDailyStats(true)
-      
-      // Încarcă intrările și ieșirile în paralel
-      const [entries, exits] = await Promise.all([
-        getDailyEntries(date),
-        getDailyExits(date)
+      setLoading(true)
+      const [e1, e2] = await Promise.all([
+        getDailyEntries(selectedDate, includeFuture),
+        getDailyExits(selectedDate, includeFuture)
       ])
-
-      setDailyEntries(entries)
-      setDailyExits(exits)
-      
-    } catch (error) {
-      console.error('Error loading daily stats:', error)
-      setDailyEntries([])
-      setDailyExits([])
+      setEntries(e1)
+      setExits(e2)
+    } catch (e) {
+      console.error("Error loading entries/exits", e)
+      setEntries([])
+      setExits([])
     } finally {
-      setLoadingDailyStats(false)
+      setLoading(false)
     }
   }
 
-  // Funcție pentru filtrarea intrărilor pe baza orei curente
-  const getFilteredEntries = () => {
-    if (!hidePastTimes) return dailyEntries
-    
-    const today = new Date().toISOString().split('T')[0]
-    if (selectedDate !== today) return dailyEntries // Doar pentru ziua curentă
-    
-    return dailyEntries.filter(entry => {
-      if (entry.time === 'N/A') return true
-      return entry.time >= currentTime
-    })
+  const loadPrices = async () => {
+    try {
+      const q = query(collection(db, "prices"), orderBy("days"))
+      const snap = await getDocs(q)
+      const items: PriceEntry[] = snap.docs.map((d) => {
+        const data: any = d.data()
+        return {
+          days: Number(data.days || 0),
+          standardPrice: Number(data.standardPrice || 0),
+          discountedPrice: data.discountedPrice ? Number(data.discountedPrice) : undefined
+        }
+      }).filter((p) => p.days > 0 && p.standardPrice > 0)
+      setPriceTable(items)
+    } catch (e) {
+      console.error("Error loading prices", e)
+      setPriceTable([])
+    }
   }
 
-  // Funcție pentru filtrarea ieșirilor pe baza orei curente
-  const getFilteredExits = () => {
-    if (!hidePastTimes) return dailyExits
-    
-    const today = new Date().toISOString().split('T')[0]
-    if (selectedDate !== today) return dailyExits // Doar pentru ziua curentă
-    
-    return dailyExits.filter(exit => {
-      if (exit.time === 'N/A') return true
-      return exit.time >= currentTime
-    })
+  const enrichRow = (row: DailyEntryExit, kind: "entry" | "exit"): EnrichedRow => {
+    const withDates = row as Partial<EnrichedRow>
+    const scheduledDate = kind === "entry" ? withDates.startDate ?? selectedDate : withDates.endDate ?? selectedDate
+    const scheduledTime = row.time
+    const scheduled = parseDateTime(scheduledDate, scheduledTime)
+    const now = new Date()
+    let delay = row.delayMinutes
+
+    if (delay === undefined && scheduled) {
+      const diffMin = Math.round((now.getTime() - scheduled.getTime()) / (1000 * 60))
+      delay = diffMin > 0 ? diffMin : 0
+    }
+
+    let amountDueText: string | undefined
+    let amountDueValue: number | undefined
+    let autoCancelled = false
+    const raw: any = row as any
+    const isPayOnSite = row.source === "pay_on_site"
+    const isOnlinePaid =
+      raw.paymentStatus === "paid" ||
+      raw.status === "confirmed_paid" ||
+      raw.status === "paid" ||
+      raw.status === "confirmed"
+
+    if (kind === "exit" && scheduled) {
+      const endBase = scheduled.getTime()
+
+      if (isPayOnSite) {
+        const overdueMin = Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
+        // Calculează baza în funcție de durata rezervării
+        const startDate = withDates.startDate
+        const startTime = raw.startTime || row.time
+        let durationDays = 1
+        const endDateVal = withDates.endDate
+        const endTimeVal = (withDates as any).endTime
+        if (startDate && startTime && endDateVal && endTimeVal) {
+          const start = parseDateTime(startDate, startTime)
+          const end = parseDateTime(endDateVal, endTimeVal)
+          if (start && end && end.getTime() > start.getTime()) {
+            durationDays = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000))
+          }
+        }
+        const basePrice = (() => {
+          if (priceTable.length === 0) return 0
+          const sorted = [...priceTable].sort((a, b) => a.days - b.days)
+          const match = sorted.find((p) => p.days >= durationDays) || sorted[sorted.length - 1]
+          if (!match) return 0
+          const perDay = (match.discountedPrice ?? match.standardPrice) / match.days
+          if (match.days >= durationDays) {
+            return perDay * durationDays
+          }
+          return perDay * durationDays
+        })()
+        let extra = 0
+        if (overdueMin > 0 && priceTable.length > 0) {
+          const perDay = (() => {
+            const last = [...priceTable].sort((a, b) => a.days - b.days).slice(-1)[0]
+            if (!last) return 0
+            return (last.discountedPrice ?? last.standardPrice) / last.days
+          })()
+          const extraDays = Math.ceil(overdueMin / (60 * 24))
+          extra = perDay * extraDays
+        }
+        const total = basePrice + extra
+        if (total > 0) {
+          amountDueValue = total
+          amountDueText = `${total.toFixed(2)} LEI`
+        } else if (overdueMin > 0) {
+          amountDueText = "Calcul conform tarifelor MULTIPARK/WP"
+        }
+        if (overdueMin > PAY_ON_SITE_CANCEL_AFTER_MIN) {
+          autoCancelled = true
+          autoCancelPayOnSite(row.id).catch(() => {})
+        }
+      } else {
+        const bonusMs = ONLINE_BONUS_MINUTES * 60 * 1000
+        const effectiveEnd = endBase + bonusMs
+        const overMs = now.getTime() - effectiveEnd
+        if (overMs > 0) {
+          const daysLate = Math.ceil(overMs / (24 * 60 * 60 * 1000))
+          amountDueValue = daysLate * LATE_FEE_PER_DAY
+          amountDueText = `${amountDueValue.toFixed(2)} LEI`
+        } else {
+          // achitat
+          amountDueText = "Achitat"
+        }
+      }
+    }
+
+    return {
+      ...(row as any),
+      startDate: withDates.startDate,
+      endDate: withDates.endDate,
+      delayMinutesComputed: delay,
+      amountDueText,
+      amountDueValue,
+      isLate: delay !== undefined && delay > 0,
+      autoCancelled,
+      isPayOnSite,
+      isOnlinePaid
+    }
   }
 
-  const filteredEntries = getFilteredEntries()
-  const filteredExits = getFilteredExits()
+  const enrichedEntries = useMemo(() => entries.map((e) => enrichRow(e, "entry")), [entries])
+  const enrichedExits = useMemo(() => exits.map((e) => enrichRow(e, "exit")), [exits])
 
-  if (!isClient) {
-    return null
-  }
+  const lateEntries = enrichedEntries.filter((e) => e.isLate)
+  const lateExits = enrichedExits.filter((e) => e.isLate)
 
-  const isToday = selectedDate === new Date().toISOString().split('T')[0]
+  if (!isClient) return null
+
+  const renderTable = (rows: EnrichedRow[], kind: "entry" | "exit") => {
+    const cardBg = kind === "entry" ? "bg-blue-50 border-blue-200" : "bg-amber-50 border-amber-200"
+    return (
+    <>
+      {/* Desktop table */}
+      <div className="overflow-x-auto hidden md:block">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200">
+              <th className="text-left py-2 px-2 font-semibold">ORA</th>
+              <th className="text-left py-2 px-2 font-semibold">NR ÎNMATRICULARE</th>
+              <th className="text-left py-2 px-2 font-semibold">TEL</th>
+              <th className="text-left py-2 px-2 font-semibold">NR PERSOANE</th>
+              <th className="text-left py-2 px-2 font-semibold">Ore întârziate</th>
+              {kind === "exit" && <th className="text-left py-2 px-2 font-semibold">Valoarea de plată</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
+                <td className="py-3 px-2 font-medium">
+                  <span className="font-semibold">{row.time}</span>
+                </td>
+                <td className="py-3 px-2">
+                  <div className="flex flex-col items-start gap-1">
+                    {row.source === "manual" && (
+                      <Badge
+                        variant="outline"
+                        className="text-pink-700 border-pink-400 bg-pink-100 text-[10px] leading-tight whitespace-nowrap px-2 py-1"
+                      >
+                        MANUAL
+                      </Badge>
+                    )}
+                    {row.source === "pay_on_site" && (
+                      <Badge
+                        variant="outline"
+                        className="text-orange-700 border-orange-400 bg-orange-100 text-[10px] leading-tight whitespace-nowrap px-2 py-1"
+                      >
+                        PLATĂ LA PARCARE
+                      </Badge>
+                    )}
+                    <span className="font-semibold">{row.licensePlate}</span>
+                  </div>
+                </td>
+                <td className="py-3 px-2">{row.phone}</td>
+                <td className="py-3 px-2 text-center">{row.numberOfPersons}</td>
+                <td className={`py-3 px-2 ${row.delayMinutesComputed && row.delayMinutesComputed > 0 ? "text-red-700 font-semibold" : ""}`}>
+                  {row.delayMinutesComputed !== undefined ? formatDelay(row.delayMinutesComputed) : "-"}
+                </td>
+              {kind === "exit" && (
+                <td className="py-3 px-2">
+                  {row.amountDueText ? (
+                    row.amountDueText.toLowerCase().includes("achitat") ? (
+                      <span className="text-green-700 font-semibold">Achitat</span>
+                    ) : (
+                      <span className="text-red-700 font-semibold">{row.amountDueText}</span>
+                    )
+                  ) : typeof row.amount === "number" ? (
+                    <span className="text-red-700 font-semibold">{row.amount.toFixed(2)} LEI</span>
+                  ) : row.isOnlinePaid ? (
+                    <span className="text-green-700 font-semibold">Achitat</span>
+                  ) : (
+                    "-"
+                  )}
+                  {row.autoCancelled && (
+                    <div className="text-xs text-red-700 font-semibold">Anulat automat (depășit 3h)</div>
+                  )}
+                </td>
+              )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Mobile cards */}
+      <div className="space-y-3 md:hidden">
+        {rows.map((row) => (
+          <div key={row.id} className={`rounded-lg border p-3 shadow-sm ${cardBg}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                {row.source === "manual" && (
+                  <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
+                    MANUAL
+                  </Badge>
+                )}
+                {row.source === "pay_on_site" && (
+                  <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
+                    PLATĂ LA PARCARE
+                  </Badge>
+                )}
+                <span className="font-semibold text-base">{row.licensePlate}</span>
+              </div>
+              <span className="text-sm font-semibold">{row.time}</span>
+            </div>
+
+            <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+              <div className="text-muted-foreground">Telefon</div>
+              <div className="text-right text-gray-900">{row.phone || "-"}</div>
+
+              <div className="text-muted-foreground">Nr persoane</div>
+              <div className="text-right text-gray-900">{row.numberOfPersons}</div>
+
+              <div className="text-muted-foreground">Întârziere</div>
+              <div className={`text-right ${row.delayMinutesComputed && row.delayMinutesComputed > 0 ? "text-red-700 font-semibold" : "text-gray-900"}`}>
+                {row.delayMinutesComputed !== undefined ? formatDelay(row.delayMinutesComputed) : "-"}
+              </div>
+
+              {kind === "exit" && (
+                <>
+                  <div className="text-muted-foreground">De plată</div>
+                  <div className="text-right text-gray-900">
+                    {row.amountDueText
+                      ? row.amountDueText.toLowerCase().includes("achitat")
+                        ? <span className="text-green-700 font-semibold">Achitat</span>
+                        : <span className="text-red-700 font-semibold">{row.amountDueText}</span>
+                      : typeof row.amount === "number"
+                        ? <span className="text-red-700 font-semibold">{row.amount.toFixed(2)} LEI</span>
+                        : row.isOnlinePaid
+                          ? <span className="text-green-700 font-semibold">Achitat</span>
+                          : "-"
+                    }
+                    {row.autoCancelled && <div className="text-xs text-red-700 font-semibold">Anulat auto (3h)</div>}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  )}
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
+    <div className="space-y-6 pb-24 md:pb-0">
+      <div className="flex justify-between items-center gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Intrări/Ieșiri</h1>
           <p className="text-muted-foreground text-xs md:text-sm">
-            Selectează o dată pentru a vedea toate intrările și ieșirile programate și efective (prezente și viitoare).
+            Selectează data (ex: 25.10.2025) și vezi intrările/ieșirile prezente și viitoare.
           </p>
         </div>
-        <Button 
-          onClick={() => loadDailyStats(selectedDate)} 
-          disabled={loadingDailyStats}
-          variant="outline"
-          size="sm"
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${loadingDailyStats ? 'animate-spin' : ''}`} />
-          {loadingDailyStats ? 'Se încarcă...' : 'Actualizează'}
+        <Button onClick={loadData} disabled={loading} variant="outline" size="sm">
+          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          {loading ? "Se încarcă..." : "Actualizează"}
         </Button>
       </div>
 
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 justify-between">
+      <div className="flex flex-col md:flex-row gap-4 md:items-end">
           <div>
-            <label htmlFor="date-select" className="block text-sm font-medium text-gray-700 mb-2">
-              Selectează data:
-            </label>
+          <Label htmlFor="date-select" className="block text-sm font-medium text-gray-700 mb-2">
+            Selectează data
+          </Label>
             <input
               id="date-select"
               type="date"
@@ -151,455 +429,106 @@ export default function EntriesExitsPage() {
               className="px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary date-input-dd-mm-yyyy"
             />
           </div>
-          
-          {/* Toggle pentru ascunderea trecutelor */}
-          {isToday && (
-            <div className="flex items-center space-x-3 bg-blue-50 p-3 rounded-lg border border-blue-200">
-              <Clock className="h-4 w-4 text-blue-600" />
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="hide-past-times"
-                  checked={hidePastTimes}
-                  onCheckedChange={setHidePastTimes}
-                />
-                <Label htmlFor="hide-past-times" className="text-sm font-medium text-blue-700">
-                  Ascunde orele trecute
-                </Label>
-              </div>
-              <div className="text-xs text-blue-600 font-mono">
-                Ora curentă: {currentTime}
-              </div>
-            </div>
-          )}
-          
-          {loadingDailyStats && (
-            <div className="text-sm text-gray-500">Se încarcă...</div>
-          )}
         </div>
         
-        {/* Afișează numărul de rezervări filtrate */}
-          {isToday && hidePastTimes && (dailyEntries.length !== filteredEntries.length || dailyExits.length !== filteredExits.length) && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-            <div className="flex items-center space-x-2">
-              <Clock className="h-4 w-4 text-yellow-600" />
-              <span className="text-sm text-yellow-700 font-medium">
-                Filtrare activă: Se afișează doar orele viitoare
-              </span>
-            </div>
-            <div className="text-xs text-yellow-600 mt-1">
-              Intrări: {filteredEntries.length}/{dailyEntries.length} • 
-              Ieșiri: {filteredExits.length}/{dailyExits.length}
-            </div>
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => {
+          setActiveTab(v as "entries" | "exits")
+          setEntriesView("both")
+          setExitsView("both")
+        }}
+      >
+        <TabsList className="grid w-full grid-cols-2 md:static fixed bottom-0 left-0 z-30 bg-white border-t shadow md:border-none md:shadow-none">
+          <TabsTrigger
+            value="entries"
+            className="data-[state=active]:bg-blue-50 data-[state=active]:text-blue-900 data-[state=active]:border-blue-200 md:border md:border-transparent"
+          >
+            Intrări
+          </TabsTrigger>
+          <TabsTrigger
+            value="exits"
+            className="data-[state=active]:bg-amber-50 data-[state=active]:text-amber-900 data-[state=active]:border-amber-200 md:border md:border-transparent"
+          >
+            Ieșiri
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="entries" className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-2">
+            {entriesView !== "late" && (
+              <Card className="h-full border-blue-200 bg-blue-50" id="entries-main">
+            <CardHeader>
+                <CardTitle>Intrări</CardTitle>
+            </CardHeader>
+            <CardContent>
+                {enrichedEntries.length === 0 ? <p className="text-gray-500">Nu există intrări.</p> : renderTable(enrichedEntries, "entry")}
+            </CardContent>
+          </Card>
+            )}
+
+            {entriesView !== "main" && (
+              <Card className="h-full border-blue-200 bg-blue-50" id="entries-late">
+            <CardHeader>
+                <CardTitle>Intrări întârziate</CardTitle>
+             
+            </CardHeader>
+            <CardContent>
+                {lateEntries.length === 0 ? <p className="text-gray-500">Nu există intrări întârziate.</p> : renderTable(lateEntries, "entry")}
+            </CardContent>
+          </Card>
+            )}
+        </div>
+        </TabsContent>
+
+        <TabsContent value="exits" className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-2">
+            {exitsView !== "late" && (
+              <Card className="h-full border-amber-200 bg-amber-50" id="exits-main">
+                <CardHeader>
+                <CardTitle>Ieșiri</CardTitle>
+          
+                </CardHeader>
+                <CardContent>
+                {enrichedExits.length === 0 ? <p className="text-gray-500">Nu există ieșiri.</p> : renderTable(enrichedExits, "exit")}
+                </CardContent>
+              </Card>
+            )}
+            
+            {exitsView !== "main" && (
+              <Card className="h-full border-amber-200 bg-amber-50" id="exits-late">
+                <CardHeader>
+                <CardTitle>Ieșiri întârziate</CardTitle>
+                </CardHeader>
+                <CardContent>
+                {lateExits.length === 0 ? <p className="text-gray-500">Nu există ieșiri întârziate.</p> : renderTable(lateExits, "exit")}
+                </CardContent>
+              </Card>
+            )}
           </div>
-        )}
-        
-        {/* Desktop Layout - Side by Side */}
-        <div className="hidden lg:grid gap-6 lg:grid-cols-2">
-          {/* Tabelul pentru intrări */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-green-600">
-                INTRĂRI {isToday && hidePastTimes && `(${filteredEntries.length}/${dailyEntries.length})`}
-              </CardTitle>
-              <CardDescription>
-                Rezervări care încep în data de {new Date(selectedDate).toLocaleDateString('ro-RO')}
-                {isToday && hidePastTimes && " - doar orele viitoare"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {filteredEntries.length === 0 ? (
-                <p className="text-gray-500 text-center py-4">
-                  {isToday && hidePastTimes && dailyEntries.length > 0 
-                    ? "Nu există intrări pentru orele viitoare." 
-                    : "Nu există intrări pentru această dată."
-                  }
-                </p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ore întârziate</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredEntries.map((entry) => (
-                        <tr key={entry.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-2 font-medium">
-                            <span className={isToday && entry.time < currentTime ? "text-gray-400 line-through" : ""}>
-                              {entry.time}
-                            </span>
-                          </td>
-                          <td className="py-3 px-2">
-                            <div className="flex items-center gap-2">
-                              {entry.source === "manual" && (
-                                <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
-                                  MANUAL
-                                </Badge>
-                              )}
-                              {entry.source === "pay_on_site" && (
-                                <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
-                                  PLATĂ LA PARCARE
-                                </Badge>
-                              )}
-                              {entry.licensePlate}
-                            </div>
-                          </td>
-                          <td className="py-3 px-2">{entry.phone}</td>
-                          <td className="py-3 px-2 text-center">{entry.numberOfPersons}</td>
-                          <td className="py-3 px-2">
-                            {entry.delayMinutes === undefined || entry.delayMinutes === null
-                              ? "-"
-                              : entry.delayMinutes > 0
-                              ? formatDelay(entry.delayMinutes)
-                              : `Mai devreme cu ${formatDelay(entry.delayMinutes)}`}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Tabelul pentru ieșiri */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-red-600">
-                IEȘIRI {isToday && hidePastTimes && `(${filteredExits.length}/${dailyExits.length})`}
-              </CardTitle>
-              <CardDescription>
-                Rezervări care se termină în data de {new Date(selectedDate).toLocaleDateString('ro-RO')}
-                {isToday && hidePastTimes && " - doar orele viitoare"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {filteredExits.length === 0 ? (
-                <p className="text-gray-500 text-center py-4">
-                  {isToday && hidePastTimes && dailyExits.length > 0 
-                    ? "Nu există ieșiri pentru orele viitoare." 
-                    : "Nu există ieșiri pentru această dată."
-                  }
-                </p>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Ore întârziate</th>
-                        <th className="text-left py-2 px-2 font-medium text-gray-700">Valoarea de plată</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredExits.map((exit) => (
-                        <tr key={exit.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-2 font-medium">
-                            <span className={isToday && exit.time < currentTime ? "text-gray-400 line-through" : ""}>
-                              {exit.time}
-                            </span>
-                          </td>
-                          <td className="py-3 px-2">
-                            <div className="flex items-center gap-2">
-                              {exit.source === "manual" && (
-                                <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
-                                  MANUAL
-                                </Badge>
-                              )}
-                              {exit.source === "pay_on_site" && (
-                                <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
-                                  PLATĂ LA PARCARE
-                                </Badge>
-                              )}
-                              {exit.licensePlate}
-                            </div>
-                          </td>
-                          <td className="py-3 px-2">{exit.phone}</td>
-                          <td className="py-3 px-2 text-center">{exit.numberOfPersons}</td>
-                          <td className="py-3 px-2">
-                            {exit.delayMinutes === undefined || exit.delayMinutes === null
-                              ? "-"
-                              : exit.delayMinutes > 0
-                              ? formatDelay(exit.delayMinutes)
-                              : `Mai devreme cu ${formatDelay(exit.delayMinutes)}`}
-                          </td>
-                          <td className="py-3 px-2">
-                            {typeof exit.amount === "number" ? (
-                              <span
-                                className={
-                                  exit.source === "pay_on_site" && exit.delayMinutes !== undefined && exit.delayMinutes > 180
-                                    ? "text-red-700 font-semibold"
-                                    : "text-gray-900"
-                                }
-                              >
-                                {exit.amount.toLocaleString("ro-RO", {
-                                  minimumFractionDigits: 2,
-                                  maximumFractionDigits: 2,
-                                })}{" "}
-                                LEI
-                              </span>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Mobile & Tablet Layout - Tabs */}
-        <div className="lg:hidden">
-          <Tabs defaultValue="entries" className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="entries" className="text-green-700 data-[state=active]:bg-green-100 data-[state=active]:text-green-800">
-                INTRĂRI ({filteredEntries.length})
-              </TabsTrigger>
-              <TabsTrigger value="exits" className="text-red-700 data-[state=active]:bg-red-100 data-[state=active]:text-red-800">
-                IEȘIRI ({filteredExits.length})
-              </TabsTrigger>
-            </TabsList>
-            
-            <TabsContent value="entries" className="mt-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-green-600">
-                    INTRĂRI {isToday && hidePastTimes && `(${filteredEntries.length}/${dailyEntries.length})`}
-                  </CardTitle>
-                  <CardDescription>
-                    Rezervări care încep în data de {new Date(selectedDate).toLocaleDateString('ro-RO')}
-                    {isToday && hidePastTimes && " - doar orele viitoare"}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {filteredEntries.length === 0 ? (
-                    <p className="text-gray-500 text-center py-4">
-                      {isToday && hidePastTimes && dailyEntries.length > 0 
-                        ? "Nu există intrări pentru orele viitoare." 
-                        : "Nu există intrări pentru această dată."
-                      }
-                    </p>
-                  ) : (
-                    <>
-                      {/* Tablet Table */}
-                      <div className="hidden md:block overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-gray-200">
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {filteredEntries.map((entry) => (
-                              <tr key={entry.id} className="border-b border-gray-100 hover:bg-gray-50">
-                                <td className="py-3 px-2 font-medium">
-                                  <span className={isToday && entry.time < currentTime ? "text-gray-400 line-through" : ""}>
-                                    {entry.time}
-                                  </span>
-                                </td>
-                                <td className="py-3 px-2">
-                                  <div className="flex items-center gap-2">
-                                    {entry.source === "manual" && (
-                                      <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
-                                        MANUAL
-                                      </Badge>
-                                    )}
-                                    {entry.source === "pay_on_site" && (
-                                      <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
-                                        PLATĂ LA PARCARE
-                                      </Badge>
-                                    )}
-                                    {entry.licensePlate}
-                                  </div>
-                                </td>
-                                <td className="py-3 px-2">{entry.phone}</td>
-                                <td className="py-3 px-2 text-center">{entry.numberOfPersons}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Mobile Cards */}
-                      <div className="md:hidden space-y-3">
-                        {filteredEntries.map((entry) => (
-                          <div key={entry.id} className="bg-green-50 border border-green-200 rounded-lg p-4 hover:bg-green-100 transition-colors">
-                            <div className="flex justify-between items-start mb-3">
-                              <div className="flex items-center space-x-2">
-                                <span className={`text-2xl font-bold text-green-700 ${isToday && entry.time < currentTime ? "text-gray-400 line-through" : ""}`}>
-                                  {entry.time}
-                                </span>
-                                <div className="h-2 w-2 bg-green-500 rounded-full"></div>
-                              </div>
-                              <span className="bg-green-600 text-white text-xs font-medium px-2 py-1 rounded-full">
-                                {entry.numberOfPersons} pers.
-                              </span>
-                            </div>
-                            <div className="space-y-2">
-                              {/* Badge-uri pe rând separat */}
-                              {(entry.source === "manual" || entry.source === "pay_on_site") && (
-                                <div className="flex justify-end">
-                                  {entry.source === "manual" && (
-                                    <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
-                                      MANUAL
-                                    </Badge>
-                                  )}
-                                  {entry.source === "pay_on_site" && (
-                                    <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
-                                      PLATĂ LA PARCARE
-                                    </Badge>
-                                  )}
-                                </div>
-                              )}
-                              {/* Număr auto pe rând separat */}
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs text-green-600 font-medium uppercase tracking-wide">Număr auto</span>
-                                <span className="font-semibold text-gray-900">{entry.licensePlate}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs text-green-600 font-medium uppercase tracking-wide">Telefon</span>
-                                <span className="text-gray-700">{entry.phone}</span>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-            
-            <TabsContent value="exits" className="mt-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-red-600">
-                    IEȘIRI {isToday && hidePastTimes && `(${filteredExits.length}/${dailyExits.length})`}
-                  </CardTitle>
-                  <CardDescription>
-                    Rezervări care se termină în data de {new Date(selectedDate).toLocaleDateString('ro-RO')}
-                    {isToday && hidePastTimes && " - doar orele viitoare"}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {filteredExits.length === 0 ? (
-                    <p className="text-gray-500 text-center py-4">
-                      {isToday && hidePastTimes && dailyExits.length > 0 
-                        ? "Nu există ieșiri pentru orele viitoare." 
-                        : "Nu există ieșiri pentru această dată."
-                      }
-                    </p>
-                  ) : (
-                    <>
-                      {/* Tablet Table */}
-                      <div className="hidden md:block overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-gray-200">
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">ORA</th>
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">NR ÎNMATRICULARE</th>
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">TEL</th>
-                              <th className="text-left py-2 px-2 font-medium text-gray-700">NR PERSOANE</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {filteredExits.map((exit) => (
-                              <tr key={exit.id} className="border-b border-gray-100 hover:bg-gray-50">
-                                <td className="py-3 px-2 font-medium">
-                                  <span className={isToday && exit.time < currentTime ? "text-gray-400 line-through" : ""}>
-                                    {exit.time}
-                                  </span>
-                                </td>
-                                <td className="py-3 px-2">
-                                  <div className="flex items-center gap-2">
-                                    {exit.source === "manual" && (
-                                      <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
-                                        MANUAL
-                                      </Badge>
-                                    )}
-                                    {exit.source === "pay_on_site" && (
-                                      <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
-                                        PLATĂ LA PARCARE
-                                      </Badge>
-                                    )}
-                                    {exit.licensePlate}
-                                  </div>
-                                </td>
-                                <td className="py-3 px-2">{exit.phone}</td>
-                                <td className="py-3 px-2 text-center">{exit.numberOfPersons}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Mobile Cards */}
-                      <div className="md:hidden space-y-3">
-                        {filteredExits.map((exit) => (
-                          <div key={exit.id} className="bg-red-50 border border-red-200 rounded-lg p-4 hover:bg-red-100 transition-colors">
-                            <div className="flex justify-between items-start mb-3">
-                              <div className="flex items-center space-x-2">
-                                <span className={`text-2xl font-bold text-red-700 ${isToday && exit.time < currentTime ? "text-gray-400 line-through" : ""}`}>
-                                  {exit.time}
-                                </span>
-                                <div className="h-2 w-2 bg-red-500 rounded-full"></div>
-                              </div>
-                              <span className="bg-red-600 text-white text-xs font-medium px-2 py-1 rounded-full">
-                                {exit.numberOfPersons} pers.
-                              </span>
-                            </div>
-                            <div className="space-y-2">
-                              {/* Badge-uri pe rând separat */}
-                              {(exit.source === "manual" || exit.source === "pay_on_site") && (
-                                <div className="flex justify-end">
-                                  {exit.source === "manual" && (
-                                    <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
-                                      MANUAL
-                                    </Badge>
-                                  )}
-                                  {exit.source === "pay_on_site" && (
-                                    <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
-                                      PLATĂ LA PARCARE
-                                    </Badge>
-                                  )}
-                                </div>
-                              )}
-                              {/* Număr auto pe rând separat */}
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs text-red-600 font-medium uppercase tracking-wide">Număr auto</span>
-                                <span className="font-semibold text-gray-900">{exit.licensePlate}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs text-red-600 font-medium uppercase tracking-wide">Telefon</span>
-                                <span className="text-gray-700">{exit.phone}</span>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
             </TabsContent>
           </Tabs>
+
+      {/* Bottom quick-nav for mobile */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t shadow">
+        <div className="grid grid-cols-2 text-base font-semibold divide-x">
+          <button
+            type="button"
+            className="py-3 flex flex-col items-center justify-center bg-blue-50"
+            onClick={() => jumpToTab("entries")}
+          >
+            Intrări
+          </button>
+          <button
+            type="button"
+            className="py-3 flex flex-col items-center justify-center bg-amber-50"
+            onClick={() => jumpToTab("exits")}
+          >
+            Ieșiri
+          </button>
         </div>
       </div>
     </div>
   )
 } 
+

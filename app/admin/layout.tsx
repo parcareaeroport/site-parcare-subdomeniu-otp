@@ -5,7 +5,7 @@ import Image from "next/image"
 import { useRouter, usePathname } from "next/navigation"
 import { AuthProvider, useAuth } from "@/context/auth-context"
 import { Button } from "@/components/ui/button"
-import { LayoutDashboard, ListTree, LogOut, Tag, Car, Loader2, RefreshCw, Menu, ArrowLeftRight } from "lucide-react"
+import { LayoutDashboard, ListTree, LogOut, Tag, Car, Loader2, RefreshCw, Menu, ArrowLeftRight, ShieldCheck } from "lucide-react"
 
 function AdminLayoutContent({ children }: { children: ReactNode }) {
   const { user, loading, isAdmin, signOut } = useAuth()
@@ -67,8 +67,10 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
       { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
       { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
+      { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
       { href: "/admin/dashboard/statistics", label: "Statistici", icon: RefreshCw },
       { href: "/admin/dashboard/prices", label: "Prețuri", icon: Tag },
+      { href: "/admin/dashboard/whitelist", label: "Numere whitelist", icon: ShieldCheck },
       { href: "/admin/dashboard/api-test", label: "Test API", icon: ListTree },
     ] : [
       { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },

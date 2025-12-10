@@ -297,10 +297,26 @@ async function saveCompleteBookingToFirestore(bookingData: CompleteBookingData):
       amount: bookingData.amount
     })
     
+    const shouldIncrementOccupancy =
+      bookingData.apiSuccess &&
+      (bookingData.source === "pay_on_site" ||
+        bookingData.paymentStatus === "paid" ||
+        bookingData.status === "confirmed_paid")
+
+    const occupancyFields = shouldIncrementOccupancy
+      ? {
+          occupancyReserved: true,
+          occupancyIncremented: true,
+          occupancyIncrementedAt: serverTimestamp(),
+          occupancyAt: serverTimestamp(),
+        }
+      : {}
+
     // Filtrează câmpurile undefined pentru a fi compatibil cu Firestore
     const cleanedData = Object.fromEntries(
       Object.entries({
         ...bookingData,
+        ...occupancyFields,
         createdAt: serverTimestamp(),
         lastUpdated: serverTimestamp()
       }).filter(([_, value]) => value !== undefined)
@@ -338,6 +354,35 @@ async function saveCompleteBookingToFirestore(bookingData: CompleteBookingData):
       } catch (statsError) {
         console.error("⚠️ Stats update failed (non-critical):", statsError)
         // Nu eșuează salvarea booking-ului din cauza erorii de stats
+      }
+    }
+
+    // Incrementează ocuparea live dacă este eligibil (online sau pay-on-site)
+    if (shouldIncrementOccupancy) {
+      try {
+        const occupancyDocRef = doc(db, "config", "parkingLive")
+        await setDoc(
+          occupancyDocRef,
+          { occupiedCount: 0, lastUpdated: serverTimestamp() },
+          { merge: true }
+        )
+        await updateDoc(occupancyDocRef, {
+          occupiedCount: increment(1),
+          lastUpdated: serverTimestamp(),
+          lastChange: {
+            type: "entry_booking",
+            bookingId: docRef.id,
+            plateNumber: bookingData.licensePlate,
+            source: bookingData.source || "booking_create",
+            at: new Date().toISOString(),
+          },
+        })
+        console.log("🚗 Occupancy incremented at booking creation", {
+          bookingId: docRef.id,
+          plate: bookingData.licensePlate,
+        })
+      } catch (occErr) {
+        console.error("⚠️ Failed to increment live occupancy on booking create", occErr)
       }
     }
     
@@ -995,6 +1040,7 @@ export async function cancelBooking(bookingNumber: string) {
 export async function cleanupExpiredBookings(): Promise<{ cleanedCount: number, errors: string[] }> {
   const errors: string[] = []
   let cleanedCount = 0
+  let autoExitedPayOnSite = 0
   
   try {
     const now = new Date()
@@ -1065,9 +1111,67 @@ export async function cleanupExpiredBookings(): Promise<{ cleanedCount: number, 
       }
     }
     
-    console.log(`🧹 Cleanup completed: ${cleanedCount} bookings marked as expired, ${errors.length} errors`)
+    // Pay-on-site auto-exit după 3h fără LPR
+    try {
+      const PAY_ON_SITE_TIMEOUT_MIN = 180
+      const posQuery = query(bookingsRef, where('status', '==', 'confirmed_pay_on_site'))
+      const posSnap = await getDocs(posQuery)
+      for (const docSnap of posSnap.docs) {
+        const b = docSnap.data() as any
+        const startDate = b.startDate
+        const startTime = b.startTime
+        if (!startDate || !startTime) continue
+        const startDt = new Date(`${startDate}T${startTime}:00`)
+        if (isNaN(startDt.getTime())) continue
+        if (b.lpr?.isInside === true) continue
+        const diffMin = Math.round((now.getTime() - startDt.getTime()) / (1000 * 60))
+        if (diffMin <= PAY_ON_SITE_TIMEOUT_MIN) continue
+
+        const updates: Record<string, any> = {
+          status: 'cancelled_pay_on_site_timeout',
+          cancelReason: 'Auto-exit: peste 3h fără LPR (pay on site)',
+          autoExitedAt: serverTimestamp(),
+          lastUpdated: serverTimestamp(),
+          "lpr.isInside": false,
+        }
+
+        // Decrementăm occupancy o singură dată dacă a fost incrementat la creare
+        const shouldDecrementOcc = b.occupancyIncremented === true && b.occupancyDecremented !== true
+        if (shouldDecrementOcc) {
+          updates["occupancyDecremented"] = true
+          updates["occupancyDecrementedAt"] = serverTimestamp()
+          try {
+            const occupancyDocRef = doc(db, "config", "parkingLive")
+            await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+            await updateDoc(occupancyDocRef, {
+              occupiedCount: increment(-1),
+              lastUpdated: serverTimestamp(),
+              lastChange: {
+                type: "exit_pay_on_site_timeout",
+                bookingId: docSnap.id,
+                plateNumber: b.licensePlate,
+                at: new Date().toISOString(),
+              },
+            })
+          } catch (occErr) {
+            errors.push(`Occupancy decrement failed for ${docSnap.id}: ${occErr instanceof Error ? occErr.message : String(occErr)}`)
+            console.error('❌ Occupancy decrement failed for pay_on_site timeout', occErr)
+          }
+        }
+
+        await updateDoc(docSnap.ref, updates)
+        autoExitedPayOnSite++
+        console.log('⏱️ Auto-exit pay_on_site after 3h without LPR', { bookingId: docSnap.id, diffMin })
+      }
+    } catch (posError) {
+      const errMsg = `Pay-on-site auto-exit failed: ${posError instanceof Error ? posError.message : String(posError)}`
+      errors.push(errMsg)
+      console.error(errMsg)
+    }
     
-    return { cleanedCount, errors }
+    console.log(`🧹 Cleanup completed: ${cleanedCount} bookings marked as expired, ${autoExitedPayOnSite} pay_on_site auto-exited, ${errors.length} errors`)
+    
+    return { cleanedCount: cleanedCount + autoExitedPayOnSite, errors }
     
   } catch (error) {
     const errorMessage = `Cleanup failed: ${error instanceof Error ? error.message : String(error)}`
@@ -1203,6 +1307,34 @@ export async function createManualBooking(formData: FormData) {
     console.log(`✅ [${manualProcessId}] Firestore save successful:`)
     console.log(`✅ [${manualProcessId}]   Document ID: ${bookingDocRef.id}`)
     console.log(`✅ [${manualProcessId}]   Save Duration: ${firestoreDuration}ms`)
+
+    // Increment ocupare (manual = intrat) cu idempotency flags
+    try {
+      await updateDoc(bookingDocRef, {
+        occupancyIncremented: true,
+        occupancyIncrementedAt: serverTimestamp(),
+        occupancyAt: serverTimestamp(),
+        "lpr.isInside": true,
+        "lpr.arrivedAt": serverTimestamp(),
+        "lpr.lastEventType": "entry",
+        lastUpdated: serverTimestamp()
+      })
+      const occupancyDocRef = doc(db, "config", "parkingLive")
+      await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+      await updateDoc(occupancyDocRef, {
+        occupiedCount: increment(1),
+        lastUpdated: serverTimestamp(),
+        lastChange: {
+          type: "entry_manual",
+          bookingId: bookingDocRef.id,
+          plateNumber: normalizeLicensePlate(licensePlate),
+          at: new Date().toISOString()
+        }
+      })
+      console.log(`➕ [${manualProcessId}] Occupancy incremented for manual booking`)
+    } catch (occErr) {
+      console.error(`❌ [${manualProcessId}] Failed to increment occupancy for manual booking`, occErr)
+    }
 
     console.log(`🌐 [${manualProcessId}] ===== CALLING PARKING API =====`)
 

@@ -154,7 +154,7 @@ export default function StatisticsPage() {
     { name: 'Intrări Rămase', value: dailyStats.remainingEntries },
   ]
 
-  // Locuri disponibile și ocupate DOAR din LPR
+  // Locuri disponibile și ocupate DOAR din LPR (isInside)
   const occupiedFromLpr = Math.min(occupiedLpr, maxTotalReservations)
   const availableFromLpr = Math.max(0, maxTotalReservations - occupiedFromLpr)
 

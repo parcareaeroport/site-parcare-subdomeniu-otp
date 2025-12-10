@@ -60,6 +60,7 @@ export default function DashboardPage() {
   const [occupancyData, setOccupancyData] = useState<OccupancyStats[]>([])
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([])
   const [presentVehicles, setPresentVehicles] = useState<any[]>([])
+  const [presentLimit, setPresentLimit] = useState(0)
   const [presentCount, setPresentCount] = useState(0)
   const [delayedCount, setDelayedCount] = useState(0)
 
@@ -104,6 +105,7 @@ export default function DashboardPage() {
       setRecentBookings(recent)
       setPresentVehicles(present.items)
       setPresentCount(present.presentCount)
+      setPresentLimit(stats.maxLimit || 0)
       setDelayedCount(present.delayedCount)
       
     } catch (error) {
@@ -249,8 +251,12 @@ export default function DashboardPage() {
             <Car className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{dashboardStats.currentOccupancy}%</div>
-            <p className="text-xs text-muted-foreground">{dashboardStats.currentOccupancy} din 100 locuri ocupate</p>
+              <div className="text-2xl font-bold">
+                {dashboardStats.currentOccupancyCount} / {presentLimit || dashboardStats.maxLimit || 0}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {dashboardStats.currentOccupancy}% (bazat pe LPR isInside; limită din setări)
+              </p>
           </CardContent>
         </Card>
         <Card>

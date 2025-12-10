@@ -25,6 +25,9 @@ interface MatchedBooking {
   endTime: string
   status: string
   apiBookingNumber?: string
+  occupancyIncremented?: boolean
+  occupancyDecremented?: boolean
+  source?: string
 }
 
 function parseToDate(value: Nullable<string>): Date | null {
@@ -94,7 +97,10 @@ async function findMatchingActiveBookingByPlate(plateNumber: string, eventTime: 
         endDate: data.endDate,
         endTime: data.endTime,
         status: data.status,
-        apiBookingNumber: data.apiBookingNumber
+        apiBookingNumber: data.apiBookingNumber,
+        occupancyIncremented: data.occupancyIncremented,
+        occupancyDecremented: data.occupancyDecremented,
+        source: data.source
       },
       score
     })
@@ -142,6 +148,22 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
       eventTimeIso: eventTime?.toISOString()
     })
   } catch {}
+
+  // Whitelist short-circuit: dacă plăcuța este în `lpr_whitelist`, nu facem nicio acțiune
+  if (normalizedPlate) {
+    try {
+      const whitelistDoc = await getDoc(doc(db, "lpr_whitelist", normalizedPlate))
+      if (whitelistDoc.exists()) {
+        console.log('⛔ [LPR] Plate is whitelisted, skipping all processing', { normalizedPlate })
+        return {
+          savedEventId: "whitelist_skip",
+          eventType,
+        }
+      }
+    } catch (e) {
+      console.error('❌ [LPR] Failed to check whitelist, continuing processing', e)
+    }
+  }
 
   // Save raw LPR event
   const eventsCol = collection(db, "lpr_events")
@@ -226,7 +248,9 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
                 lastSeenAt: eventTime.toISOString(),
                 lastSeenDeviceId: input.deviceId ?? null,
                 lastEventType: eventType
-              }
+              },
+              occupancyIncremented: true,
+              occupancyIncrementedAt: serverTimestamp()
             })
             console.log('✅ [LPR] Unmatched booking created', { bookingId: newDocRef.id })
             // Increment occupancy pentru intrare fără rezervare
@@ -272,6 +296,9 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
               }
             }
 
+            const occupancyIncrementedFlag = data.occupancyIncremented === true
+            const occupancyDecrementedFlag = data.occupancyDecremented === true
+
             await updateDoc(doc(db, "bookings", docSnap.id), {
               "lpr.isInside": false,
               "lpr.departedAt": eventTime.toISOString(),
@@ -281,25 +308,35 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
               endDate: eventTime.toISOString().split("T")[0],
               endTime: eventTime.toTimeString().slice(0, 5),
               durationMinutes,
-              lastUpdated: serverTimestamp()
+              lastUpdated: serverTimestamp(),
+              ...(occupancyIncrementedFlag && !occupancyDecrementedFlag
+                ? {
+                    occupancyDecremented: true,
+                    occupancyDecrementedAt: serverTimestamp()
+                  }
+                : {})
             })
-            // Decrement occupancy pentru ieșire fără rezervare
-            try {
-              const occupancyDocRef = doc(db, "config", "parkingLive")
-              await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
-              await updateDoc(occupancyDocRef, {
-                occupiedCount: increment(-1),
-                lastUpdated: serverTimestamp(),
-                lastChange: {
-                  type: "exit_unmatched",
-                  bookingId: docSnap.id,
-                  plateNumber: normalizedPlate,
-                  deviceId: input.deviceId ?? null,
-                  at: eventTime.toISOString()
-                }
-              })
-            } catch (e) {
-              console.error('❌ [LPR] Failed to decrement occupancy for unmatched exit', e)
+            // Decrement occupancy pentru ieșire fără rezervare (idempotent)
+            if (occupancyIncrementedFlag && !occupancyDecrementedFlag) {
+              try {
+                const occupancyDocRef = doc(db, "config", "parkingLive")
+                await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+                await updateDoc(occupancyDocRef, {
+                  occupiedCount: increment(-1),
+                  lastUpdated: serverTimestamp(),
+                  lastChange: {
+                    type: "exit_unmatched",
+                    bookingId: docSnap.id,
+                    plateNumber: normalizedPlate,
+                    deviceId: input.deviceId ?? null,
+                    at: eventTime.toISOString()
+                  }
+                })
+              } catch (e) {
+                console.error('❌ [LPR] Failed to decrement occupancy for unmatched exit', e)
+              }
+            } else {
+              console.log('⏭️ [LPR] Skip unmatched decrement: already decremented or never incremented')
             }
           } else {
             console.log('ℹ️ [LPR] Exit received for unmatched plate but no open record found - skipping')
@@ -327,10 +364,14 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
   // Update booking with LPR info
   const bookingRef = doc(db, "bookings", matched.id)
   let wasInside = false
+  let occupancyIncrementedFlag = false
+  let occupancyDecrementedFlag = false
   try {
     const bookingSnap = await getDoc(bookingRef)
     const currentLpr = bookingSnap.exists() ? (bookingSnap.data() as any).lpr || {} : {}
     wasInside = currentLpr.isInside === true
+    occupancyIncrementedFlag = bookingSnap.exists() ? (bookingSnap.data() as any).occupancyIncremented === true : false
+    occupancyDecrementedFlag = bookingSnap.exists() ? (bookingSnap.data() as any).occupancyDecremented === true : false
     const lprUpdate: Record<string, any> = {
       "lpr.lastSeenAt": eventTime.toISOString(),
       "lpr.lastSeenDeviceId": input.deviceId ?? null,
@@ -343,9 +384,17 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
     if (eventType === "entry") {
       lprUpdate["lpr.arrivedAt"] = currentLpr.arrivedAt || eventTime.toISOString()
       lprUpdate["lpr.isInside"] = true
+      if (!occupancyIncrementedFlag) {
+        lprUpdate["occupancyIncremented"] = true
+        lprUpdate["occupancyIncrementedAt"] = serverTimestamp()
+      }
     } else if (eventType === "exit") {
       lprUpdate["lpr.departedAt"] = currentLpr.departedAt || eventTime.toISOString()
       lprUpdate["lpr.isInside"] = false
+      if (occupancyIncrementedFlag && !occupancyDecrementedFlag) {
+        lprUpdate["occupancyDecremented"] = true
+        lprUpdate["occupancyDecrementedAt"] = serverTimestamp()
+      }
     }
     console.log('🛠️ [LPR] Updating booking with LPR info', {
       bookingId: matched.id,
@@ -386,7 +435,7 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
       console.error('❌ [LPR] Failed ensuring parkingLive doc', e)
     }
     // Idempotency: only adjust if state changes
-    if (eventType === "entry" && !wasInside) {
+    if (eventType === "entry" && !wasInside && !occupancyIncrementedFlag) {
       try {
         console.log('➕ [LPR] Increment occupiedCount (entry)', { bookingId: matched.id })
         await updateDoc(occupancyDocRef, {
@@ -404,9 +453,9 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
         console.error('❌ [LPR] Failed to increment occupiedCount', e)
       }
     } else if (eventType === "entry" && wasInside) {
-      console.log('⏭️ [LPR] Skip increment: already inside (idempotent)')
+        console.log('⏭️ [LPR] Skip increment: already inside/occupancy counted (idempotent)')
     }
-    if (eventType === "exit" && wasInside) {
+    if (eventType === "exit" && wasInside && occupancyIncrementedFlag && !occupancyDecrementedFlag) {
       try {
         console.log('➖ [LPR] Decrement occupiedCount (exit)', { bookingId: matched.id })
         await updateDoc(occupancyDocRef, {
@@ -423,8 +472,8 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
       } catch (e) {
         console.error('❌ [LPR] Failed to decrement occupiedCount', e)
       }
-    } else if (eventType === "exit" && !wasInside) {
-      console.log('⏭️ [LPR] Skip decrement: already outside (idempotent)')
+    } else if (eventType === "exit" && (!wasInside || occupancyDecrementedFlag || !occupancyIncrementedFlag)) {
+      console.log('⏭️ [LPR] Skip decrement: already outside or occupancy already decremented (idempotent)')
     }
   }
 

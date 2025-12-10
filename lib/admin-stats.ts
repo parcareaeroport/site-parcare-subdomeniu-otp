@@ -43,6 +43,9 @@ export interface DailyEntryExit {
   actualTime?: string // Ora efectivă din LPR (HH:mm)
   delayMinutes?: number // Diferența (efectiv - programat) în minute
   amount?: number // Valoarea de plată (acolo unde este disponibilă)
+  startDate?: string
+  endDate?: string
+  bookingStatus?: string
 }
 
 // Noi interfețe pentru statisticile suplimentare
@@ -83,7 +86,9 @@ export interface DashboardStats {
   totalRevenue: number
   totalBookings: number
   totalClients: number
-  currentOccupancy: number
+  currentOccupancy: number // procent
+  currentOccupancyCount: number // număr mașini (LPR isInside)
+  maxLimit: number // limită setată
   revenueGrowth: string
   bookingsGrowth: string
   clientsGrowth: string
@@ -182,32 +187,38 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       ? `${(((uniqueClients.size - lastYearClients.size) / lastYearClients.size) * 100).toFixed(1)}%`
       : '0%'
 
-    // Calculează ocuparea curentă: preferă contorul LIVE (LPR), fallback pe rezervări
-    const maxReservations = await getMaxTotalReservations()
-    let currentOccupancy = 0
-    const liveDoc = await getDoc(doc(db, 'config', 'parkingLive'))
-    if (liveDoc.exists()) {
-      const occupiedCount = Math.max(0, Number(liveDoc.data().occupiedCount || 0))
-      currentOccupancy = Math.min(Math.round((occupiedCount / maxReservations) * 100), 100)
-      console.log('🚗 Dashboard using LIVE LPR occupancy:', { occupiedCount, currentOccupancy })
-    } else {
-    const today = new Date()
-    const activeBookingsQuery = query(
-      bookingsRef,
-      where('startDate', '<=', today.toISOString().split('T')[0]),
-      where('endDate', '>=', today.toISOString().split('T')[0]),
-      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed_pay_on_site'])
-    )
-    const activeBookingsSnap = await getDocs(activeBookingsQuery)
-      currentOccupancy = Math.min(Math.round((activeBookingsSnap.size / maxReservations) * 100), 100)
-      console.log('📊 Dashboard fallback occupancy (bookings):', { count: activeBookingsSnap.size, currentOccupancy })
+    // Ocupare curentă bazată pe LPR isInside și limită din reservationSettings
+    const settingsSnap = await getDoc(doc(db, 'config', 'reservationSettings'))
+    const maxLimit = settingsSnap.exists() ? Number(settingsSnap.data()?.maxTotalReservations || 0) : 0
+
+    // Preferă contorul live din parkingLive; fallback la numărarea isInside
+    let presentCount = 0
+    const liveSnap = await getDoc(doc(db, 'config', 'parkingLive'))
+    if (liveSnap.exists()) {
+      presentCount = Math.max(0, Number(liveSnap.data()?.occupiedCount || 0))
     }
+    if (!presentCount) {
+      const todayIso = new Date().toISOString().split('T')[0]
+      const lprInsideQuery = query(
+        bookingsRef,
+        where('lpr.isInside', '==', true),
+        where('endDate', '>=', todayIso)
+      )
+      const lprInsideSnap = await getDocs(lprInsideQuery)
+      presentCount = lprInsideSnap.size
+    }
+
+    const currentOccupancy = maxLimit > 0
+      ? Math.min(Math.round((presentCount / maxLimit) * 100), 100)
+      : 0
 
     return {
       totalRevenue,
       totalBookings,
       totalClients: uniqueClients.size,
       currentOccupancy: Math.round(currentOccupancy),
+      currentOccupancyCount: presentCount,
+      maxLimit,
       revenueGrowth,
       bookingsGrowth,
       clientsGrowth
@@ -585,17 +596,23 @@ export async function getRecentBookings(): Promise<RecentBooking[]> {
 /**
  * Obține intrările (rezervările care încep) pentru o dată specifică
  */
-export async function getDailyEntries(selectedDate: string): Promise<DailyEntryExit[]> {
+export async function getDailyEntries(selectedDate: string, includeFuture = false): Promise<DailyEntryExit[]> {
   try {
     const bookingsRef = collection(db, 'bookings')
     
-    // Query pentru rezervările care încep în data selectată
-    const q = query(
-      bookingsRef,
-      where('startDate', '==', selectedDate),
-      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site']),
-      orderBy('startTime', 'asc')
-    )
+    // Query pentru rezervările care încep în data selectată sau viitoare (dacă includeFuture=true)
+    const constraints: any[] = [
+      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site'])
+    ]
+    if (includeFuture) {
+      constraints.push(where('startDate', '>=', selectedDate))
+      constraints.push(orderBy('startDate', 'asc'))
+      constraints.push(orderBy('startTime', 'asc'))
+    } else {
+      constraints.push(where('startDate', '==', selectedDate))
+      constraints.push(orderBy('startTime', 'asc'))
+    }
+    const q = query(bookingsRef, ...constraints)
 
     const snapshot = await getDocs(q)
     const entries: DailyEntryExit[] = []
@@ -623,11 +640,14 @@ export async function getDailyEntries(selectedDate: string): Promise<DailyEntryE
       
       entries.push({
         id: doc.id,
+        startDate: booking.startDate || selectedDate,
+        endDate: booking.endDate || undefined,
         time: scheduledTimeStr,
         licensePlate: booking.licensePlate || 'N/A',
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
         source,
+        bookingStatus: booking.status,
         actualTime,
         delayMinutes,
         amount: typeof booking.amount === 'number' ? booking.amount : undefined,
@@ -645,17 +665,23 @@ export async function getDailyEntries(selectedDate: string): Promise<DailyEntryE
 /**
  * Obține ieșirile (rezervările care se termină) pentru o dată specifică
  */
-export async function getDailyExits(selectedDate: string): Promise<DailyEntryExit[]> {
+export async function getDailyExits(selectedDate: string, includeFuture = false): Promise<DailyEntryExit[]> {
   try {
     const bookingsRef = collection(db, 'bookings')
     
-    // Query pentru rezervările care se termină în data selectată
-    const q = query(
-      bookingsRef,
-      where('endDate', '==', selectedDate),
-      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site']),
-      orderBy('endTime', 'asc')
-    )
+    // Query pentru rezervările care se termină în data selectată sau viitoare (dacă includeFuture=true)
+    const constraints: any[] = [
+      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site'])
+    ]
+    if (includeFuture) {
+      constraints.push(where('endDate', '>=', selectedDate))
+      constraints.push(orderBy('endDate', 'asc'))
+      constraints.push(orderBy('endTime', 'asc'))
+    } else {
+      constraints.push(where('endDate', '==', selectedDate))
+      constraints.push(orderBy('endTime', 'asc'))
+    }
+    const q = query(bookingsRef, ...constraints)
 
     const snapshot = await getDocs(q)
     const exits: DailyEntryExit[] = []
@@ -683,11 +709,14 @@ export async function getDailyExits(selectedDate: string): Promise<DailyEntryExi
       
       exits.push({
         id: doc.id,
+        startDate: booking.startDate || undefined,
+        endDate: booking.endDate || selectedDate,
         time: scheduledTimeStr,
         licensePlate: booking.licensePlate || 'N/A',
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
         source,
+        bookingStatus: booking.status,
         actualTime,
         delayMinutes,
         amount: typeof booking.amount === 'number' ? booking.amount : undefined,

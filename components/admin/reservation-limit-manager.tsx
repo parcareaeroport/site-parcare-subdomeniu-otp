@@ -74,23 +74,16 @@ export function ReservationLimitManager() {
   }, [toast])
 
   /*──────────────────────────────────┐
-  │   SNAPSHOT: ocupare LIVE (LPR)   │
-  │   Rezervări Active Acum = doar LPR│
+  │   SNAPSHOT: Occupancy live        │
+  │   Rezervări Active Acum = parkingLive.occupiedCount
   └──────────────────────────────────*/
   useEffect(() => {
-    const occupancyDocRef = doc(db, "config", "parkingLive")
-
     const unsub = onSnapshot(
-      occupancyDocRef,
+      doc(db, "config", "parkingLive"),
       (snap) => {
-        const data = snap.data() || {}
-        const occupiedCount = Number(data.occupiedCount || 0)
-        setActiveBookings(occupiedCount)
-
-        console.log("📊 Active bookings from LPR (parkingLive.occupiedCount):", {
-          occupiedCount,
-          lastUpdated: data.lastUpdated?.toDate?.().toISOString?.() ?? null,
-        })
+        const count = Math.max(0, Number(snap.data()?.occupiedCount || 0))
+        setActiveBookings(count)
+        console.log("📊 Active bookings from parkingLive.occupiedCount:", { count })
       },
       (err) => {
         console.error("❌ Error listening to parkingLive occupancy:", err)

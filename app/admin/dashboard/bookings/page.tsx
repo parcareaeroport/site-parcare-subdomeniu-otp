@@ -34,6 +34,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Calendar } from "@/components/ui/calendar" // Shadcn Calendar
+import type { DateRange } from "react-day-picker"
 import { format as formatDateFn, parseISO } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
 import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail } from "lucide-react"
@@ -121,7 +122,7 @@ function BookingsPageContent() {
   const [filteredBookings, setFilteredBookings] = useState<Booking[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
-  const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined)
+  const [dateRange, setDateRange] = useState<DateRange>({ from: new Date(), to: new Date() })
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -130,6 +131,7 @@ function BookingsPageContent() {
   const [isCleaningUp, setIsCleaningUp] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
+  const [markingExitId, setMarkingExitId] = useState<string | null>(null)
   
   // State pentru actualizarea statusului de plată manual
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -317,23 +319,34 @@ function BookingsPageContent() {
         filtered = filtered.filter((b) => b.status === statusFilter)
       }
     }
-    if (dateFilter) {
-      const filterDateStr = formatDateFn(dateFilter, "yyyy-MM-dd")
-      filtered = filtered.filter((b) => b.startDate === filterDateStr || b.endDate === filterDateStr)
+    if (dateRange.from || dateRange.to) {
+      const from = dateRange.from
+      const to = dateRange.to
+      filtered = filtered.filter((b) => overlapsRange(b.startDate, b.endDate, from, to))
     }
     setFilteredBookings(filtered)
     // Resetăm pagina curentă când se schimbă filtrarea
     setCurrentPage(1)
-  }, [bookings, searchTerm, statusFilter, dateFilter])
+  }, [bookings, searchTerm, statusFilter, dateRange])
 
   // Statistici rapide pentru bara de sus (în funcție de data selectată)
-  const statsBookings = (() => {
-    if (!dateFilter) return bookings
-    const filterDateStr = formatDateFn(dateFilter, "yyyy-MM-dd")
-    return bookings.filter(
-      (b) => b.startDate === filterDateStr || b.endDate === filterDateStr,
+  const overlapsRange = (start?: string, end?: string, from?: Date, to?: Date) => {
+    if (!start) return false
+    if (!from && !to) return true
+    try {
+      const startDate = parseISO(start)
+      const endDate = parseISO(end || start)
+      const rangeStart = from ?? to ?? startDate
+      const rangeEnd = to ?? from ?? endDate
+      return startDate <= rangeEnd && endDate >= rangeStart
+    } catch {
+      return false
+    }
+  }
+
+  const statsBookings = bookings.filter((b) =>
+    overlapsRange(b.startDate, b.endDate, dateRange.from, dateRange.to),
     )
-  })()
 
   const totalCount = statsBookings.length
   const totalAmount = statsBookings.reduce((sum, b) => sum + (b.amount || 0), 0)
@@ -398,6 +411,32 @@ function BookingsPageContent() {
       })
     } finally {
       setIsCancelling(false)
+    }
+  }
+
+  const handleMarkOutside = async (booking: Booking) => {
+    setMarkingExitId(booking.id)
+    try {
+      await updateDoc(doc(db, "bookings", booking.id), {
+        "lpr.isInside": false,
+        "lpr.departedAt": serverTimestamp(),
+        "lpr.lastEventType": "exit",
+        lastUpdated: serverTimestamp(),
+      })
+      toast({
+        title: "Marcat ca ieșit",
+        description: `Booking ${booking.id} setat cu isInside=false.`,
+      })
+      fetchBookings()
+    } catch (e) {
+      console.error("Mark outside failed", e)
+      toast({
+        title: "Eroare",
+        description: "Nu am putut marca ieșirea.",
+        variant: "destructive",
+      })
+    } finally {
+      setMarkingExitId(null)
     }
   }
 
@@ -1153,8 +1192,65 @@ function BookingsPageContent() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div className="space-y-2">
         <h1 className="text-2xl font-bold tracking-tight">Gestionare Rezervări</h1>
+          <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="w-full sm:w-auto hover:text-white">
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {dateRange.from
+                    ? dateRange.to
+                      ? `${formatDateFn(dateRange.from, "PPP", { locale: ro })} - ${formatDateFn(dateRange.to, "PPP", { locale: ro })}`
+                      : formatDateFn(dateRange.from, "PPP", { locale: ro })
+                    : "Filtrează după dată"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar
+                  mode="range"
+                  selected={dateRange}
+                  onSelect={(range) => setDateRange(range || { from: new Date(), to: new Date() })}
+                  numberOfMonths={2}
+                  classNames={{
+                    day_selected: "bg-primary text-white hover:bg-primary hover:text-white",
+                    day_range_middle: "bg-primary/80 text-white hover:bg-primary hover:text-white",
+                    day_range_end: "bg-primary text-white hover:bg-primary hover:text-white",
+                    day_range_start: "bg-primary text-white hover:bg-primary hover:text-white",
+                    day_today: "text-primary",
+                    nav: "flex items-center justify-between px-4 py-2",
+                    nav_button_previous: "absolute left-2 top-2",
+                    nav_button_next: "absolute right-2 top-2",
+                    caption: "relative flex items-center justify-center py-2",
+                    caption_label: "text-sm font-medium",
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+            {(searchTerm || statusFilter !== "all" || dateRange.from || dateRange.to) && (
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setSearchTerm("")
+                  setStatusFilter("all")
+                  setDateRange({ from: new Date(), to: new Date() })
+                }}
+                className="hover:text-white"
+              >
+                Resetează
+              </Button>
+            )}
+            <div className="text-xs text-blue-700 font-mono">
+              Interval:{" "}
+              {dateRange.from
+                ? dateRange.to
+                  ? `${formatDateFn(dateRange.from, "dd.MM.yyyy")} - ${formatDateFn(dateRange.to, "dd.MM.yyyy")}`
+                  : formatDateFn(dateRange.from, "dd.MM.yyyy")
+                : "neselectat"}
+            </div>
+          </div>
+        </div>
         <div className="flex gap-2">
           {user && (
             <Button 
@@ -1262,20 +1358,29 @@ function BookingsPageContent() {
               <PopoverTrigger asChild>
                 <Button variant="outline" className="w-full sm:w-auto hover:text-white">
                   <CalendarIcon className="mr-2 h-4 w-4" />
-                  {dateFilter ? formatDateFn(dateFilter, "PPP", { locale: ro }) : "Filtrează după dată"}
+                  {dateRange.from
+                    ? dateRange.to
+                      ? `${formatDateFn(dateRange.from, "PPP", { locale: ro })} - ${formatDateFn(dateRange.to, "PPP", { locale: ro })}`
+                      : formatDateFn(dateRange.from, "PPP", { locale: ro })
+                    : "Filtrează după dată"}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="end">
-                <Calendar mode="single" selected={dateFilter} onSelect={setDateFilter} />
+                <Calendar
+                  mode="range"
+                  selected={dateRange}
+                  onSelect={(range) => setDateRange(range || { from: undefined, to: undefined })}
+                  numberOfMonths={2}
+                />
               </PopoverContent>
             </Popover>
-            {(searchTerm || statusFilter !== "all" || dateFilter) && (
+            {(searchTerm || statusFilter !== "all" || dateRange.from || dateRange.to) && (
               <Button
                 variant="ghost"
                 onClick={() => {
                   setSearchTerm("")
                   setStatusFilter("all")
-                  setDateFilter(undefined)
+                  setDateRange({ from: new Date(), to: new Date() })
                 }}
                 className="hover:text-white"
               >
@@ -1331,7 +1436,6 @@ function BookingsPageContent() {
                   <TableHead>Client</TableHead>
                   <TableHead>Perioada</TableHead>
                   <TableHead className="w-64">LPR Intrare / Ieșire</TableHead>
-                  <TableHead>Status</TableHead>
                   <TableHead>Plată</TableHead>
                   <TableHead>T&C</TableHead>
                   <TableHead>Creată la</TableHead>
@@ -1341,7 +1445,7 @@ function BookingsPageContent() {
               <TableBody>
                 {filteredBookings.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="text-center py-8 text-gray-500">
+                    <TableCell colSpan={9} className="text-center py-8 text-gray-500">
                       Nu s-au găsit rezervări.
                     </TableCell>
                   </TableRow>
@@ -1427,7 +1531,6 @@ function BookingsPageContent() {
                             )}
                           </div>
                         </TableCell>
-                        <TableCell>{getStatusBadge(booking.status)}</TableCell>
                         <TableCell>{renderPaymentStatusCell(booking)}</TableCell>
                         <TableCell className="text-center">
                           {booking.termsAccepted ? (
@@ -1510,6 +1613,22 @@ function BookingsPageContent() {
                                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                     ) : null}
                                     Recuperează Rezervarea
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+
+                              {(booking as any).lpr?.isInside === true && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => handleMarkOutside(booking)}
+                                    className="text-red-600 focus:text-white focus:bg-red-600 hover:text-white hover:bg-red-600"
+                                    disabled={markingExitId === booking.id}
+                                  >
+                                    {markingExitId === booking.id ? (
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : null}
+                                    Marchează ieșire (isInside = false)
                                   </DropdownMenuItem>
                                 </>
                               )}
@@ -1601,13 +1720,15 @@ function BookingsPageContent() {
           </CardContent>
         </Card>
 
-        {/* Secțiunea Intrări/Ieșiri pentru data selectată */}
-        {dateFilter && (
+        {/* Secțiunea Intrări/Ieșiri pentru intervalul selectat */}
+        {dateRange.from && dateRange.to && (
           <div className="grid gap-4 md:grid-cols-2">
             <Card>
               <CardHeader>
-                <CardTitle>Intrări pentru {formatDateFn(dateFilter, "dd.MM.yyyy")}</CardTitle>
-                <CardDescription>Rezervări care încep în această zi (programate vs. efective LPR).</CardDescription>
+                <CardTitle>
+                  Intrări pentru {formatDateFn(dateRange.from, "dd.MM.yyyy")} - {formatDateFn(dateRange.to, "dd.MM.yyyy")}
+                </CardTitle>
+                <CardDescription>Rezervări care încep în intervalul selectat (programate vs. efective LPR).</CardDescription>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -1623,8 +1744,9 @@ function BookingsPageContent() {
                   </TableHeader>
                   <TableBody>
                     {(() => {
-                      const filterDateStr = formatDateFn(dateFilter, "yyyy-MM-dd")
-                      const rows = bookings.filter((b) => b.startDate === filterDateStr)
+                      const rows = bookings.filter((b) =>
+                        overlapsRange(b.startDate, b.endDate, dateRange.from, dateRange.to),
+                      )
                       if (rows.length === 0) {
                         return (
                           <TableRow>
@@ -1666,8 +1788,10 @@ function BookingsPageContent() {
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Ieșiri pentru {formatDateFn(dateFilter, "dd.MM.yyyy")}</CardTitle>
-                <CardDescription>Rezervări care se termină în această zi (programate vs. efective LPR).</CardDescription>
+                <CardTitle>
+                  Ieșiri pentru {formatDateFn(dateRange.from, "dd.MM.yyyy")} - {formatDateFn(dateRange.to, "dd.MM.yyyy")}
+                </CardTitle>
+                <CardDescription>Rezervări care se termină în intervalul selectat (programate vs. efective LPR).</CardDescription>
               </CardHeader>
               <CardContent>
                 <Table>
@@ -1683,8 +1807,9 @@ function BookingsPageContent() {
                   </TableHeader>
                   <TableBody>
                     {(() => {
-                      const filterDateStr = formatDateFn(dateFilter, "yyyy-MM-dd")
-                      const rows = bookings.filter((b) => b.endDate === filterDateStr)
+                      const rows = bookings.filter((b) =>
+                        overlapsRange(b.startDate, b.endDate, dateRange.from, dateRange.to),
+                      )
                       if (rows.length === 0) {
                         return (
                           <TableRow>

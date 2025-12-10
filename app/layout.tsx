@@ -227,7 +227,7 @@ export default function RootLayout({
         {/* End Meta Pixel Code (noscript) */}
         
         {children}
-        <CallFloating />
+   
         <Toaster />
       </body>
     </html>
