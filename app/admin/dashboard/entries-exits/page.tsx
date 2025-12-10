@@ -24,10 +24,9 @@ type EnrichedRow = DailyEntryExit & {
   isOnlinePaid?: boolean
 }
 
-const BONUS_MINUTES_ONLINE = 60 // 1h bonus pentru plăți online
 const PAY_ON_SITE_CANCEL_AFTER_MIN = 180 // 3h
 const LATE_FEE_PER_DAY = 30 // lei / zi întârziere (online)
-const ONLINE_BONUS_MINUTES = 60
+const ONLINE_GRACE_MINUTES = 60 // 1h bonus la ultima zi (online)
 
 type PriceEntry = {
   days: number
@@ -232,15 +231,28 @@ export default function EntriesExitsPage() {
           autoCancelPayOnSite(row.id).catch(() => {})
         }
       } else {
-        const bonusMs = ONLINE_BONUS_MINUTES * 60 * 1000
-        const effectiveEnd = endBase + bonusMs
-        const overMs = now.getTime() - effectiveEnd
+        // ONLINE: allowed exit = start + days*24h + grace (60 min)
+        const startDateVal = withDates.startDate
+        const startTimeVal = raw.startTime || row.time
+        const endDateVal = withDates.endDate
+        const endTimeVal = (withDates as any).endTime || raw.endTime || row.time
+        const startDt = startDateVal && startTimeVal ? parseDateTime(startDateVal, startTimeVal) : null
+        const endDt = endDateVal && endTimeVal ? parseDateTime(endDateVal, endTimeVal) : null
+        let days = 1
+        if (startDt && endDt && endDt.getTime() > startDt.getTime()) {
+          const diffMs = endDt.getTime() - startDt.getTime()
+          days = Math.ceil(diffMs / (24 * 60 * 60 * 1000))
+        }
+        const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
+        const allowedExitMs = startDt
+          ? startDt.getTime() + days * 24 * 60 * 60 * 1000 + graceMs
+          : endBase + graceMs
+        const overMs = now.getTime() - allowedExitMs
         if (overMs > 0) {
           const daysLate = Math.ceil(overMs / (24 * 60 * 60 * 1000))
           amountDueValue = daysLate * LATE_FEE_PER_DAY
           amountDueText = `${amountDueValue.toFixed(2)} LEI`
         } else {
-          // achitat
           amountDueText = "Achitat"
         }
       }
