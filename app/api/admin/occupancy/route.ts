@@ -43,17 +43,10 @@ export async function GET() {
   }
 }
 
-export async function POST() {
+export async function POST(req: Request) {
   try {
     const ref = doc(db, "config", "parkingLive")
-    const body = await (async () => {
-      try {
-        return await new Response(await (await import("node:stream/promises")).readableStreamToArray((await import("next/server")).NextResponse.next().body as any)).json()
-      } catch {
-        // fallback: body already consumed in Next 15; use request context approach instead
-        return null
-      }
-    })()
+    const body = await req.json().catch(() => null)
     const action = body?.action || "reset"
 
     if (action === "reset") {
