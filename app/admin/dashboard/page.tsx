@@ -49,6 +49,8 @@ export default function DashboardPage() {
     totalBookings: 0,
     totalClients: 0,
     currentOccupancy: 0,
+    currentOccupancyCount: 0,
+    maxLimit: 0,
     revenueGrowth: '0%',
     bookingsGrowth: '0%',
     clientsGrowth: '0%'
