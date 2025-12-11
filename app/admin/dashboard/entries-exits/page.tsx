@@ -197,6 +197,14 @@ export default function EntriesExitsPage() {
           if (start && end && end.getTime() > start.getTime()) {
             durationDays = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000))
           }
+        } else if (startDate && endDateVal && startDate !== endDateVal) {
+          // Fallback: dacă lipsesc orele, calculează pe zile calendaristice
+          const startDay = new Date(`${startDate}T00:00:00`)
+          const endDay = new Date(`${endDateVal}T00:00:00`)
+          const diffMs = endDay.getTime() - startDay.getTime()
+          if (diffMs > 0) {
+            durationDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000)) + 1
+          }
         }
         const basePrice = (() => {
           if (priceTable.length === 0) return 0
@@ -275,6 +283,8 @@ export default function EntriesExitsPage() {
   const enrichedEntries = useMemo(() => entries.map((e) => enrichRow(e, "entry")), [entries])
   const enrichedExits = useMemo(() => exits.map((e) => enrichRow(e, "exit")), [exits])
 
+  const mainEntries = useMemo(() => enrichedEntries.filter((e) => !e.isLate), [enrichedEntries])
+  const mainExits = useMemo(() => enrichedExits.filter((e) => !e.isLate), [enrichedExits])
   const lateEntries = enrichedEntries.filter((e) => e.isLate)
   const lateExits = enrichedExits.filter((e) => e.isLate)
 
@@ -474,7 +484,7 @@ export default function EntriesExitsPage() {
                 <CardTitle>Intrări</CardTitle>
             </CardHeader>
             <CardContent>
-                {enrichedEntries.length === 0 ? <p className="text-gray-500">Nu există intrări.</p> : renderTable(enrichedEntries, "entry")}
+                {mainEntries.length === 0 ? <p className="text-gray-500">Nu există intrări.</p> : renderTable(mainEntries, "entry")}
             </CardContent>
           </Card>
             )}
@@ -502,7 +512,7 @@ export default function EntriesExitsPage() {
           
                 </CardHeader>
                 <CardContent>
-                {enrichedExits.length === 0 ? <p className="text-gray-500">Nu există ieșiri.</p> : renderTable(enrichedExits, "exit")}
+                {mainExits.length === 0 ? <p className="text-gray-500">Nu există ieșiri.</p> : renderTable(mainExits, "exit")}
                 </CardContent>
               </Card>
             )}

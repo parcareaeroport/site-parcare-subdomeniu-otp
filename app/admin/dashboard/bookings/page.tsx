@@ -6,7 +6,7 @@ import { AlertTitle } from "@/components/ui/alert"
 
 import { Alert } from "@/components/ui/alert"
 
-import { useState, useEffect, Suspense } from "react"
+import { useState, useEffect, Suspense, useCallback } from "react"
 import {
   collection,
   getDocs,
@@ -17,6 +17,8 @@ import {
   type Timestamp, // Import Timestamp
   increment,
   serverTimestamp,
+  where,
+  limit,
 } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -35,7 +37,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Calendar } from "@/components/ui/calendar" // Shadcn Calendar
 import type { DateRange } from "react-day-picker"
-import { format as formatDateFn, parseISO } from "date-fns" // Renamed to avoid conflict
+import { format as formatDateFn, parseISO, subDays } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
 import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -122,7 +124,7 @@ function BookingsPageContent() {
   const [filteredBookings, setFilteredBookings] = useState<Booking[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
-  const [dateRange, setDateRange] = useState<DateRange>({ from: new Date(), to: new Date() })
+  const [dateRange, setDateRange] = useState<DateRange>({ from: subDays(new Date(), 6), to: new Date() })
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -234,67 +236,83 @@ function BookingsPageContent() {
     })
   }
 
-  const fetchBookings = async () => {
-    setIsLoading(true)
-    try {
-      const bookingsCollectionRef = collection(db, "bookings")
-      // TODO: Adaugă filtre mai complexe dacă e nevoie (ex: query by date range)
-      const q = query(bookingsCollectionRef, orderBy("createdAt", "desc"))
-      const data = await getDocs(q)
-      const now = new Date()
-      const nowTs = now.getTime()
-      const fetchedBookings: Booking[] = await Promise.all(
-        data.docs.map(async (docSnap) => {
-          const raw: any = { id: docSnap.id, ...docSnap.data() }
+  const formatDateKey = (d: Date) => formatDateFn(d, "yyyy-MM-dd")
 
-          // Calculează și marchează întârzierea pentru pay_on_site (>3h după end)
-          try {
-            const isPayOnSite = raw.source === "pay_on_site" || raw.status === "confirmed_pay_on_site"
-            if (isPayOnSite && raw.endDate && raw.endTime && !raw.payOnSiteOverdueLocked) {
-              const plannedEnd = new Date(`${raw.endDate}T${raw.endTime}:00`)
-              const diffMinutes = Math.floor((nowTs - plannedEnd.getTime()) / (1000 * 60))
-              const overdueMoreThan3h = diffMinutes > 180
-              raw.payOnSiteOverdueMinutes = diffMinutes
-              raw.payOnSiteOverdueMoreThan3h = overdueMoreThan3h
+  const fetchBookings = useCallback(
+    async (range?: DateRange) => {
+      setIsLoading(true)
+      try {
+        const today = new Date()
+        const defaultFrom = subDays(today, 6)
+        const fromDate = range?.from ?? dateRange.from ?? defaultFrom
+        const toDate = range?.to ?? dateRange.to ?? today
+        const fromKey = formatDateKey(fromDate)
+        const toKey = formatDateKey(toDate)
 
-              // Persistăm în Firestore doar dacă este clar întârziată
-              if (overdueMoreThan3h) {
-                try {
-                  await updateDoc(doc(db, "bookings", raw.id), {
-                    payOnSiteOverdueMinutes: diffMinutes,
-                    payOnSiteOverdueMoreThan3h: true,
-                    lastUpdated: serverTimestamp(),
-                  })
-                } catch (e) {
-                  console.error("Error updating pay_on_site overdue flag:", e)
+        const bookingsCollectionRef = collection(db, "bookings")
+        const q = query(
+          bookingsCollectionRef,
+          where("startDate", ">=", fromKey),
+          where("startDate", "<=", toKey),
+          orderBy("startDate", "desc"),
+          limit(500),
+        )
+        const data = await getDocs(q)
+        const now = new Date()
+        const nowTs = now.getTime()
+        const fetchedBookings: Booking[] = await Promise.all(
+          data.docs.map(async (docSnap) => {
+            const raw: any = { id: docSnap.id, ...docSnap.data() }
+
+            // Calculează și marchează întârzierea pentru pay_on_site (>3h după end)
+            try {
+              const isPayOnSite = raw.source === "pay_on_site" || raw.status === "confirmed_pay_on_site"
+              if (isPayOnSite && raw.endDate && raw.endTime && !raw.payOnSiteOverdueLocked) {
+                const plannedEnd = new Date(`${raw.endDate}T${raw.endTime}:00`)
+                const diffMinutes = Math.floor((nowTs - plannedEnd.getTime()) / (1000 * 60))
+                const overdueMoreThan3h = diffMinutes > 180
+                raw.payOnSiteOverdueMinutes = diffMinutes
+                raw.payOnSiteOverdueMoreThan3h = overdueMoreThan3h
+
+                // Persistăm în Firestore doar dacă este clar întârziată
+                if (overdueMoreThan3h) {
+                  try {
+                    await updateDoc(doc(db, "bookings", raw.id), {
+                      payOnSiteOverdueMinutes: diffMinutes,
+                      payOnSiteOverdueMoreThan3h: true,
+                      lastUpdated: serverTimestamp(),
+                    })
+                  } catch (e) {
+                    console.error("Error updating pay_on_site overdue flag:", e)
+                  }
                 }
               }
+            } catch (e) {
+              console.error("Error computing overdue for pay_on_site booking:", e)
             }
-          } catch (e) {
-            console.error("Error computing overdue for pay_on_site booking:", e)
-          }
 
-          return raw as Booking
-        }),
-      )
-      setBookings(fetchedBookings)
-      setFilteredBookings(fetchedBookings) // Inițial, afișează toate
-    } catch (error) {
-      console.error("Error fetching bookings:", error)
-      toast({ title: "Eroare", description: "Nu s-au putut încărca rezervările.", variant: "destructive" })
-    } finally {
-      setIsLoading(false)
-    }
-  }
+            return raw as Booking
+          }),
+        )
+        setBookings(fetchedBookings)
+        setFilteredBookings(fetchedBookings) // Inițial, afișează toate
+      } catch (error) {
+        console.error("Error fetching bookings:", error)
+        toast({ title: "Eroare", description: "Nu s-au putut încărca rezervările.", variant: "destructive" })
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [dateRange.from, dateRange.to, toast],
+  )
 
   useEffect(() => {
     if (!authLoading && user) {
-      fetchBookings()
+      fetchBookings(dateRange)
     } else if (!authLoading && !user) {
       setIsLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading])
+  }, [user, authLoading, fetchBookings])
 
   useEffect(() => {
     let filtered = bookings
@@ -1261,7 +1279,7 @@ function BookingsPageContent() {
               + Adaugă Manual
             </Button>
           )}
-          <Button onClick={fetchBookings} disabled={isLoading} size="sm">
+          <Button onClick={() => fetchBookings(dateRange)} disabled={isLoading} size="sm">
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
             Reîncarcă
           </Button>
@@ -1720,137 +1738,6 @@ function BookingsPageContent() {
           </CardContent>
         </Card>
 
-        {/* Secțiunea Intrări/Ieșiri pentru intervalul selectat */}
-        {dateRange.from && dateRange.to && (
-          <div className="grid gap-4 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  Intrări pentru {formatDateFn(dateRange.from, "dd.MM.yyyy")} - {formatDateFn(dateRange.to, "dd.MM.yyyy")}
-                </CardTitle>
-                <CardDescription>Rezervări care încep în intervalul selectat (programate vs. efective LPR).</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Ora programată</TableHead>
-                      <TableHead>Ora efectivă (LPR)</TableHead>
-                      <TableHead>Nr. Înmatriculare</TableHead>
-                      <TableHead>Tel</TableHead>
-                      <TableHead>Nr. Pers.</TableHead>
-                      <TableHead>Întârziere</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(() => {
-                      const rows = bookings.filter((b) =>
-                        overlapsRange(b.startDate, b.endDate, dateRange.from, dateRange.to),
-                      )
-                      if (rows.length === 0) {
-                        return (
-                          <TableRow>
-                            <TableCell colSpan={6} className="text-center py-4 text-sm text-gray-500">
-                              Nu există intrări pentru această dată.
-                            </TableCell>
-                          </TableRow>
-                        )
-                      }
-                      return rows.map((b) => {
-                        const lpr: any = (b as any).lpr || {}
-                        const scheduled = b.startDate && b.startTime ? new Date(`${b.startDate}T${b.startTime}:00`) : null
-                        const actual = lpr.arrivedAt ? new Date(lpr.arrivedAt) : null
-                        let delayMinutes: number | null = null
-                        if (scheduled && actual) {
-                          delayMinutes = Math.floor((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-                        }
-                        return (
-                          <TableRow key={b.id}>
-                            <TableCell>{b.startTime || "--:--"}</TableCell>
-                            <TableCell>{actual ? actual.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" }) : "-"}</TableCell>
-                            <TableCell>{b.licensePlate}</TableCell>
-                            <TableCell>{b.clientPhone || "-"}</TableCell>
-                            <TableCell>{b.numberOfPersons || "-"}</TableCell>
-                            <TableCell className={delayMinutes && delayMinutes > 0 ? "text-red-600 font-semibold" : ""}>
-                              {delayMinutes === null
-                                ? "-"
-                                : delayMinutes <= 0
-                                ? "La timp"
-                                : formatDelay(delayMinutes)}
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })
-                    })()}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader>
-                <CardTitle>
-                  Ieșiri pentru {formatDateFn(dateRange.from, "dd.MM.yyyy")} - {formatDateFn(dateRange.to, "dd.MM.yyyy")}
-                </CardTitle>
-                <CardDescription>Rezervări care se termină în intervalul selectat (programate vs. efective LPR).</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Ora programată</TableHead>
-                      <TableHead>Ora efectivă (LPR)</TableHead>
-                      <TableHead>Nr. Înmatriculare</TableHead>
-                      <TableHead>Tel</TableHead>
-                      <TableHead>Nr. Pers.</TableHead>
-                      <TableHead>Întârziere</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {(() => {
-                      const rows = bookings.filter((b) =>
-                        overlapsRange(b.startDate, b.endDate, dateRange.from, dateRange.to),
-                      )
-                      if (rows.length === 0) {
-                        return (
-                          <TableRow>
-                            <TableCell colSpan={6} className="text-center py-4 text-sm text-gray-500">
-                              Nu există ieșiri pentru această dată.
-                            </TableCell>
-                          </TableRow>
-                        )
-                      }
-                      return rows.map((b) => {
-                        const lpr: any = (b as any).lpr || {}
-                        const scheduled = b.endDate && b.endTime ? new Date(`${b.endDate}T${b.endTime}:00`) : null
-                        const actual = lpr.departedAt ? new Date(lpr.departedAt) : null
-                        let delayMinutes: number | null = null
-                        if (scheduled && actual) {
-                          delayMinutes = Math.floor((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-                        }
-                        return (
-                          <TableRow key={b.id}>
-                            <TableCell>{b.endTime || "--:--"}</TableCell>
-                            <TableCell>{actual ? actual.toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" }) : "-"}</TableCell>
-                            <TableCell>{b.licensePlate}</TableCell>
-                            <TableCell>{b.clientPhone || "-"}</TableCell>
-                            <TableCell>{b.numberOfPersons || "-"}</TableCell>
-                            <TableCell className={delayMinutes && delayMinutes > 0 ? "text-red-600 font-semibold" : ""}>
-                              {delayMinutes === null
-                                ? "-"
-                                : delayMinutes <= 0
-                                ? "La timp"
-                                : formatDelay(delayMinutes)}
-                            </TableCell>
-                          </TableRow>
-                        )
-                      })
-                    })()}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </div>
-        )}
       </Tabs>
 
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
