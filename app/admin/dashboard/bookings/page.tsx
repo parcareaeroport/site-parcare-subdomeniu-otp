@@ -1093,11 +1093,11 @@ function BookingsPageContent() {
   }
 
   const getPaymentStatusBadge = (status?: string) => {
-    // Doar două opțiuni vizibile în tabel: Achitat (verde) / Ne plătit (roșu)
+    // Doar două opțiuni vizibile în tabel: Achitat (verde) / Neplatit (roșu)
     const isPaid = status === "paid"
     return (
       <Badge className={isPaid ? "bg-green-500 text-white" : "bg-red-500 text-white"}>
-        {isPaid ? "Achitat" : "Ne plătit"}
+        {isPaid ? "Achitat" : "Neplatit"}
       </Badge>
     )
   }
@@ -1107,7 +1107,7 @@ function BookingsPageContent() {
     const isPaid = status === "paid"
     return (
       <Badge className={isPaid ? "bg-green-500 text-white" : "bg-red-500 text-white"}>
-        {isPaid ? "Achitat" : "Ne plătit"}
+        {isPaid ? "Achitat" : "Neplatit"}
       </Badge>
     )
   }
@@ -1115,12 +1115,12 @@ function BookingsPageContent() {
   const getPayOnSiteStatusBadge = (booking: Booking) => {
     // Verifică dacă rezervarea a fost anulată
     if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin") {
-      return <Badge className="bg-red-500 text-white">Ne plătit</Badge>
+      return <Badge className="bg-red-500 text-white">Neplatit</Badge>
     }
     const isPaid = booking.paymentStatus === "paid"
     return (
       <Badge className={isPaid ? "bg-green-500 text-white" : "bg-red-500 text-white"}>
-        {isPaid ? "Achitat" : "Ne plătit"}
+        {isPaid ? "Achitat" : "Neplatit"}
       </Badge>
     )
   }
@@ -1152,7 +1152,7 @@ function BookingsPageContent() {
               onClick={() => handleUpdateManualPaymentStatus(booking, "not_paid")}
               disabled={isUpdatingPayment}
             >
-              <Badge className="bg-red-500 text-white mr-2 w-28 justify-center">Ne plătit</Badge>
+              <Badge className="bg-red-500 text-white mr-2 w-28 justify-center">Neplatit</Badge>
             </DropdownMenuItem>
             <DropdownMenuItem 
               onClick={() => handleUpdateManualPaymentStatus(booking, "paid")}
@@ -1196,7 +1196,7 @@ function BookingsPageContent() {
               onClick={() => handleUpdatePayOnSiteStatus(booking, "pending")}
               disabled={isUpdatingPayment}
             >
-              <Badge className="bg-red-500 text-white mr-2 w-24 justify-center">Ne plătit</Badge>
+              <Badge className="bg-red-500 text-white mr-2 w-24 justify-center">Neplatit</Badge>
             </DropdownMenuItem>
             <DropdownMenuItem 
               onClick={() => handleUpdatePayOnSiteStatus(booking, "paid")}
