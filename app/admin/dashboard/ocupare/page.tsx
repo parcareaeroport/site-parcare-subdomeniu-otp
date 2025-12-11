@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Loader2, Printer, RefreshCw, Info } from "lucide-react"
+import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 
 type PlateItem = {
   id: string
@@ -182,28 +183,10 @@ export default function OccupancyPage() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Ocupare curentă</CardTitle>
-          <CardDescription>Număr total mașini prezente în parcare</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="flex flex-wrap items-center gap-6">
-            {loading ? (
-              <Loader2 className="h-6 w-6 animate-spin" />
-            ) : (
-              <>
-                <div className="text-2xl font-semibold">
-                  {liveCount} / {maxLimit || lprCount}
-               
-                </div>
-             
-              </>
-            )}
-          </div>
-        
-        </CardContent>
-      </Card>
+      <OccupancyCounter 
+        title="Ocupare Curentă" 
+        showProgress={true}
+      />
 
       <Card id="plates-table-section">
         <CardHeader>

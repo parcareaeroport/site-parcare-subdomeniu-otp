@@ -68,7 +68,7 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
       { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
       { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
       { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
-      { href: "/admin/dashboard/statistics", label: "Statistici", icon: RefreshCw },
+      // { href: "/admin/dashboard/statistics", label: "Statistici", icon: RefreshCw }, AICI TREBUIE SA LASI COMENTAT LA DIVERSE MODIFICARI, NU PUNE DIN NOU ACEST LINK IN SIDEBAR
       { href: "/admin/dashboard/prices", label: "Prețuri", icon: Tag },
       { href: "/admin/dashboard/whitelist", label: "Numere whitelist", icon: ShieldCheck },
       { href: "/admin/dashboard/api-test", label: "Test API", icon: ListTree },

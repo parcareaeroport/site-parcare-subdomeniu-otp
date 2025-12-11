@@ -12,6 +12,7 @@ import { doc, setDoc, onSnapshot, collection, query, getCountFromServer, where, 
 import { useToast } from "@/components/ui/use-toast"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
+import { OccupancyCounter } from "./occupancy-counter"
 
 export function ReservationLimitManager() {
   const { toast } = useToast()
@@ -299,20 +300,14 @@ export function ReservationLimitManager() {
 
         {/* Current Status */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label>Rezervări Active Acum</Label>
-            <div className="flex items-center space-x-2">
-              <Badge variant={(activeBookings ?? 0) >= (currentLimit ?? 0) ? "destructive" : "secondary"}>
-                {activeBookings ?? 0} / {currentLimit ?? 0}
-              </Badge>
-              {(activeBookings ?? 0) >= (currentLimit ?? 0) && (
-                <AlertTriangle className="h-4 w-4 text-destructive" />
-              )}
-            </div>
-          </div>
-          <div className="space-y-2">
+          <OccupancyCounter 
+            title="Rezervări Active Acum" 
+            compact 
+            showProgress={true}
+          />
+          <div className="space-y-2 p-4 rounded-lg border-2 bg-blue-50 border-blue-200">
             <Label>Status Rezervări</Label>
-            <Badge variant={reservationsEnabled ? "default" : "secondary"}>
+            <Badge variant={reservationsEnabled ? "default" : "secondary"} className="text-sm">
               {reservationsEnabled ? "ACTIVE" : "DEZACTIVATE"}
             </Badge>
           </div>

@@ -37,7 +37,7 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Calendar } from "@/components/ui/calendar" // Shadcn Calendar
 import type { DateRange } from "react-day-picker"
-import { format as formatDateFn, parseISO, subDays } from "date-fns" // Renamed to avoid conflict
+import { format as formatDateFn, parseISO, subDays, startOfDay, endOfDay } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
 import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -49,6 +49,7 @@ import { TimePickerDemo } from "@/components/time-picker"
 import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { Clock, XCircle } from "lucide-react"
+import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 
 interface Booking {
   id: string // Firestore document ID
@@ -237,6 +238,11 @@ function BookingsPageContent() {
   }
 
   const formatDateKey = (d: Date) => formatDateFn(d, "yyyy-MM-dd")
+  const isoDayRange = (d: Date) => {
+    const start = startOfDay(d).toISOString()
+    const end = endOfDay(d).toISOString()
+    return { start, end }
+  }
 
   const fetchBookings = useCallback(
     async (range?: DateRange) => {
@@ -250,19 +256,105 @@ function BookingsPageContent() {
         const toKey = formatDateKey(toDate)
 
         const bookingsCollectionRef = collection(db, "bookings")
-        const q = query(
+
+        // Query 1: după startDate
+        const qStart = query(
           bookingsCollectionRef,
           where("startDate", ">=", fromKey),
           where("startDate", "<=", toKey),
           orderBy("startDate", "desc"),
           limit(500),
         )
-        const data = await getDocs(q)
+
+        // Query 2: după endDate (rezervări care se termină în interval)
+        const qEnd = query(
+          bookingsCollectionRef,
+          where("endDate", ">=", fromKey),
+          where("endDate", "<=", toKey),
+          orderBy("endDate", "desc"),
+          limit(500),
+        )
+
+        // Query 2: după lpr.arrivedAt (dacă există)
+        const { start: lprStartIso } = isoDayRange(fromDate)
+        const { end: lprRangeEnd } = isoDayRange(toDate)
+        let lprDocs: typeof data.docs | null = null
+        let lprFallbackDocs: any[] | null = null
+        try {
+          const qLpr = query(
+            bookingsCollectionRef,
+            where("lpr.arrivedAt", ">=", lprStartIso),
+            where("lpr.arrivedAt", "<=", lprRangeEnd),
+            orderBy("lpr.arrivedAt", "desc"),
+            limit(500),
+          )
+          lprDocs = (await getDocs(qLpr)).docs
+        } catch (err) {
+          // Logăm eroarea completă ca să vedem linkul de creare index în consolă
+          console.error("LPR arrivedAt query failed (index missing?). Create index link should appear below:", err)
+          // Fallback: ia unmatched_lpr și filtrează local după intervalul LPR
+          try {
+            const qUnmatched = query(
+              bookingsCollectionRef,
+              where("status", "==", "unmatched_lpr"),
+              orderBy("createdAt", "desc"),
+              limit(500),
+            )
+            const snap = await getDocs(qUnmatched)
+            lprFallbackDocs = snap.docs
+              .map((d) => ({ id: d.id, ...d.data() }))
+              .filter((raw: any) => {
+                const arrived = raw?.lpr?.arrivedAt
+                if (!arrived) return false
+                return arrived >= lprStartIso && arrived <= lprRangeEnd
+              })
+          } catch (fallbackErr) {
+            console.error("Fallback unmatched_lpr query failed:", fallbackErr)
+          }
+        }
+
+        // Query 3: după lpr.departedAt (pentru ieșiri datate LPR)
+        let lprDepartedDocs: typeof data.docs | null = null
+        try {
+          const qLprDeparted = query(
+            bookingsCollectionRef,
+            where("lpr.departedAt", ">=", lprStartIso),
+            where("lpr.departedAt", "<=", lprRangeEnd),
+            orderBy("lpr.departedAt", "desc"),
+            limit(500),
+          )
+          lprDepartedDocs = (await getDocs(qLprDeparted)).docs
+        } catch (err) {
+          console.error("LPR departedAt query failed (index missing?). Create index link should appear below:", err)
+        }
+
+        const [data, dataEnd] = await Promise.all([getDocs(qStart), getDocs(qEnd)])
         const now = new Date()
         const nowTs = now.getTime()
+        // Combinăm doc-urile din toate sursele (startDate + LPR arrived + LPR departed)
+        const combinedDocsMap = new Map<string, any>()
+        const pushDoc = (docSnap: any) => {
+          if (!docSnap) return
+          combinedDocsMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() })
+        }
+        data.docs.forEach(pushDoc)
+        dataEnd.docs.forEach(pushDoc)
+        lprDocs?.forEach(pushDoc)
+        lprFallbackDocs?.forEach((raw) => {
+          combinedDocsMap.set(raw.id, raw)
+        })
+        lprDepartedDocs?.forEach(pushDoc)
+
+        const combined = Array.from(combinedDocsMap.values())
+
         const fetchedBookings: Booking[] = await Promise.all(
-          data.docs.map(async (docSnap) => {
-            const raw: any = { id: docSnap.id, ...docSnap.data() }
+          combined.map(async (raw: any) => {
+            // Completează start/end din LPR dacă lipsesc
+            const lpr: any = raw.lpr || {}
+            const arrivedKey = lpr.arrivedAt ? lpr.arrivedAt.slice(0, 10) : undefined
+            const departedKey = lpr.departedAt ? lpr.departedAt.slice(0, 10) : undefined
+            if (!raw.startDate && arrivedKey) raw.startDate = arrivedKey
+            if (!raw.endDate && departedKey) raw.endDate = departedKey
 
             // Calculează și marchează întârzierea pentru pay_on_site (>3h după end)
             try {
@@ -1268,6 +1360,7 @@ function BookingsPageContent() {
                 : "neselectat"}
             </div>
           </div>
+     
         </div>
         <div className="flex gap-2">
           {user && (
@@ -1409,9 +1502,18 @@ function BookingsPageContent() {
         </div>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Lista Rezervărilor</CardTitle>
-            <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
+          <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle>Lista Rezervărilor</CardTitle>
+              <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
+            </div>
+            <div className="w-full sm:w-auto">
+              <OccupancyCounter
+                title="Ocupare"
+                inline
+                className="w-full sm:w-auto"
+              />
+            </div>
           </CardHeader>
           <CardContent>
             {/* Info paginare (deasupra tabelului) */}

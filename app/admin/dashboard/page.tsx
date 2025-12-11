@@ -20,6 +20,7 @@ import {
 import { Calendar, Car, CreditCard, Users, RefreshCw } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ReservationLimitManager } from "@/components/admin/reservation-limit-manager"
+import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 import {
   getDashboardStats,
   getMonthlyRevenueData,
@@ -247,20 +248,11 @@ export default function DashboardPage() {
             </p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Ocupare Curentă</CardTitle>
-            <Car className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-              <div className="text-2xl font-bold">
-                {dashboardStats.currentOccupancyCount} / {presentLimit || dashboardStats.maxLimit || 0}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {dashboardStats.currentOccupancy}% (bazat pe LPR isInside; limită din setări)
-              </p>
-          </CardContent>
-        </Card>
+        <OccupancyCounter 
+          title="Ocupare Curentă" 
+          icon={<Car className="h-5 w-5" />}
+          showProgress={false}
+        />
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Prezenți (LPR)</CardTitle>

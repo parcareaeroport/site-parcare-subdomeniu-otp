@@ -1,0 +1,193 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import { Card, CardContent } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { AlertTriangle, TrendingUp, Users, Car } from "lucide-react"
+import { db } from "@/lib/firebase"
+import { doc, onSnapshot } from "firebase/firestore"
+import { cn } from "@/lib/utils"
+
+interface OccupancyCounterProps {
+  /** Titlu custom pentru contor (default: "Ocupare Actuală") */
+  title?: string
+  /** Stil compact (fără card wrapper) */
+  compact?: boolean
+  /** Randare super compactă, toate elementele pe un singur rând */
+  inline?: boolean
+  /** Icon custom (default: Car) */
+  icon?: React.ReactNode
+  /** Clasă CSS custom pentru container */
+  className?: string
+  /** Show percentage progress bar */
+  showProgress?: boolean
+  /** Dimensiune: default sau sm (text mai mic) */
+  size?: "default" | "sm"
+}
+
+export function OccupancyCounter({
+  title = "Ocupare Actuală",
+  compact = false,
+  inline = false,
+  icon,
+  className,
+  showProgress = true,
+  size = "default",
+}: OccupancyCounterProps) {
+  const [occupiedCount, setOccupiedCount] = useState<number>(0)
+  const [maxLimit, setMaxLimit] = useState<number>(0)
+  const [loading, setLoading] = useState(true)
+
+  // Snapshot pentru occupiedCount din parkingLive
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "config", "parkingLive"),
+      (snap) => {
+        const count = Math.max(0, Number(snap.data()?.occupiedCount || 0))
+        setOccupiedCount(count)
+        setLoading(false)
+      },
+      (err) => {
+        console.error("Error listening to parkingLive:", err)
+        setLoading(false)
+      }
+    )
+    return () => unsub()
+  }, [])
+
+  // Snapshot pentru maxLimit din reservationSettings
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "config", "reservationSettings"),
+      (snap) => {
+        const limit = Number(snap.data()?.maxTotalReservations || 0)
+        setMaxLimit(limit)
+      },
+      (err) => {
+        console.error("Error listening to reservationSettings:", err)
+      }
+    )
+    return () => unsub()
+  }, [])
+
+  const percentage = maxLimit > 0 ? Math.min(100, Math.round((occupiedCount / maxLimit) * 100)) : 0
+  const isWarning = percentage >= 80 && percentage < 100
+  const isCritical = percentage >= 100
+
+  const statusColor = isCritical
+    ? "text-red-600"
+    : isWarning
+    ? "text-orange-600"
+    : "text-green-600"
+
+  const bgColor = isCritical
+    ? "bg-red-50 border-red-200"
+    : isWarning
+    ? "bg-orange-50 border-orange-200"
+    : "bg-green-50 border-green-200"
+
+  const badgeVariant = isCritical ? "destructive" : isWarning ? "default" : "secondary"
+
+  if (inline) {
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-md px-2 py-1 border",
+          isCritical ? "border-red-200 bg-red-50" : isWarning ? "border-orange-200 bg-orange-50" : "border-gray-200 bg-white",
+          className,
+        )}
+      >
+        {icon || <Car className="h-4 w-4 text-gray-600" />}
+        {title && <span className="text-xs font-medium text-gray-700">{title}</span>}
+        <span className="text-sm font-semibold tabular-nums">
+          {loading ? "—" : occupiedCount} / {loading ? "—" : maxLimit}
+        </span>
+      </div>
+    )
+  }
+
+  const titleSize = size === "sm" ? "text-xs" : "text-sm"
+  const countSize = size === "sm" ? "text-2xl" : "text-4xl"
+  const totalSize = size === "sm" ? "text-xl" : "text-2xl"
+  const gapSize = size === "sm" ? "gap-1.5" : "gap-2"
+  const progressHeight = size === "sm" ? "h-2" : "h-2.5"
+  const paddingCompact = size === "sm" ? "p-3" : "p-4"
+  const paddingCard = size === "sm" ? "pt-4" : "pt-6"
+
+  const CounterContent = () => (
+    <div className={cn("space-y-3", className)}>
+      {/* Header cu icon și titlu */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {icon || <Car className={cn("h-5 w-5", statusColor)} />}
+          <span className={cn("font-medium text-gray-700", titleSize)}>{title}</span>
+        </div>
+        {(isWarning || isCritical) && (
+          <AlertTriangle className={cn("h-4 w-4", isCritical ? "text-red-600" : "text-orange-600")} />
+        )}
+      </div>
+
+      {/* Contor principal cu gradient */}
+      <div className={cn("flex items-baseline", gapSize)}>
+        <div className={cn("font-bold tabular-nums", countSize, statusColor)}>
+          {loading ? "—" : occupiedCount}
+        </div>
+        <div className={cn("font-medium text-gray-400", totalSize === "text-xl" ? "text-xl" : "text-2xl")}>/</div>
+        <div className={cn("font-semibold text-gray-600 tabular-nums", totalSize)}>
+          {loading ? "—" : maxLimit}
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      {showProgress && !loading && (
+        <div className="space-y-1">
+          <div className={cn("w-full bg-gray-200 rounded-full overflow-hidden", progressHeight)}>
+            <div
+              className={cn(
+                "rounded-full transition-all duration-500 ease-out",
+                isCritical
+                  ? "bg-gradient-to-r from-red-500 to-red-600"
+                  : isWarning
+                  ? "bg-gradient-to-r from-orange-400 to-orange-500"
+                  : "bg-gradient-to-r from-green-400 to-green-500"
+              )}
+              style={{ width: `${Math.min(percentage, 100)}%` }}
+            />
+          </div>
+          <div className="flex items-center justify-between text-xs text-gray-500">
+            <span>{percentage}% ocupat</span>
+            {maxLimit > 0 && (
+              <Badge variant={badgeVariant} className="text-xs">
+                {maxLimit - occupiedCount > 0 ? `${maxLimit - occupiedCount} disponibile` : "Complet"}
+              </Badge>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Badge status pentru compact mode fără progress */}
+      {!showProgress && (
+        <Badge variant={badgeVariant} className="w-fit">
+          {isCritical ? "Limită Atinsă" : isWarning ? "Aproape de Limită" : "Disponibil"}
+        </Badge>
+      )}
+    </div>
+  )
+
+  if (compact) {
+    return (
+      <div className={cn("rounded-lg border-2", paddingCompact, bgColor)}>
+        <CounterContent />
+      </div>
+    )
+  }
+
+  return (
+    <Card className={cn("border-2", bgColor)}>
+      <CardContent className={paddingCard}>
+        <CounterContent />
+      </CardContent>
+    </Card>
+  )
+}
+
