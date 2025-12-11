@@ -67,7 +67,7 @@ async function autoCancelPayOnSite(id: string) {
 export default function EntriesExitsPage() {
   const [isClient, setIsClient] = useState(false)
   const [activeTab, setActiveTab] = useState<"entries" | "exits">("entries")
-  const [includeFuture, setIncludeFuture] = useState(true)
+  const [includeFuture, setIncludeFuture] = useState(false)
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date()
     return today.toISOString().split("T")[0]
@@ -429,7 +429,7 @@ export default function EntriesExitsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Intrări/Ieșiri</h1>
           <p className="text-muted-foreground text-xs md:text-sm">
-            Selectează data (ex: 25.10.2025) și vezi intrările/ieșirile prezente și viitoare.
+            Selectează data (ex: 25.10.2025) și vezi intrările/ieșirile pentru acea zi.
           </p>
         </div>
         <Button onClick={loadData} disabled={loading} variant="outline" size="sm">

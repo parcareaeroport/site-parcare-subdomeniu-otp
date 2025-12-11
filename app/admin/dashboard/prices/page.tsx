@@ -360,6 +360,18 @@ export default function PricesPage() {
     })
   }
 
+  // Permite setarea directă a "Preț pe Zi": setează total = zile * preț/zi și elimină discountul
+  const handleEditPricePerDayChange = (value: number, days: number) => {
+    const safeDays = Math.max(1, days)
+    const perDay = Math.max(0, value)
+    const total = perDay * safeDays
+    setEditValues({
+      standardPrice: total,
+      reducereAplicata: 0,
+      discountPercentage: 0,
+    })
+  }
+
   // Handler pentru editarea prețului standard în tabel
   const handleEditStandardPriceChange = (value: number) => {
     // Recalculează procentul bazat pe reducerea existentă
@@ -850,7 +862,19 @@ export default function PricesPage() {
                           {currentFinalPrice.toFixed(2)}
                       </TableCell>
                       <TableCell className="text-blue-600 font-medium">
-                        {price.days > 0 ? (currentFinalPrice / price.days).toFixed(2) : "0.00"}
+                        {editingId === price.id ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={price.days > 0 ? (currentFinalPrice / price.days).toFixed(2) : "0.00"}
+                            onChange={(e) => handleEditPricePerDayChange(Number(e.target.value), price.days)}
+                            className="w-24"
+                            placeholder="Preț/zi"
+                          />
+                        ) : (
+                          price.days > 0 ? (currentFinalPrice / price.days).toFixed(2) : "0.00"
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         {editingId === price.id ? (
