@@ -257,7 +257,7 @@ function BookingsPageContent() {
 
         const bookingsCollectionRef = collection(db, "bookings")
 
-        // Query 1: după startDate
+        // Query 1: după startDate în interval
         const qStart = query(
           bookingsCollectionRef,
           where("startDate", ">=", fromKey),
@@ -266,7 +266,7 @@ function BookingsPageContent() {
           limit(500),
         )
 
-        // Query 2: după endDate (rezervări care se termină în interval)
+        // Query 2: după endDate în interval
         const qEnd = query(
           bookingsCollectionRef,
           where("endDate", ">=", fromKey),
@@ -274,76 +274,18 @@ function BookingsPageContent() {
           orderBy("endDate", "desc"),
           limit(500),
         )
-
-        // Query 2: după lpr.arrivedAt (dacă există)
-        const { start: lprStartIso } = isoDayRange(fromDate)
-        const { end: lprRangeEnd } = isoDayRange(toDate)
-        let lprDocs: typeof data.docs | null = null
-        let lprFallbackDocs: any[] | null = null
-        try {
-          const qLpr = query(
-            bookingsCollectionRef,
-            where("lpr.arrivedAt", ">=", lprStartIso),
-            where("lpr.arrivedAt", "<=", lprRangeEnd),
-            orderBy("lpr.arrivedAt", "desc"),
-            limit(500),
-          )
-          lprDocs = (await getDocs(qLpr)).docs
-        } catch (err) {
-          // Logăm eroarea completă ca să vedem linkul de creare index în consolă
-          console.error("LPR arrivedAt query failed (index missing?). Create index link should appear below:", err)
-          // Fallback: ia unmatched_lpr și filtrează local după intervalul LPR
-          try {
-            const qUnmatched = query(
-              bookingsCollectionRef,
-              where("status", "==", "unmatched_lpr"),
-              orderBy("createdAt", "desc"),
-              limit(500),
-            )
-            const snap = await getDocs(qUnmatched)
-            lprFallbackDocs = snap.docs
-              .map((d) => ({ id: d.id, ...d.data() }))
-              .filter((raw: any) => {
-                const arrived = raw?.lpr?.arrivedAt
-                if (!arrived) return false
-                return arrived >= lprStartIso && arrived <= lprRangeEnd
-              })
-          } catch (fallbackErr) {
-            console.error("Fallback unmatched_lpr query failed:", fallbackErr)
-          }
-        }
-
-        // Query 3: după lpr.departedAt (pentru ieșiri datate LPR)
-        let lprDepartedDocs: typeof data.docs | null = null
-        try {
-          const qLprDeparted = query(
-            bookingsCollectionRef,
-            where("lpr.departedAt", ">=", lprStartIso),
-            where("lpr.departedAt", "<=", lprRangeEnd),
-            orderBy("lpr.departedAt", "desc"),
-            limit(500),
-          )
-          lprDepartedDocs = (await getDocs(qLprDeparted)).docs
-        } catch (err) {
-          console.error("LPR departedAt query failed (index missing?). Create index link should appear below:", err)
-        }
-
-        const [data, dataEnd] = await Promise.all([getDocs(qStart), getDocs(qEnd)])
         const now = new Date()
         const nowTs = now.getTime()
-        // Combinăm doc-urile din toate sursele (startDate + LPR arrived + LPR departed)
+
+        // Combinăm doc-urile din toate sursele (startDate + endDate + LPR arrived + LPR departed)
+        const [dataStart, dataEnd] = await Promise.all([getDocs(qStart), getDocs(qEnd)])
         const combinedDocsMap = new Map<string, any>()
-        const pushDoc = (docSnap: any) => {
+        const pushDocSnap = (docSnap: any) => {
           if (!docSnap) return
           combinedDocsMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() })
         }
-        data.docs.forEach(pushDoc)
-        dataEnd.docs.forEach(pushDoc)
-        lprDocs?.forEach(pushDoc)
-        lprFallbackDocs?.forEach((raw) => {
-          combinedDocsMap.set(raw.id, raw)
-        })
-        lprDepartedDocs?.forEach(pushDoc)
+        dataStart.docs.forEach(pushDocSnap)
+        dataEnd.docs.forEach(pushDocSnap)
 
         const combined = Array.from(combinedDocsMap.values())
 
@@ -351,10 +293,12 @@ function BookingsPageContent() {
           combined.map(async (raw: any) => {
             // Completează start/end din LPR dacă lipsesc
             const lpr: any = raw.lpr || {}
-            const arrivedKey = lpr.arrivedAt ? lpr.arrivedAt.slice(0, 10) : undefined
-            const departedKey = lpr.departedAt ? lpr.departedAt.slice(0, 10) : undefined
+            const arrivedKey = lpr.arrivedAt ? formatDateFn(new Date(lpr.arrivedAt), "yyyy-MM-dd") : undefined
+            const departedKey = lpr.departedAt ? formatDateFn(new Date(lpr.departedAt), "yyyy-MM-dd") : undefined
             if (!raw.startDate && arrivedKey) raw.startDate = arrivedKey
             if (!raw.endDate && departedKey) raw.endDate = departedKey
+            if (!raw.startDate && raw.endDate) raw.startDate = raw.endDate
+            if (!raw.endDate && raw.startDate) raw.endDate = raw.startDate
 
             // Calculează și marchează întârzierea pentru pay_on_site (>3h după end)
             try {
@@ -386,8 +330,17 @@ function BookingsPageContent() {
             return raw as Booking
           }),
         )
-        setBookings(fetchedBookings)
-        setFilteredBookings(fetchedBookings) // Inițial, afișează toate
+        // Sortează după startDate (desc) apoi createdAt (desc)
+        const sorted = [...fetchedBookings].sort((a, b) => {
+          const aStart = a.startDate || ""
+          const bStart = b.startDate || ""
+          if (aStart !== bStart) return bStart.localeCompare(aStart)
+          const aCreated = (a.createdAt as any)?.toMillis?.() ?? 0
+          const bCreated = (b.createdAt as any)?.toMillis?.() ?? 0
+          return bCreated - aCreated
+        })
+        setBookings(sorted)
+        setFilteredBookings(sorted) // Inițial, afișează toate; filtrarea pe UI după interval
       } catch (error) {
         console.error("Error fetching bookings:", error)
         toast({ title: "Eroare", description: "Nu s-au putut încărca rezervările.", variant: "destructive" })
@@ -441,14 +394,15 @@ function BookingsPageContent() {
 
   // Statistici rapide pentru bara de sus (în funcție de data selectată)
   const overlapsRange = (start?: string, end?: string, from?: Date, to?: Date) => {
+    // Inclusiv pe zile întregi (start-of-day / end-of-day) ca să evităm probleme de fus orar
     if (!start) return false
     if (!from && !to) return true
     try {
-      const startDate = parseISO(start)
-      const endDate = parseISO(end || start)
-      const rangeStart = from ?? to ?? startDate
-      const rangeEnd = to ?? from ?? endDate
-      return startDate <= rangeEnd && endDate >= rangeStart
+      const bookingStart = startOfDay(parseISO(start))
+      const bookingEnd = endOfDay(end ? parseISO(end) : parseISO(start))
+      const rangeStart = from ? startOfDay(from) : bookingStart
+      const rangeEnd = to ? endOfDay(to) : bookingEnd
+      return bookingStart <= rangeEnd && bookingEnd >= rangeStart
     } catch {
       return false
     }
