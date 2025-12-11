@@ -200,10 +200,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     if (!presentCount) {
       const todayIso = new Date().toISOString().split('T')[0]
       const lprInsideQuery = query(
-        bookingsRef,
+      bookingsRef,
         where('lpr.isInside', '==', true),
         where('endDate', '>=', todayIso)
-      )
+    )
       const lprInsideSnap = await getDocs(lprInsideQuery)
       presentCount = lprInsideSnap.size
     }

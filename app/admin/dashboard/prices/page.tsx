@@ -52,6 +52,9 @@ export default function PricesPage() {
   const [newPrice, setNewPrice] = useState({ days: 1, standardPrice: 50, discountPercentage: 0, reducedPrice: 50 })
   const [inputMode, setInputMode] = useState<'discount' | 'reduced'>('discount') // Mod de input: discount sau preț redus
   const [globalDiscount, setGlobalDiscount] = useState(0)
+  const [bulkPerDayStart, setBulkPerDayStart] = useState<number>(1)
+  const [bulkPerDayValue, setBulkPerDayValue] = useState<number>(0)
+  const [bulkSaving, setBulkSaving] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isImporting, setIsImporting] = useState(false)
   const [importPreview, setImportPreview] = useState<ExcelRow[]>([])
@@ -483,6 +486,42 @@ export default function PricesPage() {
     }
   }
 
+  // Aplică același preț pe zi pentru toate intrările cu zile >= bulkPerDayStart
+  const applyBulkPricePerDay = async () => {
+    if (!user) return
+    const startDay = Math.max(1, Math.floor(bulkPerDayStart || 1))
+    const perDay = Math.max(0, bulkPerDayValue || 0)
+    const targets = prices.filter((p) => p.days >= startDay)
+    if (targets.length === 0) {
+      toast({ title: "Nimic de actualizat", description: "Nu există prețuri cu zile ≥ valoarea aleasă." })
+      return
+    }
+    const batch = writeBatch(db)
+    targets.forEach((price) => {
+      const total = perDay * price.days
+      const ref = doc(db, "prices", price.id)
+      batch.update(ref, {
+        standardPrice: total,
+        reducereAplicata: 0,
+        discountPercentage: 0,
+      })
+    })
+    try {
+      setBulkSaving(true)
+      await batch.commit()
+      fetchPrices()
+      toast({
+        title: "Preț/zi aplicat",
+        description: `Setat ${perDay.toFixed(2)} lei/zi pentru zile ≥ ${startDay}.`,
+      })
+    } catch (error) {
+      console.error("Error applying bulk per-day price:", error)
+      toast({ title: "Eroare", description: "Aplicarea prețului pe zi a eșuat.", variant: "destructive" })
+    } finally {
+      setBulkSaving(false)
+    }
+  }
+
   if (authLoading || isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -783,6 +822,35 @@ export default function PricesPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              <div className="grid gap-3 md:grid-cols-3 mb-4">
+                <div>
+                  <Label className="text-sm font-medium">De la ziua (inclusiv)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={bulkPerDayStart}
+                    onChange={(e) => setBulkPerDayStart(Number(e.target.value))}
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label className="text-sm font-medium">Preț pe zi (RON)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={bulkPerDayValue}
+                    onChange={(e) => setBulkPerDayValue(Number(e.target.value))}
+                    className="mt-1"
+                  />
+                </div>
+                <div className="flex items-end">
+                  <Button onClick={applyBulkPricePerDay} disabled={bulkSaving} className="w-full">
+                    {bulkSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+                    Aplică preț/zi pentru zile ≥ {bulkPerDayStart || 1}
+                  </Button>
+                </div>
+              </div>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -790,11 +858,11 @@ export default function PricesPage() {
                     <TableHead>Preț Standard (RON)</TableHead>
                     <TableHead>
                       Discount (%)
-                      <div className="text-xs text-gray-500 font-normal">editabil ↔</div>
+                  
                     </TableHead>
                     <TableHead>
                       Reducere Aplicată (RON)
-                      <div className="text-xs text-gray-500 font-normal">editabil ↔</div>
+                    
                     </TableHead>
                     <TableHead>Preț Final (RON)</TableHead>
                     <TableHead>Preț pe Zi (RON)</TableHead>

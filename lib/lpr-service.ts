@@ -318,22 +318,22 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
             })
             // Decrement occupancy pentru ieșire fără rezervare (idempotent)
             if (occupancyIncrementedFlag && !occupancyDecrementedFlag) {
-              try {
-                const occupancyDocRef = doc(db, "config", "parkingLive")
-                await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
-                await updateDoc(occupancyDocRef, {
-                  occupiedCount: increment(-1),
-                  lastUpdated: serverTimestamp(),
-                  lastChange: {
-                    type: "exit_unmatched",
-                    bookingId: docSnap.id,
-                    plateNumber: normalizedPlate,
-                    deviceId: input.deviceId ?? null,
-                    at: eventTime.toISOString()
-                  }
-                })
-              } catch (e) {
-                console.error('❌ [LPR] Failed to decrement occupancy for unmatched exit', e)
+            try {
+              const occupancyDocRef = doc(db, "config", "parkingLive")
+              await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+              await updateDoc(occupancyDocRef, {
+                occupiedCount: increment(-1),
+                lastUpdated: serverTimestamp(),
+                lastChange: {
+                  type: "exit_unmatched",
+                  bookingId: docSnap.id,
+                  plateNumber: normalizedPlate,
+                  deviceId: input.deviceId ?? null,
+                  at: eventTime.toISOString()
+                }
+              })
+            } catch (e) {
+              console.error('❌ [LPR] Failed to decrement occupancy for unmatched exit', e)
               }
             } else {
               console.log('⏭️ [LPR] Skip unmatched decrement: already decremented or never incremented')
