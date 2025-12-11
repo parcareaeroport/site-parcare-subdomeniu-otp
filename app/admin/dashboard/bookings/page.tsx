@@ -124,7 +124,7 @@ function BookingsPageContent() {
   const [filteredBookings, setFilteredBookings] = useState<Booking[]>([])
   const [searchTerm, setSearchTerm] = useState("")
   const [statusFilter, setStatusFilter] = useState("all")
-  const [dateRange, setDateRange] = useState<DateRange>({ from: subDays(new Date(), 6), to: new Date() })
+  const [dateRange, setDateRange] = useState<DateRange>({ from: new Date(), to: new Date() })
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -243,7 +243,7 @@ function BookingsPageContent() {
       setIsLoading(true)
       try {
         const today = new Date()
-        const defaultFrom = subDays(today, 6)
+        const defaultFrom = today
         const fromDate = range?.from ?? dateRange.from ?? defaultFrom
         const toDate = range?.to ?? dateRange.to ?? today
         const fromKey = formatDateKey(fromDate)
