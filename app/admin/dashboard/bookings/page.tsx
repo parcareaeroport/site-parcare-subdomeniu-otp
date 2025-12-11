@@ -35,7 +35,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Calendar } from "@/components/ui/calendar" // Shadcn Calendar
 import type { DateRange } from "react-day-picker"
 import { format as formatDateFn, parseISO, subDays, startOfDay, endOfDay } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
@@ -135,6 +134,12 @@ function BookingsPageContent() {
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
   const [markingExitId, setMarkingExitId] = useState<string | null>(null)
+
+  const formatInputDate = (d?: Date) => (d ? formatDateFn(d, "yyyy-MM-dd") : "")
+  const handleDateInputChange = (key: "from" | "to") => (value: string) => {
+    const parsed = value ? new Date(`${value}T00:00:00`) : undefined
+    setDateRange((prev) => ({ ...prev, [key]: parsed }))
+  }
   
   // State pentru actualizarea statusului de plată manual
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
@@ -1088,54 +1093,36 @@ function BookingsPageContent() {
   }
 
   const getPaymentStatusBadge = (status?: string) => {
-    if (!status) return <Badge className="bg-gray-500">N/A</Badge>
-    switch (status) {
-      case "paid":
-        return <Badge className="bg-green-500">Plătită</Badge>
-      case "pending":
-        return <Badge className="bg-amber-500">În așteptare</Badge>
-      case "refunded":
-        return <Badge className="bg-blue-500">Rambursată</Badge>
-      case "n/a":
-        return <Badge className="bg-gray-400">N/A (Test)</Badge>
-      default:
-        return <Badge className="bg-gray-500">{status}</Badge>
-    }
+    // Doar două opțiuni vizibile în tabel: Achitat (verde) / Ne plătit (roșu)
+    const isPaid = status === "paid"
+    return (
+      <Badge className={isPaid ? "bg-green-500 text-white" : "bg-red-500 text-white"}>
+        {isPaid ? "Achitat" : "Ne plătit"}
+      </Badge>
+    )
   }
 
   const getManualPaymentStatusBadge = (booking: Booking) => {
     const status = booking.manualPaymentStatus || "not_paid"
-    
-    switch (status) {
-      case "not_paid":
-        return <Badge className="bg-red-500 text-white">Nu este plătită</Badge>
-      case "partial":
-        return <Badge className="bg-yellow-500 text-white">Parțial plătită</Badge>
-      case "paid":
-        return <Badge className="bg-green-500 text-white">Plătită</Badge>
-      case "refunded":
-        return <Badge className="bg-blue-500 text-white">Rambursată</Badge>
-      default:
-        return <Badge className="bg-gray-500 text-white">Nu este plătită</Badge>
-    }
+    const isPaid = status === "paid"
+    return (
+      <Badge className={isPaid ? "bg-green-500 text-white" : "bg-red-500 text-white"}>
+        {isPaid ? "Achitat" : "Ne plătit"}
+      </Badge>
+    )
   }
 
   const getPayOnSiteStatusBadge = (booking: Booking) => {
     // Verifică dacă rezervarea a fost anulată
     if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin") {
-      return <Badge className="bg-red-500 text-white">Anulată</Badge>
+      return <Badge className="bg-red-500 text-white">Ne plătit</Badge>
     }
-    
-    const status = booking.paymentStatus || "pending"
-    
-    switch (status) {
-      case "pending":
-        return <Badge className="bg-orange-500 text-white">În așteptare</Badge>
-      case "paid":
-        return <Badge className="bg-green-500 text-white">Plătit la parcare</Badge>
-      default:
-        return <Badge className="bg-gray-500 text-white">În așteptare</Badge>
-    }
+    const isPaid = booking.paymentStatus === "paid"
+    return (
+      <Badge className={isPaid ? "bg-green-500 text-white" : "bg-red-500 text-white"}>
+        {isPaid ? "Achitat" : "Ne plătit"}
+      </Badge>
+    )
   }
 
   const renderPaymentStatusCell = (booking: Booking) => {
@@ -1165,25 +1152,13 @@ function BookingsPageContent() {
               onClick={() => handleUpdateManualPaymentStatus(booking, "not_paid")}
               disabled={isUpdatingPayment}
             >
-              <Badge className="bg-red-500 text-white mr-2 w-24 justify-center">Nu este plătită</Badge>
-            </DropdownMenuItem>
-            <DropdownMenuItem 
-              onClick={() => handleUpdateManualPaymentStatus(booking, "partial")}
-              disabled={isUpdatingPayment}
-            >
-              <Badge className="bg-yellow-500 text-white mr-2 w-24 justify-center">Parțial plătită</Badge>
+              <Badge className="bg-red-500 text-white mr-2 w-28 justify-center">Ne plătit</Badge>
             </DropdownMenuItem>
             <DropdownMenuItem 
               onClick={() => handleUpdateManualPaymentStatus(booking, "paid")}
               disabled={isUpdatingPayment}
             >
-              <Badge className="bg-green-500 text-white mr-2 w-24 justify-center">Plătită</Badge>
-            </DropdownMenuItem>
-            <DropdownMenuItem 
-              onClick={() => handleUpdateManualPaymentStatus(booking, "refunded")}
-              disabled={isUpdatingPayment}
-            >
-              <Badge className="bg-blue-500 text-white mr-2 w-24 justify-center">Rambursată</Badge>
+              <Badge className="bg-green-500 text-white mr-2 w-28 justify-center">Achitat</Badge>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1221,13 +1196,13 @@ function BookingsPageContent() {
               onClick={() => handleUpdatePayOnSiteStatus(booking, "pending")}
               disabled={isUpdatingPayment}
             >
-              <Badge className="bg-orange-500 text-white mr-2 w-24 justify-center">În așteptare</Badge>
+              <Badge className="bg-red-500 text-white mr-2 w-24 justify-center">Ne plătit</Badge>
             </DropdownMenuItem>
             <DropdownMenuItem 
               onClick={() => handleUpdatePayOnSiteStatus(booking, "paid")}
               disabled={isUpdatingPayment}
             >
-              <Badge className="bg-green-500 text-white mr-2 w-24 justify-center">Plătit la parcare</Badge>
+              <Badge className="bg-green-500 text-white mr-2 w-24 justify-center">Achitat</Badge>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1265,38 +1240,26 @@ function BookingsPageContent() {
         <div className="space-y-2">
         <h1 className="text-2xl font-bold tracking-tight">Gestionare Rezervări</h1>
           <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="w-full sm:w-auto hover:text-white">
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {dateRange.from
-                    ? dateRange.to
-                      ? `${formatDateFn(dateRange.from, "PPP", { locale: ro })} - ${formatDateFn(dateRange.to, "PPP", { locale: ro })}`
-                      : formatDateFn(dateRange.from, "PPP", { locale: ro })
-                    : "Filtrează după dată"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar
-                  mode="range"
-                  selected={dateRange}
-                  onSelect={(range) => setDateRange(range || { from: new Date(), to: new Date() })}
-                  numberOfMonths={2}
-                  classNames={{
-                    day_selected: "bg-primary text-white hover:bg-primary hover:text-white",
-                    day_range_middle: "bg-primary/80 text-white hover:bg-primary hover:text-white",
-                    day_range_end: "bg-primary text-white hover:bg-primary hover:text-white",
-                    day_range_start: "bg-primary text-white hover:bg-primary hover:text-white",
-                    day_today: "text-primary",
-                    nav: "flex items-center justify-between px-4 py-2",
-                    nav_button_previous: "absolute left-2 top-2",
-                    nav_button_next: "absolute right-2 top-2",
-                    caption: "relative flex items-center justify-center py-2",
-                    caption_label: "text-sm font-medium",
-                  }}
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <div className="flex items-center gap-2">
+                <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+                <Input
+                  type="date"
+                  value={formatInputDate(dateRange.from)}
+                  onChange={(e) => handleDateInputChange("from")(e.target.value)}
+                  className="w-full sm:w-44"
                 />
-              </PopoverContent>
-            </Popover>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">→</span>
+                <Input
+                  type="date"
+                  value={formatInputDate(dateRange.to)}
+                  onChange={(e) => handleDateInputChange("to")(e.target.value)}
+                  className="w-full sm:w-44"
+                />
+              </div>
+            </div>
             {(searchTerm || statusFilter !== "all" || dateRange.from || dateRange.to) && (
               <Button
                 variant="ghost"
@@ -1423,27 +1386,25 @@ function BookingsPageContent() {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <div className="flex gap-2 w-full sm:w-auto">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="w-full sm:w-auto hover:text-white">
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {dateRange.from
-                    ? dateRange.to
-                      ? `${formatDateFn(dateRange.from, "PPP", { locale: ro })} - ${formatDateFn(dateRange.to, "PPP", { locale: ro })}`
-                      : formatDateFn(dateRange.from, "PPP", { locale: ro })
-                    : "Filtrează după dată"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="end">
-                <Calendar
-                  mode="range"
-                  selected={dateRange}
-                  onSelect={(range) => setDateRange(range || { from: undefined, to: undefined })}
-                  numberOfMonths={2}
-                />
-              </PopoverContent>
-            </Popover>
+          <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+            <div className="flex items-center gap-2">
+              <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+              <Input
+                type="date"
+                value={formatInputDate(dateRange.from)}
+                onChange={(e) => handleDateInputChange("from")(e.target.value)}
+                className="w-full sm:w-40"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">→</span>
+              <Input
+                type="date"
+                value={formatInputDate(dateRange.to)}
+                onChange={(e) => handleDateInputChange("to")(e.target.value)}
+                className="w-full sm:w-40"
+              />
+            </div>
             {(searchTerm || statusFilter !== "all" || dateRange.from || dateRange.to) && (
               <Button
                 variant="ghost"
