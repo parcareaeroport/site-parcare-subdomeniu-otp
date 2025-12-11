@@ -293,8 +293,13 @@ function BookingsPageContent() {
           combined.map(async (raw: any) => {
             // Completează start/end din LPR dacă lipsesc
             const lpr: any = raw.lpr || {}
-            const arrivedKey = lpr.arrivedAt ? formatDateFn(new Date(lpr.arrivedAt), "yyyy-MM-dd") : undefined
-            const departedKey = lpr.departedAt ? formatDateFn(new Date(lpr.departedAt), "yyyy-MM-dd") : undefined
+            const normalizeDateKey = (val: any) => {
+              if (!val) return undefined
+              const d = typeof val?.toDate === "function" ? val.toDate() : new Date(val)
+              return isNaN(d.getTime()) ? undefined : formatDateFn(d, "yyyy-MM-dd")
+            }
+            const arrivedKey = normalizeDateKey(lpr.arrivedAt)
+            const departedKey = normalizeDateKey(lpr.departedAt)
             if (!raw.startDate && arrivedKey) raw.startDate = arrivedKey
             if (!raw.endDate && departedKey) raw.endDate = departedKey
             if (!raw.startDate && raw.endDate) raw.startDate = raw.endDate
