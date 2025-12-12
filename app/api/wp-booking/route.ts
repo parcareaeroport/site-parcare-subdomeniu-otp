@@ -432,7 +432,8 @@ export async function POST(request: NextRequest) {
       companyReg: needInvoice ? companyReg : undefined,
       companyAddress: needInvoice ? companyAddress : undefined,
       // termeni
-      termsAccepted: !!acceptTerms,
+      // WP form: T&C must always be treated as accepted for bookings created through this endpoint
+      termsAccepted: true,
       // card extras
       amount:
         typeof amount === "number"

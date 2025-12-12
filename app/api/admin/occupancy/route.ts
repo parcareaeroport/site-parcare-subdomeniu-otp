@@ -49,6 +49,31 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => null)
     const action = body?.action || "reset"
 
+    if (action === "recalculate") {
+      // Recalculează contorul din realitatea LPR: câte booking-uri au lpr.isInside=true
+      const bookingsRef = collection(db, "bookings")
+      const q = query(bookingsRef, where("lpr.isInside", "==", true))
+      const snap = await getDocs(q)
+      const count = snap.size
+
+      await setDoc(
+        ref,
+        {
+          occupiedCount: count,
+          lastUpdated: serverTimestamp(),
+          lastChange: {
+            type: "recalculate_from_isInside",
+            at: new Date().toISOString(),
+            note: "Recalculat din bookings where lpr.isInside=true",
+            count,
+          },
+        },
+        { merge: true },
+      )
+
+      return NextResponse.json({ success: true, occupiedCount: count })
+    }
+
     if (action === "reset") {
       await setDoc(
         ref,

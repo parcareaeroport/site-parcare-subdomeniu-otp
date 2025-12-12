@@ -296,7 +296,8 @@ export async function POST(request: NextRequest) {
       companyReg: ro.numar_registrul_comertului || undefined,
       companyAddress: ro.adresa_firma || undefined,
       // termeni
-      termsAccepted: !!ro.gdpr,
+      // WP/WooCommerce flow: T&C must always be treated as accepted for bookings created through this endpoint
+      termsAccepted: true,
       // card extras
       amount,
       days: resolvedDays,

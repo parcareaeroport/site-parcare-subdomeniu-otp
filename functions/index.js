@@ -66,7 +66,6 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
         const occupancyDocRef = db.doc("config/parkingLive");
         await occupancyDocRef.set(
             {
-              occupiedCount: 0,
               lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
             },
             {merge: true},

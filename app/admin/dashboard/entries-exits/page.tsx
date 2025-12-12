@@ -41,6 +41,18 @@ function parseDateTime(date?: string, time?: string) {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+function getExactPriceForDays(priceTable: PriceEntry[], days: number): number | null {
+  if (!days || days <= 0) return null
+  if (!priceTable || priceTable.length === 0) return null
+  const exact = priceTable.find((p) => p.days === days)
+  if (exact) return (exact.discountedPrice ?? exact.standardPrice) || null
+  // fallback: nearest greater, otherwise last
+  const sorted = [...priceTable].sort((a, b) => a.days - b.days)
+  const nearest = sorted.find((p) => p.days >= days) || sorted[sorted.length - 1]
+  if (!nearest) return null
+  return (nearest.discountedPrice ?? nearest.standardPrice) || null
+}
+
 function formatDelay(minutes?: number) {
   if (minutes === undefined || minutes === null) return "-"
   if (minutes === 0) return "La timp"
@@ -183,58 +195,43 @@ export default function EntriesExitsPage() {
     if (kind === "exit" && scheduled) {
       const endBase = scheduled.getTime()
 
-      if (isPayOnSite) {
+      // ONLINE: rule stays separate below
+      if (isPayOnSite || !isOnlinePaid) {
+        // PAY-ON-SITE + MANUAL + LPR (unpaid): exact price by total days (booked + extra late days)
         const overdueMin = Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
-        // Calculează baza în funcție de durata rezervării
+
+        // booked days (from booking start/end). Prefer time diff; fallback calendar days.
         const startDate = withDates.startDate
         const startTime = raw.startTime || row.time
-        let durationDays = 1
+        let bookedDays = 1
         const endDateVal = withDates.endDate
-        const endTimeVal = (withDates as any).endTime
-        if (startDate && startTime && endDateVal && endTimeVal) {
-          const start = parseDateTime(startDate, startTime)
-          const end = parseDateTime(endDateVal, endTimeVal)
-          if (start && end && end.getTime() > start.getTime()) {
-            durationDays = Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000))
-          }
+        const endTimeVal = (withDates as any).endTime || raw.endTime || row.time
+
+        const startDt = startDate && startTime ? parseDateTime(startDate, startTime) : null
+        const endDt = endDateVal && endTimeVal ? parseDateTime(endDateVal, endTimeVal) : null
+        if (startDt && endDt && endDt.getTime() > startDt.getTime()) {
+          bookedDays = Math.max(1, Math.ceil((endDt.getTime() - startDt.getTime()) / (24 * 60 * 60 * 1000)))
         } else if (startDate && endDateVal && startDate !== endDateVal) {
-          // Fallback: dacă lipsesc orele, calculează pe zile calendaristice
           const startDay = new Date(`${startDate}T00:00:00`)
           const endDay = new Date(`${endDateVal}T00:00:00`)
           const diffMs = endDay.getTime() - startDay.getTime()
-          if (diffMs > 0) {
-            durationDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000)) + 1
+          if (diffMs >= 0) {
+            bookedDays = Math.max(1, Math.ceil(diffMs / (24 * 60 * 60 * 1000)) + 1)
           }
         }
-        const basePrice = (() => {
-          if (priceTable.length === 0) return 0
-          const sorted = [...priceTable].sort((a, b) => a.days - b.days)
-          const match = sorted.find((p) => p.days >= durationDays) || sorted[sorted.length - 1]
-          if (!match) return 0
-          const perDay = (match.discountedPrice ?? match.standardPrice) / match.days
-          if (match.days >= durationDays) {
-            return perDay * durationDays
-          }
-          return perDay * durationDays
-        })()
-        let extra = 0
-        if (overdueMin > 0 && priceTable.length > 0) {
-          const perDay = (() => {
-            const last = [...priceTable].sort((a, b) => a.days - b.days).slice(-1)[0]
-            if (!last) return 0
-            return (last.discountedPrice ?? last.standardPrice) / last.days
-          })()
-          const extraDays = Math.ceil(overdueMin / (60 * 24))
-          extra = perDay * extraDays
-        }
-        const total = basePrice + extra
-        if (total > 0) {
-          amountDueValue = total
-          amountDueText = `${total.toFixed(2)} LEI`
-        } else if (overdueMin > 0) {
+
+        const extraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
+        const totalDays = Math.max(1, bookedDays + extraDays)
+
+        const totalPrice = getExactPriceForDays(priceTable, totalDays)
+        if (totalPrice !== null && totalPrice > 0) {
+          amountDueValue = totalPrice
+          amountDueText = `${totalPrice.toFixed(2)} LEI`
+        } else {
           amountDueText = "Calcul conform tarifelor MULTIPARK/WP"
         }
-        if (overdueMin > PAY_ON_SITE_CANCEL_AFTER_MIN) {
+
+        if (isPayOnSite && overdueMin > PAY_ON_SITE_CANCEL_AFTER_MIN) {
           autoCancelled = true
           autoCancelPayOnSite(row.id).catch(() => {})
         }
@@ -323,6 +320,14 @@ export default function EntriesExitsPage() {
                         MANUAL
                       </Badge>
                     )}
+                    {row.isOnlinePaid && row.source !== "manual" && row.source !== "pay_on_site" && (
+                      <Badge
+                        variant="outline"
+                        className="text-green-700 border-green-400 bg-green-100 text-[10px] leading-tight whitespace-nowrap px-2 py-1"
+                      >
+                        ONLINE
+                      </Badge>
+                    )}
                     {row.source === "pay_on_site" && (
                       <Badge
                         variant="outline"
@@ -374,6 +379,11 @@ export default function EntriesExitsPage() {
                 {row.source === "manual" && (
                   <Badge variant="outline" className="text-pink-700 border-pink-400 bg-pink-100 text-xs">
                     MANUAL
+                  </Badge>
+                )}
+                {row.isOnlinePaid && row.source !== "manual" && row.source !== "pay_on_site" && (
+                  <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 text-xs">
+                    ONLINE
                   </Badge>
                 )}
                 {row.source === "pay_on_site" && (

@@ -363,7 +363,8 @@ async function saveCompleteBookingToFirestore(bookingData: CompleteBookingData):
         const occupancyDocRef = doc(db, "config", "parkingLive")
         await setDoc(
           occupancyDocRef,
-          { occupiedCount: 0, lastUpdated: serverTimestamp() },
+          // IMPORTANT: don't reset occupiedCount to 0 here; just ensure doc exists
+          { lastUpdated: serverTimestamp() },
           { merge: true }
         )
         await updateDoc(occupancyDocRef, {
@@ -1142,7 +1143,8 @@ export async function cleanupExpiredBookings(): Promise<{ cleanedCount: number, 
           updates["occupancyDecrementedAt"] = serverTimestamp()
           try {
             const occupancyDocRef = doc(db, "config", "parkingLive")
-            await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+            // IMPORTANT: don't reset occupiedCount to 0 here; just ensure doc exists
+            await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
             await updateDoc(occupancyDocRef, {
               occupiedCount: increment(-1),
               lastUpdated: serverTimestamp(),
@@ -1320,7 +1322,8 @@ export async function createManualBooking(formData: FormData) {
         lastUpdated: serverTimestamp()
       })
       const occupancyDocRef = doc(db, "config", "parkingLive")
-      await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+      // IMPORTANT: don't reset occupiedCount to 0 here; just ensure doc exists
+      await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
       await updateDoc(occupancyDocRef, {
         occupiedCount: increment(1),
         lastUpdated: serverTimestamp(),

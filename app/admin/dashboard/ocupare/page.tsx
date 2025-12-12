@@ -15,6 +15,8 @@ type PlateItem = {
   status: string
   startDate: string | null
   startTime: string | null
+  endDate: string | null
+  endTime: string | null
   apiBookingNumber: string | null
 }
 
@@ -126,6 +128,24 @@ export default function OccupancyPage() {
     }
   }
 
+  const handleRecalculate = async () => {
+    setResetting(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/admin/occupancy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "recalculate" }),
+      })
+      if (!res.ok) throw new Error(`Status ${res.status}`)
+      await fetchData()
+    } catch (e) {
+      setError("Recalcularea contorului a eșuat.")
+    } finally {
+      setResetting(false)
+    }
+  }
+
   const lprCount = data?.plates?.length ?? 0
   const liveCount = lprCount // folosim direct numărul din LPR isInside
   const maxLimit = data?.maxLimit ?? 0
@@ -162,6 +182,10 @@ export default function OccupancyPage() {
             <Printer className="h-4 w-4 mr-2" />
             Printează
           </Button>
+          <Button variant="outline" onClick={handleRecalculate} disabled={resetting || loading}>
+            {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+            Recalculează contor (din isInside)
+          </Button>
           <Button variant="outline" onClick={handleSetAllOutside} disabled={resetting || loading}>
             {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
             Setează toate isInside=false
@@ -185,7 +209,6 @@ export default function OccupancyPage() {
 
       <OccupancyCounter 
         title="Ocupare Curentă" 
-        showProgress={true}
       />
 
       <Card id="plates-table-section">
@@ -206,7 +229,7 @@ export default function OccupancyPage() {
               <thead>
                 <tr className="text-left text-xs text-muted-foreground border-b">
                   <th className="py-2">Nr. Înmatriculare</th>
-                  <th className="py-2">Start</th>
+                  <th className="py-2">Perioada</th>
                   <th className="py-2">Sursă</th>
                   <th className="py-2">Status plată</th>
                 </tr>
@@ -214,6 +237,8 @@ export default function OccupancyPage() {
               <tbody>
                 {data?.plates?.map((p) => {
                   const pay = paymentInfo(p.paymentStatus)
+                  const startLabel = `${p.startDate || "-"}${p.startTime ? ` ${p.startTime}` : ""}`
+                  const endLabel = `${p.endDate || "-"}${p.endTime ? ` ${p.endTime}` : ""}`
                   return (
                     <tr
                       key={p.id}
@@ -221,7 +246,7 @@ export default function OccupancyPage() {
                     >
                       <td className="py-2 font-semibold">{p.licensePlate}</td>
                       <td className="py-2 text-xs text-muted-foreground">
-                        {p.startDate || "-"} {p.startTime || ""}
+                        {startLabel} → {endLabel}
                       </td>
                       <td className="py-2 text-xs">{sourceLabel(p.source)}</td>
                       <td className="py-2">

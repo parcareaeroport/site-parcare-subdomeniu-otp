@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { AlertTriangle, TrendingUp, Users, Car } from "lucide-react"
+import { AlertTriangle, Car } from "lucide-react"
 import { db } from "@/lib/firebase"
 import { doc, onSnapshot } from "firebase/firestore"
 import { cn } from "@/lib/utils"
@@ -19,8 +19,6 @@ interface OccupancyCounterProps {
   icon?: React.ReactNode
   /** Clasă CSS custom pentru container */
   className?: string
-  /** Show percentage progress bar */
-  showProgress?: boolean
   /** Dimensiune: default sau sm (text mai mic) */
   size?: "default" | "sm"
 }
@@ -31,7 +29,6 @@ export function OccupancyCounter({
   inline = false,
   icon,
   className,
-  showProgress = true,
   size = "default",
 }: OccupancyCounterProps) {
   const [occupiedCount, setOccupiedCount] = useState<number>(0)
@@ -110,7 +107,6 @@ export function OccupancyCounter({
   const countSize = size === "sm" ? "text-2xl" : "text-4xl"
   const totalSize = size === "sm" ? "text-xl" : "text-2xl"
   const gapSize = size === "sm" ? "gap-1.5" : "gap-2"
-  const progressHeight = size === "sm" ? "h-2" : "h-2.5"
   const paddingCompact = size === "sm" ? "p-3" : "p-4"
   const paddingCard = size === "sm" ? "pt-4" : "pt-6"
 
@@ -138,38 +134,16 @@ export function OccupancyCounter({
         </div>
       </div>
 
-      {/* Progress bar */}
-      {showProgress && !loading && (
-        <div className="space-y-1">
-          <div className={cn("w-full bg-gray-200 rounded-full overflow-hidden", progressHeight)}>
-            <div
-              className={cn(
-                "rounded-full transition-all duration-500 ease-out",
-                isCritical
-                  ? "bg-gradient-to-r from-red-500 to-red-600"
-                  : isWarning
-                  ? "bg-gradient-to-r from-orange-400 to-orange-500"
-                  : "bg-gradient-to-r from-green-400 to-green-500"
-              )}
-              style={{ width: `${Math.min(percentage, 100)}%` }}
-            />
-          </div>
-          <div className="flex items-center justify-between text-xs text-gray-500">
-            <span>{percentage}% ocupat</span>
-            {maxLimit > 0 && (
-              <Badge variant={badgeVariant} className="text-xs">
-                {maxLimit - occupiedCount > 0 ? `${maxLimit - occupiedCount} disponibile` : "Complet"}
-              </Badge>
-            )}
-          </div>
+      {/* Status */}
+      {!loading && (
+        <div className="flex items-center justify-between text-xs text-gray-500">
+          <span>{percentage}% ocupat</span>
+          {maxLimit > 0 && (
+            <Badge variant={badgeVariant} className="text-xs">
+              {maxLimit - occupiedCount > 0 ? `${maxLimit - occupiedCount} disponibile` : "Complet"}
+            </Badge>
+          )}
         </div>
-      )}
-
-      {/* Badge status pentru compact mode fără progress */}
-      {!showProgress && (
-        <Badge variant={badgeVariant} className="w-fit">
-          {isCritical ? "Limită Atinsă" : isWarning ? "Aproape de Limită" : "Disponibil"}
-        </Badge>
       )}
     </div>
   )

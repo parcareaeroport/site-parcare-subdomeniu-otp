@@ -301,9 +301,8 @@ export function ReservationLimitManager() {
         {/* Current Status */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <OccupancyCounter 
-            title="Rezervări Active Acum" 
+            title="Ocupare curenta" 
             compact 
-            showProgress={true}
           />
           <div className="space-y-2 p-4 rounded-lg border-2 bg-blue-50 border-blue-200">
             <Label>Status Rezervări</Label>
@@ -360,39 +359,7 @@ export function ReservationLimitManager() {
           </p>
         </div>
 
-        {/* Expired Bookings Cleanup */}
-        <div className="border-t pt-4">
-          <div className="space-y-2">
-            <Label>Curățare Rezervări Expirate</Label>
-            <p className="text-sm text-muted-foreground">
-              Marchează automat rezervările expirate pentru a elibera locurile ocupate
-            </p>
-            <Button 
-              onClick={handleExpiredCleanup} 
-              disabled={loadingSettings}
-              variant="outline"
-              className="w-full"
-            >
-              {loadingSettings ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : (
-                <RefreshCw className="h-4 w-4 mr-2" />
-              )}
-              Curăță Rezervările Expirate
-            </Button>
-          </div>
-        </div>
-
-        {/* Info Box */}
-        <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-          <h4 className="text-sm font-medium text-blue-900 mb-1">ℹ️ Cum funcționează</h4>
-          <ul className="text-xs text-blue-800 space-y-1">
-            <li>• Rezervările active = doar cele care nu au expirat încă</li>
-            <li>• Rezervările expirate sunt marcate automat ca "expired"</li>
-            <li>• Cleanup-ul manual verifică și curăță rezervările expirate</li>
-            <li>• Limita se aplică doar rezervărilor cu adevărat active</li>
-          </ul>
-        </div>
+  
       </CardContent>
     </Card>
   )

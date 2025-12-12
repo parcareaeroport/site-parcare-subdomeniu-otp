@@ -231,7 +231,6 @@ export default function StatisticsPage() {
         <OccupancyCounter 
           title="Ocupare Parcare" 
           icon={<MapPin className="h-5 w-5" />}
-          showProgress={false}
         />
 
         <Card>

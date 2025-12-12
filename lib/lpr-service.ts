@@ -256,7 +256,8 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
             // Increment occupancy pentru intrare fără rezervare
             try {
               const occupancyDocRef = doc(db, "config", "parkingLive")
-              await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+              // IMPORTANT: do not write occupiedCount=0 here (it would reset the counter on every event)
+              await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
               await updateDoc(occupancyDocRef, {
                 occupiedCount: increment(1),
                 lastUpdated: serverTimestamp(),
@@ -320,7 +321,8 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
             if (occupancyIncrementedFlag && !occupancyDecrementedFlag) {
             try {
               const occupancyDocRef = doc(db, "config", "parkingLive")
-              await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+              // IMPORTANT: do not write occupiedCount=0 here (it would reset the counter on every event)
+              await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
               await updateDoc(occupancyDocRef, {
                 occupiedCount: increment(-1),
                 lastUpdated: serverTimestamp(),
@@ -430,7 +432,8 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
   if (eventType === "entry" || eventType === "exit") {
     const occupancyDocRef = doc(db, "config", "parkingLive")
     try {
-      await setDoc(occupancyDocRef, { occupiedCount: 0, lastUpdated: serverTimestamp() }, { merge: true })
+      // IMPORTANT: don't reset occupiedCount here; just ensure the doc exists
+      await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
     } catch (e) {
       console.error('❌ [LPR] Failed ensuring parkingLive doc', e)
     }

@@ -10,6 +10,7 @@ import { useState, useEffect, Suspense, useCallback } from "react"
 import {
   collection,
   getDocs,
+  getDoc,
   doc,
   updateDoc,
   query,
@@ -17,6 +18,7 @@ import {
   type Timestamp, // Import Timestamp
   increment,
   serverTimestamp,
+  setDoc,
   where,
   limit,
 } from "firebase/firestore"
@@ -36,9 +38,9 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { DateRange } from "react-day-picker"
-import { format as formatDateFn, parseISO, subDays, startOfDay, endOfDay } from "date-fns" // Renamed to avoid conflict
+import { format as formatDateFn, parseISO, subDays, startOfDay, endOfDay, differenceInCalendarDays } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
-import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail } from "lucide-react"
+import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail, Info } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/context/auth-context"
@@ -49,6 +51,7 @@ import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { Clock, XCircle } from "lucide-react"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 interface Booking {
   id: string // Firestore document ID
@@ -103,7 +106,7 @@ interface Booking {
   apiRequestTimestamp?: Timestamp
   
   // Metadata sistem
-  source?: "webhook" | "test_mode" | "manual" | "pay_on_site"
+  source?: "webhook" | "test_mode" | "manual" | "pay_on_site" | "lpr"
   createdAt: Timestamp // Firestore Timestamp
   lastUpdated?: Timestamp
   expiredAt?: Timestamp // Când a fost marcată ca expirată
@@ -115,6 +118,20 @@ interface Booking {
   manualEmailCount?: number
   lastEmailError?: string
   payOnSiteStatus?: "pending" | "paid" | "cancelled" // Adaugă status special pentru pay-on-site
+}
+
+type PriceEntry = {
+  days: number
+  standardPrice: number
+  discountedPrice?: number
+}
+
+function parseDateTime(date?: string, time?: string) {
+  if (!date || !time) return null
+  const t = time.length === 5 ? `${time}:00` : time
+  const asIso = `${date}T${t}`
+  const d = new Date(asIso)
+  return Number.isNaN(d.getTime()) ? null : d
 }
 
 function BookingsPageContent() {
@@ -134,6 +151,10 @@ function BookingsPageContent() {
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
   const [markingExitId, setMarkingExitId] = useState<string | null>(null)
+  const [recalculatingOcc, setRecalculatingOcc] = useState(false)
+  const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
+  const [pricesLoading, setPricesLoading] = useState(false)
+  const [showCalcExplanation, setShowCalcExplanation] = useState(false)
 
   const formatInputDate = (d?: Date) => (d ? formatDateFn(d, "yyyy-MM-dd") : "")
   const handleDateInputChange = (key: "from" | "to") => (value: string) => {
@@ -248,6 +269,30 @@ function BookingsPageContent() {
     const end = endOfDay(d).toISOString()
     return { start, end }
   }
+
+  const loadPrices = useCallback(async () => {
+    setPricesLoading(true)
+    try {
+      const q = query(collection(db, "prices"), orderBy("days"))
+      const snap = await getDocs(q)
+      const items: PriceEntry[] = snap.docs
+        .map((d) => {
+          const data: any = d.data()
+          return {
+            days: Number(data.days || 0),
+            standardPrice: Number(data.standardPrice || 0),
+            discountedPrice: data.discountedPrice ? Number(data.discountedPrice) : undefined,
+          }
+        })
+        .filter((p) => p.days > 0 && p.standardPrice > 0)
+      setPriceTable(items)
+    } catch (e) {
+      console.error("Error loading prices in bookings page", e)
+      setPriceTable([])
+    } finally {
+      setPricesLoading(false)
+    }
+  }, [])
 
   const fetchBookings = useCallback(
     async (range?: DateRange) => {
@@ -364,10 +409,11 @@ function BookingsPageContent() {
   useEffect(() => {
     if (!authLoading && user) {
       fetchBookings(dateRange)
+      loadPrices()
     } else if (!authLoading && !user) {
       setIsLoading(false)
     }
-  }, [user, authLoading, fetchBookings])
+  }, [user, authLoading, fetchBookings, loadPrices, dateRange])
 
   useEffect(() => {
     let filtered = bookings
@@ -418,20 +464,129 @@ function BookingsPageContent() {
     }
   }
 
+  const computeDurationDays = (b: Booking): number => {
+    const startDate = (b.startDate || "").trim()
+    const endDate = (b.endDate || "").trim() || startDate
+    const startTime = (b.startTime || "").trim()
+    const endTime = (b.endTime || "").trim()
+
+    // Prefer exact start/end time
+    const startDt = startDate && startTime ? parseDateTime(startDate, startTime) : null
+    const endDt = endDate && endTime ? parseDateTime(endDate, endTime) : null
+    if (startDt && endDt && endDt.getTime() > startDt.getTime()) {
+      return Math.max(1, Math.ceil((endDt.getTime() - startDt.getTime()) / (24 * 60 * 60 * 1000)))
+    }
+
+    // Fallback: days calendaristice inclusive
+    try {
+      const s = parseISO(startDate)
+      const e = parseISO(endDate)
+      if (!Number.isNaN(s.getTime()) && !Number.isNaN(e.getTime())) {
+        return Math.max(1, differenceInCalendarDays(e, s) + 1)
+      }
+    } catch {}
+
+    return 1
+  }
+
+  const computePriceForDays = (days: number): number => {
+    if (!days || days <= 0) return 0
+    if (priceTable.length === 0) return 0
+    const sorted = [...priceTable].sort((a, b) => a.days - b.days)
+    const match = sorted.find((p) => p.days >= days) || sorted[sorted.length - 1]
+    if (!match) return 0
+    const perDay = (match.discountedPrice ?? match.standardPrice) / match.days
+    return perDay * days
+  }
+
+  const computePerDayFromPrices = (days: number): number => {
+    if (!days || days <= 0) return 0
+    if (priceTable.length === 0) return 0
+    const sorted = [...priceTable].sort((a, b) => a.days - b.days)
+    const match = sorted.find((p) => p.days >= days) || sorted[sorted.length - 1]
+    if (!match) return 0
+    return (match.discountedPrice ?? match.standardPrice) / match.days
+  }
+
+  const computeOverlapDays = (b: Booking, from?: Date, to?: Date): number => {
+    if (!b.startDate) return 0
+    try {
+      const bookingStart = startOfDay(parseISO(b.startDate))
+      const bookingEnd = endOfDay(parseISO(b.endDate || b.startDate))
+      const rangeStart = from ? startOfDay(from) : bookingStart
+      const rangeEnd = to ? endOfDay(to) : bookingEnd
+
+      const startMs = Math.max(bookingStart.getTime(), rangeStart.getTime())
+      const endMs = Math.min(bookingEnd.getTime(), rangeEnd.getTime())
+      if (startMs > endMs) return 0
+      return Math.max(1, differenceInCalendarDays(new Date(endMs), new Date(startMs)) + 1)
+    } catch {
+      return 0
+    }
+  }
+
+  const computeBookingProRataValue = (b: Booking, from?: Date, to?: Date): number => {
+    const totalDays = computeDurationDays(b)
+    const overlapDays = computeOverlapDays(b, from, to)
+    if (totalDays <= 0 || overlapDays <= 0) return 0
+
+    // Prefer pricing table => per-day from prices
+    const perDayFromPrices = computePerDayFromPrices(totalDays)
+    if (perDayFromPrices > 0) return perDayFromPrices * overlapDays
+
+    // Fallback => use stored amount prorated over totalDays
+    const amount = Number(b.amount || 0) || 0
+    if (amount > 0) return (amount / totalDays) * overlapDays
+
+    return 0
+  }
+
   const statsBookings = bookings.filter((b) =>
     overlapsRange(b.startDate, b.endDate, dateRange.from, dateRange.to),
     )
 
   const totalCount = statsBookings.length
-  const totalAmount = statsBookings.reduce((sum, b) => sum + (b.amount || 0), 0)
-  const onlinePaid = statsBookings.filter(
-    (b) => b.source !== "pay_on_site" && b.paymentStatus === "paid",
-  )
-  const onlinePaidCount = onlinePaid.length
-  const onlinePaidAmount = onlinePaid.reduce((s, b) => s + (b.amount || 0), 0)
-  const payOnSite = statsBookings.filter((b) => b.source === "pay_on_site")
-  const payOnSiteCount = payOnSite.length
-  const payOnSiteAmount = payOnSite.reduce((s, b) => s + (b.amount || 0), 0)
+
+  const isLostBooking = (b: Booking) => {
+    const s = String(b.status || "").toLowerCase()
+    return s === "expired" || s.includes("cancelled") || s.includes("anulat") || s.includes("api_error_cancel")
+  }
+
+  const isPayOnSiteBooking = (b: Booking) =>
+    b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
+
+  const isOnlinePaidBooking = (b: Booking) => {
+    if (isPayOnSiteBooking(b)) return false
+    return b.paymentStatus === "paid" || String(b.status || "") === "confirmed_paid"
+  }
+
+  const isManualPaidBooking = (b: Booking) => {
+    if (b.source !== "manual") return false
+    const m = String(b.manualPaymentStatus || "")
+    return m === "paid" || b.paymentStatus === "paid"
+  }
+
+  const isLprWithoutReservation = (b: Booking) => b.status === "unmatched_lpr" || b.source === "lpr"
+
+  // Pro-rata (pe zile) + split
+  const onlineReceivedCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b)).length
+  const onlineReceivedValue = statsBookings
+    .filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b))
+    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+
+  const payOnSiteEstimatedCount = statsBookings.filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b)).length
+  const payOnSiteEstimatedValue = statsBookings
+    .filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b))
+    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+
+  const manualPaidCount = statsBookings.filter((b) => !isLostBooking(b) && isManualPaidBooking(b)).length
+  const manualPaidValue = statsBookings
+    .filter((b) => !isLostBooking(b) && isManualPaidBooking(b))
+    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+
+  const lprNoReservationCount = statsBookings.filter((b) => isLprWithoutReservation(b)).length
+
+  const totalProRataValue = onlineReceivedValue + payOnSiteEstimatedValue + manualPaidValue
 
   const handleViewBooking = (booking: Booking) => {
     setSelectedBooking(booking)
@@ -491,15 +646,49 @@ function BookingsPageContent() {
   const handleMarkOutside = async (booking: Booking) => {
     setMarkingExitId(booking.id)
     try {
-      await updateDoc(doc(db, "bookings", booking.id), {
+      const bookingRef = doc(db, "bookings", booking.id)
+      const snap = await getDoc(bookingRef)
+      if (!snap.exists()) throw new Error("Booking not found")
+
+      const data: any = snap.data()
+      const wasInside = data?.lpr?.isInside === true
+      const occupancyIncrementedFlag = data?.occupancyIncremented === true
+      const occupancyDecrementedFlag = data?.occupancyDecremented === true
+      const shouldDecrement = wasInside && occupancyIncrementedFlag && !occupancyDecrementedFlag
+
+      await updateDoc(bookingRef, {
         "lpr.isInside": false,
         "lpr.departedAt": serverTimestamp(),
         "lpr.lastEventType": "exit",
+        ...(shouldDecrement
+          ? {
+              occupancyDecremented: true,
+              occupancyDecrementedAt: serverTimestamp(),
+            }
+          : {}),
         lastUpdated: serverTimestamp(),
       })
+
+      // Manual -1 la contor (idempotent, doar dacă era inside și nu a fost deja decremented)
+      if (shouldDecrement) {
+        const occupancyDocRef = doc(db, "config", "parkingLive")
+        await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
+        await updateDoc(occupancyDocRef, {
+          occupiedCount: increment(-1),
+          lastUpdated: serverTimestamp(),
+          lastChange: {
+            type: "exit_manual",
+            bookingId: booking.id,
+            plateNumber: data?.licensePlate || booking.licensePlate || "N/A",
+            at: new Date().toISOString(),
+          },
+        })
+      }
       toast({
         title: "Marcat ca ieșit",
-        description: `Booking ${booking.id} setat cu isInside=false.`,
+        description: shouldDecrement
+          ? `Booking ${booking.id} setat cu isInside=false și contorul a fost decrementat (-1).`
+          : `Booking ${booking.id} setat cu isInside=false (contorul nu a fost modificat — deja decrementat / never incremented).`,
       })
       fetchBookings()
     } catch (e) {
@@ -511,6 +700,32 @@ function BookingsPageContent() {
       })
     } finally {
       setMarkingExitId(null)
+    }
+  }
+
+  const handleRecalculateOccupancy = async () => {
+    setRecalculatingOcc(true)
+    try {
+      const res = await fetch("/api/admin/occupancy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "recalculate" }),
+      })
+      if (!res.ok) throw new Error(`Status ${res.status}`)
+      const json = await res.json().catch(() => null)
+      toast({
+        title: "Contor recalculat",
+        description: `occupiedCount a fost setat la ${json?.occupiedCount ?? "valoarea corectă"} (din lpr.isInside=true).`,
+      })
+    } catch (e) {
+      console.error("Recalculate occupancy failed", e)
+      toast({
+        title: "Eroare",
+        description: "Nu am putut recalcula contorul.",
+        variant: "destructive",
+      })
+    } finally {
+      setRecalculatingOcc(false)
     }
   }
 
@@ -1294,6 +1509,7 @@ function BookingsPageContent() {
               + Adaugă Manual
             </Button>
           )}
+        
           <Button onClick={() => fetchBookings(dateRange)} disabled={isLoading} size="sm">
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
             Reîncarcă
@@ -1302,62 +1518,144 @@ function BookingsPageContent() {
       </div>
 
       {/* Bara de statistici rapide */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Rezervări</CardTitle>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              Total
+              <TooltipProvider delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+                      aria-label="Explicație calcul total"
+                    >
+                      <Info className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-sm">
+                    <div className="text-xs leading-relaxed">
+                      <div className="font-semibold mb-1">Valoare totală =</div>
+                      <div>
+                        Online încasat ({onlineReceivedCount}) + Pay-on-site estimat ({payOnSiteEstimatedCount}) + Manual achitat ({manualPaidCount})
+                      </div>
+                      <div className="mt-1">
+                        {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
+                        {payOnSiteEstimatedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
+                        {manualPaidValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ={" "}
+                        {totalProRataValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                      </div>
+                      <div className="mt-1 text-muted-foreground">
+                        LPR fără rezervare nu intră în valoare (doar număr).
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </CardTitle>
+            <CardDescription className="text-xs">Total rezervări în interval</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{totalCount}</div>
             <p className="text-xs text-muted-foreground">
               Valoare totală:{" "}
               <span className="font-semibold">
-                {totalAmount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                {totalProRataValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
+              {pricesLoading && (
+                <span className="ml-2 text-[10px] text-gray-500">(se calculează tarifele…)</span>
+              )}
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Achitate Online</CardTitle>
+            <CardTitle className="text-sm font-medium">Online încasat</CardTitle>
+            <CardDescription className="text-xs">Plătite cu cardul</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">{onlinePaidCount}</div>
+            <div className="text-2xl font-bold text-green-700">{onlineReceivedCount}</div>
             <p className="text-xs text-muted-foreground">
-              Sumă:{" "}
+              Valoare totală:{" "}
               <span className="font-semibold text-green-700">
-                {onlinePaidAmount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Cu Plata la Parcare</CardTitle>
+            <CardTitle className="text-sm font-medium">Pay-on-site estimat</CardTitle>
+            <CardDescription className="text-xs">De încasat la parcare</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-orange-600">{payOnSiteCount}</div>
+            <div className="text-2xl font-bold text-orange-700">{payOnSiteEstimatedCount}</div>
             <p className="text-xs text-muted-foreground">
-              Sumă:{" "}
+              Valoare totală:{" "}
               <span className="font-semibold text-orange-700">
-                {payOnSiteAmount.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                {payOnSiteEstimatedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Manual achitat</CardTitle>
+            <CardDescription className="text-xs">Doar rezervări manuale achitate</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-700">{manualPaidCount}</div>
+            <p className="text-xs text-muted-foreground">
+              Valoare totală:{" "}
+              <span className="font-semibold text-blue-700">
+                {manualPaidValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+              </span>
+            </p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">LPR fără rezervare</CardTitle>
+            <CardDescription className="text-xs">Doar număr</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-purple-700">{lprNoReservationCount}</div>
+            <p className="text-xs text-muted-foreground">
+              Valoare totală: <span className="font-semibold">—</span>
             </p>
           </CardContent>
         </Card>
       </div>
+
+      <div className="flex items-center justify-end">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setShowCalcExplanation((v) => !v)}
+        >
+          {showCalcExplanation ? "Ascunde explicație calcule" : "Vezi explicație calcule"}
+        </Button>
+      </div>
+
+      {showCalcExplanation && (
+        <Card className="bg-slate-50 border-slate-200">
+          <CardContent className="py-4 text-sm text-slate-700">
+            Pentru intervalul selectat, sistemul ia toate rezervările care se suprapun cu perioada aleasă și calculează
+            valoarea doar pentru zilele care cad în acel interval. Tariful pe zi este luat automat din pagina Prețuri.
+            Apoi sumele sunt separate în: Online încasat (deja plătit), Pay-on-site estimat (de încasat la parcare) și
+            Manual achitat. LPR fără rezervare este afișat separat ca număr.
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="all" className="space-y-4">
         <TabsList>
           <TabsTrigger value="all" onClick={() => setStatusFilter("all")}>
             Toate
           </TabsTrigger>
-          <TabsTrigger value="confirmed_paid" onClick={() => setStatusFilter("confirmed_paid")}>
-            Confirmate (Plătit)
-          </TabsTrigger>
-          <TabsTrigger value="confirmed_test" onClick={() => setStatusFilter("confirmed_test")}>
-            Confirmate (Test)
-          </TabsTrigger>
+       
           <TabsTrigger value="manual" onClick={() => setStatusFilter("manual")}>
                             <span className="text-orange-700">Manual</span>
           </TabsTrigger>
@@ -1367,9 +1665,7 @@ function BookingsPageContent() {
           <TabsTrigger value="cancelled_by_admin" onClick={() => setStatusFilter("cancelled_by_admin")}>
             Anulate
           </TabsTrigger>
-          <TabsTrigger value="expired" onClick={() => setStatusFilter("expired")}>
-            Expirate
-          </TabsTrigger>
+      
           <TabsTrigger value="unmatched_lpr" onClick={() => setStatusFilter("unmatched_lpr")}>
             <span className="text-purple-700">Fără rezervare (LPR)</span>
           </TabsTrigger>
@@ -1529,6 +1825,14 @@ function BookingsPageContent() {
                               MANUAL
                             </Badge>
                           )}
+                          {booking.source !== "manual" &&
+                            booking.source !== "pay_on_site" &&
+                            booking.source !== "lpr" &&
+                            booking.status !== "unmatched_lpr" && (
+                              <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 mr-2 text-xs">
+                                ONLINE
+                              </Badge>
+                            )}
                           {booking.source === "pay_on_site" && (
                             <Badge
                               variant="outline"
@@ -1668,7 +1972,7 @@ function BookingsPageContent() {
                                     {markingExitId === booking.id ? (
                                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                     ) : null}
-                                    Marchează ieșire (isInside = false)
+                                    Marchează ieșire
                                   </DropdownMenuItem>
                                 </>
                               )}
