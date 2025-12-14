@@ -198,7 +198,12 @@ export default function EntriesExitsPage() {
       // ONLINE: rule stays separate below
       if (isPayOnSite || !isOnlinePaid) {
         // PAY-ON-SITE + MANUAL + LPR (unpaid): exact price by total days (booked + extra late days)
-        const overdueMin = Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
+        // If we already have a computed delay (from LPR departedAt), use it.
+        // Otherwise, estimate against "now" (car likely still inside).
+        const overdueMin =
+          typeof delay === "number"
+            ? Math.max(0, delay)
+            : Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
 
         // booked days (from booking start/end). Prefer time diff; fallback calendar days.
         const startDate = withDates.startDate
@@ -220,7 +225,9 @@ export default function EntriesExitsPage() {
           }
         }
 
-        const extraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
+        // Extra days should count only after full 24h blocks, not for a few hours delay.
+        // (Example: 3h delay => 0 extra days; 25h delay => 1 extra day.)
+        const extraDays = overdueMin > 0 ? Math.floor(overdueMin / (60 * 24)) : 0
         const totalDays = Math.max(1, bookedDays + extraDays)
 
         const totalPrice = getExactPriceForDays(priceTable, totalDays)
