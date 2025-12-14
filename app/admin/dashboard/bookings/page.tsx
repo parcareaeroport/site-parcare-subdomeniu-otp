@@ -19,6 +19,7 @@ import {
   increment,
   serverTimestamp,
   setDoc,
+  onSnapshot,
   where,
   limit,
 } from "firebase/firestore"
@@ -249,6 +250,21 @@ function BookingsPageContent() {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
 
+  // Prag anulare „Plată la Parcare” (minute) – din config/reservationSettings
+  const [payOnSiteCancelMinutes, setPayOnSiteCancelMinutes] = useState<number>(180)
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "config", "reservationSettings"),
+      (snap) => {
+        const v = Number((snap.data() as any)?.payOnSiteAutoCancelMinutes ?? 180)
+        setPayOnSiteCancelMinutes(Number.isFinite(v) && v > 0 ? v : 180)
+      },
+      (err) => console.error("Error listening to reservationSettings (payOnSiteAutoCancelMinutes)", err),
+    )
+    return () => unsub()
+  }, [])
+
   // Helper pentru formatarea întârzierilor (X ore Y minute / doar minute)
   const formatDelay = (minutes: number) => {
     const abs = Math.abs(minutes)
@@ -262,9 +278,14 @@ function BookingsPageContent() {
   // Helper pentru afișarea orelor LPR.
   // Camera trimite ora locală, dar serverul (UTC) o salvează ca și cum ar fi UTC,
   // deci în UI afișăm în timezone UTC ca să vedem exact ora raportată de cameră.
-  const formatLprDateTime = (isoString: string) => {
-    if (!isoString) return "-"
-    const d = new Date(isoString)
+  const formatLprDateTime = (value: any) => {
+    if (!value) return "-"
+    const d =
+      typeof value?.toDate === "function"
+        ? value.toDate()
+        : typeof value === "string" || typeof value === "number"
+          ? new Date(value)
+          : new Date(String(value))
     if (Number.isNaN(d.getTime())) return "-"
     return d.toLocaleString("ro-RO", {
       year: "numeric",
@@ -368,18 +389,20 @@ function BookingsPageContent() {
             if (!raw.startDate && raw.endDate) raw.startDate = raw.endDate
             if (!raw.endDate && raw.startDate) raw.endDate = raw.startDate
 
-            // Calculează și marchează întârzierea pentru pay_on_site (>3h după end)
+            // Calculează și marchează depășirea pragului pentru pay_on_site (minute după START, dacă nu a intrat prin LPR)
             try {
               const isPayOnSite = raw.source === "pay_on_site" || raw.status === "confirmed_pay_on_site"
-              if (isPayOnSite && raw.endDate && raw.endTime && !raw.payOnSiteOverdueLocked) {
-                const plannedEnd = new Date(`${raw.endDate}T${raw.endTime}:00`)
-                const diffMinutes = Math.floor((nowTs - plannedEnd.getTime()) / (1000 * 60))
-                const overdueMoreThan3h = diffMinutes > 180
+              const isInside = raw?.lpr?.isInside === true
+              if (isPayOnSite && !isInside && raw.startDate && raw.startTime && !raw.payOnSiteOverdueLocked) {
+                const plannedStart = new Date(`${raw.startDate}T${raw.startTime}:00`)
+                const diffMinutes = Math.floor((nowTs - plannedStart.getTime()) / (1000 * 60))
+                const overdueMoreThanThreshold = diffMinutes > payOnSiteCancelMinutes
                 raw.payOnSiteOverdueMinutes = diffMinutes
-                raw.payOnSiteOverdueMoreThan3h = overdueMoreThan3h
+                // Keep legacy field name for UI/back-compat, but it now means "over threshold"
+                raw.payOnSiteOverdueMoreThan3h = overdueMoreThanThreshold
 
                 // Persistăm în Firestore doar dacă este clar întârziată
-                if (overdueMoreThan3h) {
+                if (overdueMoreThanThreshold) {
                   try {
                     await updateDoc(doc(db, "bookings", raw.id), {
                       payOnSiteOverdueMinutes: diffMinutes,
@@ -416,7 +439,7 @@ function BookingsPageContent() {
         setIsLoading(false)
       }
     },
-    [dateRange.from, dateRange.to, toast],
+    [dateRange.from, dateRange.to, toast, payOnSiteCancelMinutes],
   )
 
   useEffect(() => {
@@ -1891,7 +1914,9 @@ function BookingsPageContent() {
                                   : "text-orange-800 border-orange-500 bg-orange-200"
                               }`}
                             >
-                              { (booking as any).payOnSiteOverdueMoreThan3h ? "PLATĂ LA PARCARE" : "PLATĂ LA PARCARE" }
+                              {(booking as any).payOnSiteOverdueMoreThan3h
+                                ? `PLATĂ LA PARCARE (>${payOnSiteCancelMinutes} min)`
+                                : "PLATĂ LA PARCARE"}
                             </Badge>
                           )}
                           {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}

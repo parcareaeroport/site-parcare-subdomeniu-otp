@@ -448,14 +448,24 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
       lastUpdated: serverTimestamp()
     }
     if (eventType === "entry") {
-      lprUpdate["lpr.arrivedAt"] = currentLpr.arrivedAt || eventTime.toISOString()
+      // Ensure we always store a stable ISO string (UI expects string; old data might be Timestamp)
+      const existingArrived =
+        typeof currentLpr.arrivedAt === "string" && !Number.isNaN(new Date(currentLpr.arrivedAt).getTime())
+          ? currentLpr.arrivedAt
+          : null
+      lprUpdate["lpr.arrivedAt"] = existingArrived || eventTime.toISOString()
       lprUpdate["lpr.isInside"] = true
       if (!occupancyIncrementedFlag) {
         lprUpdate["occupancyIncremented"] = true
         lprUpdate["occupancyIncrementedAt"] = serverTimestamp()
       }
     } else if (eventType === "exit") {
-      lprUpdate["lpr.departedAt"] = currentLpr.departedAt || eventTime.toISOString()
+      // Ensure we always store a stable ISO string (UI expects string; old data might be Timestamp)
+      const existingDeparted =
+        typeof currentLpr.departedAt === "string" && !Number.isNaN(new Date(currentLpr.departedAt).getTime())
+          ? currentLpr.departedAt
+          : null
+      lprUpdate["lpr.departedAt"] = existingDeparted || eventTime.toISOString()
       lprUpdate["lpr.isInside"] = false
       if (occupancyIncrementedFlag && !occupancyDecrementedFlag) {
         lprUpdate["occupancyDecremented"] = true
