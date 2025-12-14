@@ -1891,7 +1891,7 @@ function BookingsPageContent() {
                                   : "text-orange-800 border-orange-500 bg-orange-200"
                               }`}
                             >
-                              { (booking as any).payOnSiteOverdueMoreThan3h ? "PLATĂ LA PARCARE (>3h)" : "PLATĂ LA PARCARE" }
+                              { (booking as any).payOnSiteOverdueMoreThan3h ? "PLATĂ LA PARCARE" : "PLATĂ LA PARCARE" }
                             </Badge>
                           )}
                           {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}

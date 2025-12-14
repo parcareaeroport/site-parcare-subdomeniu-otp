@@ -81,26 +81,44 @@ function getBookingWindow(
   return { start, end }
 }
 
-async function findMatchingActiveBookingByPlate(plateNumber: string, eventTime: Date): Promise<MatchedBooking | null> {
+async function findMatchingActiveBookingByPlate(
+  plateNumber: string,
+  eventTime: Date,
+  eventType: LprEventType,
+): Promise<MatchedBooking | null> {
   // Active statuses in the app
   const activeStatuses = ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site']
   const normalizedTarget = normalizeLicensePlate(plateNumber)
-  const today = new Date().toISOString().split("T")[0]
+  // IMPORTANT: match relative to the event time day, not "server today" (prevents missing matches on timezone/date boundary).
+  const eventDay = eventTime.toISOString().split("T")[0]
 
   const bookingsRef = collection(db, "bookings")
-  // Broad query: active statuses and not ended before today
+  // Broad query: active statuses and not ended before the event day
   const q = query(
     bookingsRef,
     where("status", "in", activeStatuses),
-    where("endDate", ">=", today)
+    where("endDate", ">=", eventDay)
   )
   const snapshot = await getDocs(q)
 
-  let candidates: Array<{ booking: MatchedBooking; score: number }> = []
+  let candidates: Array<{
+    booking: MatchedBooking
+    inWindow: boolean
+    strictlyInside: boolean
+    distanceMin: number
+    preferState: number
+  }> = []
   snapshot.forEach(docSnap => {
     const data = docSnap.data() as any
     const normalizedDbPlate = normalizeLicensePlate(data.licensePlate || "")
     if (normalizedDbPlate !== normalizedTarget) return
+
+    const lprInside = data?.lpr?.isInside === true
+    // Prefer bookings that align with the event direction:
+    // - entry: prefer not already inside
+    // - exit: prefer already inside
+    const preferState =
+      eventType === "exit" ? (lprInside ? 1 : 0) : eventType === "entry" ? (lprInside ? 0 : 1) : 0
 
     const window = getBookingWindow({
       startDate: data.startDate,
@@ -108,24 +126,20 @@ async function findMatchingActiveBookingByPlate(plateNumber: string, eventTime: 
       endDate: data.endDate,
       endTime: data.endTime
     })
-    if (!window) {
-      console.warn('⚠️ [LPR] Skipping candidate due to invalid booking window (date/time parse failed)', {
-        bookingId: docSnap.id,
-        plate: data.licensePlate,
-        startDate: data.startDate,
-        startTime: data.startTime,
-        endDate: data.endDate,
-        endTime: data.endTime,
-      })
-      return
+
+    // If we can parse the window, compute a good match score; otherwise keep as weaker fallback.
+    let inWindow = false
+    let strictlyInside = false
+    let distanceMin = Number.POSITIVE_INFINITY
+    if (window) {
+      const { start, end } = window
+      // Use 120 min tolerance each side (matches “Acces cu max 2h înainte” UI hint)
+      inWindow = withinTolerance(eventTime, start, end, 120)
+      strictlyInside = eventTime >= start && eventTime <= end
+      const anchor = eventType === "exit" ? end : start
+      distanceMin = Math.abs(Math.round((eventTime.getTime() - anchor.getTime()) / (1000 * 60)))
     }
-    const { start, end } = window
-    // Use 120 min tolerance each side (matches “Acces cu max 2h înainte” UI hint)
-    const isInWindow = withinTolerance(eventTime, start, end, 120)
-    if (!isInWindow) return
-    // Prefer bookings that strictly contain the time; fallback to tolerance
-    const strictlyInside = eventTime >= start && eventTime <= end
-    const score = strictlyInside ? 2 : 1
+
     candidates.push({
       booking: {
         id: docSnap.id,
@@ -140,18 +154,29 @@ async function findMatchingActiveBookingByPlate(plateNumber: string, eventTime: 
         occupancyDecremented: data.occupancyDecremented,
         source: data.source
       },
-      score
+      inWindow,
+      strictlyInside,
+      distanceMin,
+      preferState
     })
   })
 
   if (candidates.length === 0) return null
-  // Pick highest score, then the one that ends soonest
+
+  // Prefer candidates inside the (start..end) window (with tolerance),
+  // then by state alignment (exit prefers inside, entry prefers outside),
+  // then by distance to expected anchor (entry≈start, exit≈end),
+  // then by earliest end (stable).
   candidates.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score
+    if (a.inWindow !== b.inWindow) return a.inWindow ? -1 : 1
+    if (a.strictlyInside !== b.strictlyInside) return a.strictlyInside ? -1 : 1
+    if (a.preferState !== b.preferState) return b.preferState - a.preferState
+    if (a.distanceMin !== b.distanceMin) return a.distanceMin - b.distanceMin
     const aEnd = new Date(`${a.booking.endDate}T${a.booking.endTime}:00`).getTime()
     const bEnd = new Date(`${b.booking.endDate}T${b.booking.endTime}:00`).getTime()
     return aEnd - bEnd
   })
+
   return candidates[0].booking
 }
 
@@ -238,10 +263,11 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
       normalizedPlate,
       eventTimeIso: eventTime.toISOString()
     })
-    matched = await findMatchingActiveBookingByPlate(normalizedPlate, eventTime)
+    matched = await findMatchingActiveBookingByPlate(normalizedPlate, eventTime, eventType)
     if (!matched) {
       console.warn('ℹ️ [LPR] No active booking matched for plate/time window', {
         normalizedPlate,
+        eventType,
         eventTimeIso: eventTime.toISOString()
       })
       // Handle UNMATCHED flow: introducem mașina în lista de rezervări (bookings) cu status special
