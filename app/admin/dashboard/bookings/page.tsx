@@ -591,6 +591,14 @@ function BookingsPageContent() {
   const isPayOnSiteBooking = (b: Booking) =>
     b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
 
+  const isOnlineBooking = (b: Booking) => {
+    // Match the table "ONLINE" badge meaning: non-manual, non-pay_on_site, non-LPR-without-reservation
+    if (b.source === "manual") return false
+    if (isPayOnSiteBooking(b)) return false
+    if (isLprWithoutReservation(b)) return false
+    return true
+  }
+
   const isOnlinePaidBooking = (b: Booking) => {
     if (isPayOnSiteBooking(b)) return false
     return b.paymentStatus === "paid" || String(b.status || "") === "confirmed_paid"
@@ -605,10 +613,12 @@ function BookingsPageContent() {
   const isLprWithoutReservation = (b: Booking) => b.status === "unmatched_lpr" || b.source === "lpr"
 
   // Pro-rata (pe zile) + split
+  const onlineTotalCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlineBooking(b)).length
   const onlineReceivedCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b)).length
   const onlineReceivedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b))
     .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+  const onlineUnpaidCount = Math.max(0, onlineTotalCount - onlineReceivedCount)
 
   const payOnSiteEstimatedCount = statsBookings.filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b)).length
   const payOnSiteEstimatedValue = statsBookings
@@ -1643,16 +1653,24 @@ function BookingsPageContent() {
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Online încasat</CardTitle>
-            <CardDescription className="text-xs">Plătite cu cardul</CardDescription>
+            <CardTitle className="text-sm font-medium">Online</CardTitle>
+            <CardDescription className="text-xs">Total online + încasat (card)</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-700">{onlineReceivedCount}</div>
             <p className="text-xs text-muted-foreground">
-              Valoare totală:{" "}
+              Încasat:{" "}
               <span className="font-semibold text-green-700">
                 {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Total online în tabel: <span className="font-semibold">{onlineTotalCount}</span>
+              {onlineUnpaidCount > 0 && (
+                <>
+                  {" "}• Neplătite: <span className="font-semibold text-red-700">{onlineUnpaidCount}</span>
+                </>
+              )}
             </p>
           </CardContent>
         </Card>
