@@ -1506,8 +1506,11 @@ function BookingsPageContent() {
       )
     }
     
-    // Pentru rezervările normale (webhook/test), afișăm badge-ul simplu
-    return getPaymentStatusBadge(booking.paymentStatus)
+    // Pentru rezervările normale (webhook/test), afișăm badge-ul simplu.
+    // IMPORTANT: keep consistent with header stats: confirmed_paid/paid implies Achitat even if paymentStatus is missing.
+    const s = String(booking.status || "")
+    const isPaid = booking.paymentStatus === "paid" || s === "confirmed_paid" || s === "paid"
+    return getPaymentStatusBadge(isPaid ? "paid" : "not_paid")
   }
 
   if (authLoading || isLoading) {
