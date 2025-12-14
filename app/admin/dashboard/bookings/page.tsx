@@ -1801,8 +1801,16 @@ function BookingsPageContent() {
                 mode="active"
                 range={{ from: dateRange.from, to: dateRange.to }}
                 // IMPORTANT: keep in sync with table, but exclude bookings already exited per LPR.
-                // If lpr.isInside is not true, we treat it as "not present" for occupancy.
-                countOverride={filteredBookings.filter((b) => (b as any)?.lpr?.isInside === true).length}
+                // If LPR says it exited (departedAt), it's NOT present.
+                // If LPR says it's inside (isInside=true), it IS present.
+                // If there is no LPR exit info yet (e.g. "-/-" in table), we consider it present for the selected interval.
+                countOverride={filteredBookings.filter((b) => {
+                  const lpr: any = (b as any)?.lpr || {}
+                  if (lpr?.isInside === true) return true
+                  if (lpr?.departedAt) return false
+                  if (lpr?.arrivedAt && !lpr?.departedAt) return true
+                  return true
+                }).length}
                 inline
                 className="w-full sm:w-auto"
               />
