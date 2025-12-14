@@ -5,6 +5,7 @@ import Script from "next/script"
 import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
 import CallFloating from "@/components/whatsapp-floating"
+import ParkingFullBanner from "@/components/parking-full-banner"
 
 const inter = Inter({ subsets: ["latin"], display: "swap" })
 
@@ -226,6 +227,7 @@ export default function RootLayout({
         </noscript>
         {/* End Meta Pixel Code (noscript) */}
         
+        <ParkingFullBanner />
         {children}
    
         <Toaster />

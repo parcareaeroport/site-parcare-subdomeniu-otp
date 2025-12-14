@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { AlertTriangle, Car } from "lucide-react"
 import { db } from "@/lib/firebase"
-import { doc, onSnapshot } from "firebase/firestore"
+import { collection, doc, getCountFromServer, onSnapshot, query, where } from "firebase/firestore"
 import { cn } from "@/lib/utils"
 
 interface OccupancyCounterProps {
@@ -32,6 +32,7 @@ export function OccupancyCounter({
   size = "default",
 }: OccupancyCounterProps) {
   const [occupiedCount, setOccupiedCount] = useState<number>(0)
+  const [fallbackOccupiedCount, setFallbackOccupiedCount] = useState<number>(0)
   const [maxLimit, setMaxLimit] = useState<number>(0)
   const [loading, setLoading] = useState(true)
 
@@ -52,6 +53,29 @@ export function OccupancyCounter({
     return () => unsub()
   }, [])
 
+  // Fallback: dacă parkingLive e 0/stale, calculează ocuparea din realitatea LPR (count where lpr.isInside=true)
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const q = query(collection(db, "bookings"), where("lpr.isInside", "==", true))
+        const snap = await getCountFromServer(q)
+        const c = Math.max(0, Number((snap.data() as any)?.count ?? 0))
+        if (!cancelled) setFallbackOccupiedCount(c)
+      } catch (e) {
+        // Dacă nu există permisiuni pentru count, păstrăm fallback-ul curent
+        console.error("Error computing fallback occupancy (count isInside)", e)
+      }
+    }
+
+    refresh()
+    const id = setInterval(refresh, 60000) // refresh la 60s (ieftin: server-side count)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
   // Snapshot pentru maxLimit din reservationSettings
   useEffect(() => {
     const unsub = onSnapshot(
@@ -67,7 +91,8 @@ export function OccupancyCounter({
     return () => unsub()
   }, [])
 
-  const percentage = maxLimit > 0 ? Math.min(100, Math.round((occupiedCount / maxLimit) * 100)) : 0
+  const displayOccupiedCount = occupiedCount > 0 ? occupiedCount : fallbackOccupiedCount
+  const percentage = maxLimit > 0 ? Math.min(100, Math.round((displayOccupiedCount / maxLimit) * 100)) : 0
   const isWarning = percentage >= 80 && percentage < 100
   const isCritical = percentage >= 100
 
@@ -97,7 +122,7 @@ export function OccupancyCounter({
         {icon || <Car className="h-4 w-4 text-gray-600" />}
         {title && <span className="text-xs font-medium text-gray-700">{title}</span>}
         <span className="text-sm font-semibold tabular-nums">
-          {loading ? "—" : occupiedCount} / {loading ? "—" : maxLimit}
+          {loading ? "—" : displayOccupiedCount} / {loading ? "—" : maxLimit}
         </span>
       </div>
     )
@@ -126,7 +151,7 @@ export function OccupancyCounter({
       {/* Contor principal cu gradient */}
       <div className={cn("flex items-baseline", gapSize)}>
         <div className={cn("font-bold tabular-nums", countSize, statusColor)}>
-          {loading ? "—" : occupiedCount}
+          {loading ? "—" : displayOccupiedCount}
         </div>
         <div className={cn("font-medium text-gray-400", totalSize === "text-xl" ? "text-xl" : "text-2xl")}>/</div>
         <div className={cn("font-semibold text-gray-600 tabular-nums", totalSize)}>
@@ -140,7 +165,7 @@ export function OccupancyCounter({
           <span>{percentage}% ocupat</span>
           {maxLimit > 0 && (
             <Badge variant={badgeVariant} className="text-xs">
-              {maxLimit - occupiedCount > 0 ? `${maxLimit - occupiedCount} disponibile` : "Complet"}
+              {maxLimit - displayOccupiedCount > 0 ? `${maxLimit - displayOccupiedCount} disponibile` : "Complet"}
             </Badge>
           )}
         </div>
