@@ -848,46 +848,51 @@ export async function createBookingWithFirestore(
       if (additionalData?.paymentStatus === 'paid' || additionalData?.source === 'webhook' || additionalData?.source === 'test_mode') {
         try {
           const invoiceBookingId = completeBookingData.apiBookingNumber || firestoreResult.firestoreId
-          console.log(`🧾 Starting Oblio invoice generation for booking ${invoiceBookingId}`)
-          
-          const { generateOblioInvoice } = await import('@/lib/oblio-integration')
-          
-          const oblioInvoiceData = {
-            // Prefer Multipark booking number; fallback to Firestore doc id to avoid STRIPE-undefined in Oblio.
-            bookingId: invoiceBookingId,
-            clientName: completeBookingData.clientName || 'Client Site Parcări',
-            clientEmail: additionalData.clientEmail || '',
-            clientPhone: additionalData.clientPhone,
-            licensePlate: completeBookingData.licensePlate,
-            startDate: completeBookingData.startDate,
-            endDate: completeBookingData.endDate,
-            location: 'Site Parcări', // Ai putea să îl faci dinamic
-            parkingSpot: invoiceBookingId || '',
-            totalCost: additionalData.amount || 0,
-            billingType: (additionalData.company ? 'corporate' : 'individual') as 'corporate' | 'individual',
-            company: additionalData.company,
-            companyVAT: additionalData.companyVAT,
-            companyReg: additionalData.companyReg,
-            companyAddress: additionalData.companyAddress,
-            // Date adresă client individual pentru ANAF
-            clientAddress: additionalData.address,
-            clientCity: additionalData.city,
-            clientCounty: additionalData.county,
-            clientCountry: additionalData.country,
-          }
 
-          // Timeout pentru Oblio (max 10 secunde)
-          const oblioPromise = generateOblioInvoice(oblioInvoiceData)
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Oblio timeout')), 10000)
-          )
-          
-          const invoiceResult = await Promise.race([oblioPromise, timeoutPromise]) as any
-          
-          if (invoiceResult.success) {
-            console.log('✅ Factură Oblio generată cu succes:', invoiceResult.invoiceNumber, '- Link:', invoiceResult.invoiceUrl)
+          if (!invoiceBookingId) {
+            console.warn('⚠️ Oblio invoice skipped: missing booking id (both apiBookingNumber and firestoreId are empty)')
           } else {
-            console.error('❌ Eroare la generarea facturii Oblio:', invoiceResult.error)
+            console.log(`🧾 Starting Oblio invoice generation for booking ${invoiceBookingId}`)
+
+            const { generateOblioInvoice } = await import('@/lib/oblio-integration')
+
+            const oblioInvoiceData = {
+              // Prefer Multipark booking number; fallback to Firestore doc id to avoid STRIPE-undefined in Oblio.
+              bookingId: invoiceBookingId,
+              clientName: completeBookingData.clientName || 'Client Site Parcări',
+              clientEmail: additionalData.clientEmail || '',
+              clientPhone: additionalData.clientPhone,
+              licensePlate: completeBookingData.licensePlate,
+              startDate: completeBookingData.startDate,
+              endDate: completeBookingData.endDate,
+              location: 'Site Parcări', // Ai putea să îl faci dinamic
+              parkingSpot: invoiceBookingId,
+              totalCost: additionalData.amount || 0,
+              billingType: (additionalData.company ? 'corporate' : 'individual') as 'corporate' | 'individual',
+              company: additionalData.company,
+              companyVAT: additionalData.companyVAT,
+              companyReg: additionalData.companyReg,
+              companyAddress: additionalData.companyAddress,
+              // Date adresă client individual pentru ANAF
+              clientAddress: additionalData.address,
+              clientCity: additionalData.city,
+              clientCounty: additionalData.county,
+              clientCountry: additionalData.country,
+            }
+
+            // Timeout pentru Oblio (max 10 secunde)
+            const oblioPromise = generateOblioInvoice(oblioInvoiceData)
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('Oblio timeout')), 10000)
+            )
+
+            const invoiceResult = await Promise.race([oblioPromise, timeoutPromise]) as any
+
+            if (invoiceResult.success) {
+              console.log('✅ Factură Oblio generată cu succes:', invoiceResult.invoiceNumber, '- Link:', invoiceResult.invoiceUrl)
+            } else {
+              console.error('❌ Eroare la generarea facturii Oblio:', invoiceResult.error)
+            }
           }
         } catch (error) {
           console.error('❌ Eroare critică la generarea facturii Oblio:', error)

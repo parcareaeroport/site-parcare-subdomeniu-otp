@@ -234,7 +234,7 @@ export default function EntriesExitsPage() {
         if (isPayOnSite && overdueMin > PAY_ON_SITE_CANCEL_AFTER_MIN) {
           autoCancelled = true
           autoCancelPayOnSite(row.id).catch(() => {})
-        }
+  }
       } else {
         // ONLINE: allowed exit = start + days*24h + grace (60 min)
         const startDateVal = withDates.startDate
