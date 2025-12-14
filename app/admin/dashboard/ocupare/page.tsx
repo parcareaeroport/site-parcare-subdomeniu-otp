@@ -174,7 +174,7 @@ export default function OccupancyPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Ocupare parcare</h1>
           <p className="text-sm text-muted-foreground">
-            Total mașini prezente (bazat pe LPR isInside) + listă printabilă cu status plată.
+            Total mașini prezente + listă printabilă cu status plată.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
