@@ -847,12 +847,14 @@ export async function createBookingWithFirestore(
       // Generează factură OBLIO automată pentru TOATE rezervările plătite ȘI în test mode
       if (additionalData?.paymentStatus === 'paid' || additionalData?.source === 'webhook' || additionalData?.source === 'test_mode') {
         try {
-          console.log(`🧾 Starting Oblio invoice generation for booking ${completeBookingData.apiBookingNumber}`)
+          const invoiceBookingId = completeBookingData.apiBookingNumber || firestoreResult.firestoreId
+          console.log(`🧾 Starting Oblio invoice generation for booking ${invoiceBookingId}`)
           
           const { generateOblioInvoice } = await import('@/lib/oblio-integration')
           
           const oblioInvoiceData = {
-            bookingId: completeBookingData.apiBookingNumber!,
+            // Prefer Multipark booking number; fallback to Firestore doc id to avoid STRIPE-undefined in Oblio.
+            bookingId: invoiceBookingId,
             clientName: completeBookingData.clientName || 'Client Site Parcări',
             clientEmail: additionalData.clientEmail || '',
             clientPhone: additionalData.clientPhone,
@@ -860,7 +862,7 @@ export async function createBookingWithFirestore(
             startDate: completeBookingData.startDate,
             endDate: completeBookingData.endDate,
             location: 'Site Parcări', // Ai putea să îl faci dinamic
-            parkingSpot: completeBookingData.apiBookingNumber || '',
+            parkingSpot: invoiceBookingId || '',
             totalCost: additionalData.amount || 0,
             billingType: (additionalData.company ? 'corporate' : 'individual') as 'corporate' | 'individual',
             company: additionalData.company,

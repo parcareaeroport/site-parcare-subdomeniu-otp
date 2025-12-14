@@ -40,7 +40,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { DateRange } from "react-day-picker"
 import { format as formatDateFn, parseISO, subDays, startOfDay, endOfDay, differenceInCalendarDays } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
-import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail, Info } from "lucide-react"
+import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail, Info, Trash2 } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/context/auth-context"
@@ -52,6 +52,16 @@ import { normalizeLicensePlate } from "@/lib/utils"
 import { Clock, XCircle } from "lucide-react"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 interface Booking {
   id: string // Firestore document ID
@@ -155,6 +165,9 @@ function BookingsPageContent() {
   const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
   const [pricesLoading, setPricesLoading] = useState(false)
   const [showCalcExplanation, setShowCalcExplanation] = useState(false)
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [bookingToDelete, setBookingToDelete] = useState<Booking | null>(null)
 
   const formatInputDate = (d?: Date) => (d ? formatDateFn(d, "yyyy-MM-dd") : "")
   const handleDateInputChange = (key: "from" | "to") => (value: string) => {
@@ -726,6 +739,42 @@ function BookingsPageContent() {
       })
     } finally {
       setRecalculatingOcc(false)
+    }
+  }
+
+  const handleDeleteBooking = async () => {
+    if (!bookingToDelete) return
+    setIsDeleting(true)
+    try {
+      const res = await fetch("/api/admin/bookings/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: bookingToDelete.id }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
+
+      toast({
+        title: "Rezervare ștearsă",
+        description: json?.decremented
+          ? "Rezervarea a fost ștearsă și contorul de ocupare a fost ajustat (-1)."
+          : "Rezervarea a fost ștearsă.",
+      })
+      fetchBookings()
+      if (isViewDialogOpen && selectedBooking?.id === bookingToDelete.id) {
+        setIsViewDialogOpen(false)
+      }
+      setIsDeleteDialogOpen(false)
+      setBookingToDelete(null)
+    } catch (e) {
+      console.error("Delete booking failed", e)
+      toast({
+        title: "Eroare",
+        description: "Nu am putut șterge rezervarea.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -2016,6 +2065,27 @@ function BookingsPageContent() {
                                     </DropdownMenuItem>
                                   </>
                                 )}
+
+                              {isAdmin && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      setBookingToDelete(booking)
+                                      setIsDeleteDialogOpen(true)
+                                    }}
+                                    disabled={isDeleting && bookingToDelete?.id === booking.id}
+                                    className="text-red-700 hover:text-white hover:bg-red-700 focus:text-white focus:bg-red-700"
+                                  >
+                                    {isDeleting && bookingToDelete?.id === booking.id ? (
+                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                    )}
+                                    Șterge (permanent)
+                                  </DropdownMenuItem>
+                                </>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>
@@ -2065,6 +2135,39 @@ function BookingsPageContent() {
         </Card>
 
       </Tabs>
+
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Ștergi rezervarea?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Această acțiune este permanentă. Înainte de ștergere, sistemul va marca ieșirea (dacă mașina este încă
+              „înăuntru”) și va ajusta contorul de ocupare dacă este cazul.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="text-sm text-gray-700">
+            <div>
+              <strong>Nr. API / ID:</strong>{" "}
+              {bookingToDelete?.apiBookingNumber || bookingToDelete?.id || "-"}
+            </div>
+            <div>
+              <strong>Nr. înmatriculare:</strong> {bookingToDelete?.licensePlate || "-"}
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setBookingToDelete(null)
+              }}
+            >
+              Renunță
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteBooking} disabled={!bookingToDelete || isDeleting}>
+              {isDeleting ? "Se șterge..." : "Șterge"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
         <DialogContent className="max-w-3xl">

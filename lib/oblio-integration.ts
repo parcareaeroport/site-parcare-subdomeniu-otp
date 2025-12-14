@@ -182,14 +182,15 @@ class OblioInvoiceService {
           productType: 'Serviciu',
         },
       ],
-      mentions: `Factură generată automat pentru rezervarea de parcare #${invoiceData.bookingId}. Plata a fost procesată prin Stripe.`,
-      internalNote: `Booking ID: ${invoiceData.bookingId} | Stripe Payment`,
+      mentions: `Factură generată automat pentru rezervarea de parcare #${invoiceData.bookingId}. Plata a fost procesată online (card).`,
+      internalNote: `Booking ID: ${invoiceData.bookingId} | Plată online (card)`,
       collect: {
         type: 'Card',
-        documentNumber: `STRIPE-${invoiceData.bookingId}`,
+        // IMPORTANT: do not expose Stripe wording in invoices; keep only booking reference.
+        documentNumber: `${invoiceData.bookingId}`,
         value: totalWithVAT,
         issueDate: new Date().toISOString().split('T')[0],
-        mentions: 'Plată procesată prin Stripe',
+        mentions: 'Plată online (card)',
       },
     };
 

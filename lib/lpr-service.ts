@@ -55,9 +55,29 @@ function withinTolerance(now: Date, start: Date, end: Date, toleranceMinutes: nu
   return now.getTime() >= start.getTime() - tolMs && now.getTime() <= end.getTime() + tolMs
 }
 
-function getBookingWindow(booking: { startDate: string; startTime: string; endDate: string; endTime: string }): { start: Date; end: Date } {
-  const start = new Date(`${booking.startDate}T${booking.startTime}:00`)
-  const end = new Date(`${booking.endDate}T${booking.endTime}:00`)
+function parseBookingDateTime(dateStr?: string, timeStr?: string): Date | null {
+  const d = (dateStr || "").trim()
+  const t = (timeStr || "").trim()
+  if (!d || !t) return null
+
+  // Accept HH:mm and HH:mm:ss
+  const normalizedTime =
+    t.length === 5 ? `${t}:00` : t.length === 8 ? t : t
+
+  const dt = new Date(`${d}T${normalizedTime}`)
+  if (!Number.isNaN(dt.getTime())) return dt
+
+  // Fallback: try legacy "YYYY-MM-DD HH:mm:ss"
+  const dt2 = new Date(`${d} ${normalizedTime}`)
+  return Number.isNaN(dt2.getTime()) ? null : dt2
+}
+
+function getBookingWindow(
+  booking: { startDate: string; startTime: string; endDate: string; endTime: string }
+): { start: Date; end: Date } | null {
+  const start = parseBookingDateTime(booking.startDate, booking.startTime)
+  const end = parseBookingDateTime(booking.endDate, booking.endTime)
+  if (!start || !end) return null
   return { start, end }
 }
 
@@ -81,7 +101,25 @@ async function findMatchingActiveBookingByPlate(plateNumber: string, eventTime: 
     const data = docSnap.data() as any
     const normalizedDbPlate = normalizeLicensePlate(data.licensePlate || "")
     if (normalizedDbPlate !== normalizedTarget) return
-    const { start, end } = getBookingWindow(data)
+
+    const window = getBookingWindow({
+      startDate: data.startDate,
+      startTime: data.startTime,
+      endDate: data.endDate,
+      endTime: data.endTime
+    })
+    if (!window) {
+      console.warn('⚠️ [LPR] Skipping candidate due to invalid booking window (date/time parse failed)', {
+        bookingId: docSnap.id,
+        plate: data.licensePlate,
+        startDate: data.startDate,
+        startTime: data.startTime,
+        endDate: data.endDate,
+        endTime: data.endTime,
+      })
+      return
+    }
+    const { start, end } = window
     // Use 120 min tolerance each side (matches “Acces cu max 2h înainte” UI hint)
     const isInWindow = withinTolerance(eventTime, start, end, 120)
     if (!isInWindow) return
