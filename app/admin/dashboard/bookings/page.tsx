@@ -312,10 +312,23 @@ function BookingsPageContent() {
       const items: PriceEntry[] = snap.docs
         .map((d) => {
           const data: any = d.data()
+          const standardPrice = Number(data.standardPrice || 0)
+          const reducereAplicata = data.reducereAplicata !== undefined ? Number(data.reducereAplicata) : undefined
+          const discountedFromReduction =
+            standardPrice > 0 && typeof reducereAplicata === "number" && !Number.isNaN(reducereAplicata)
+              ? Math.max(0, standardPrice - reducereAplicata)
+              : undefined
+          const discountedFromField = data.discountedPrice ? Number(data.discountedPrice) : undefined
           return {
             days: Number(data.days || 0),
-            standardPrice: Number(data.standardPrice || 0),
-            discountedPrice: data.discountedPrice ? Number(data.discountedPrice) : undefined,
+            standardPrice,
+            // Prefer "Preț Final (RON)" (discounted) if available; otherwise derive it from reducereAplicata.
+            discountedPrice:
+              typeof discountedFromField === "number" && !Number.isNaN(discountedFromField) && discountedFromField > 0
+                ? discountedFromField
+                : typeof discountedFromReduction === "number" && discountedFromReduction > 0
+                  ? discountedFromReduction
+                  : undefined,
           }
         })
         .filter((p) => p.days > 0 && p.standardPrice > 0)
@@ -470,6 +483,32 @@ function BookingsPageContent() {
       } else if (statusFilter === "pay_on_site") {
         // Filtrare specială pentru rezervările cu plată la parcare
         filtered = filtered.filter((b) => b.source === "pay_on_site")
+      } else if (statusFilter === "occupied") {
+        // Ocupate = prezente (conform aceleiași reguli ca și contorul de Ocupare din tabel)
+        filtered = filtered.filter((b) => {
+          const lpr: any = (b as any)?.lpr || {}
+          if (lpr?.isInside === true) return true
+          if (lpr?.departedAt) return false
+          if (lpr?.arrivedAt && !lpr?.departedAt) return true
+          // Fără info LPR => considerăm prezent (încă nu avem ieșire confirmată)
+          return true
+        })
+      } else if (statusFilter === "exited") {
+        // Ieșite = restul (negarea regulii de "Ocupate")
+        filtered = filtered.filter((b) => {
+          const lpr: any = (b as any)?.lpr || {}
+          if (lpr?.isInside === true) return false
+          if (lpr?.departedAt) return true
+          if (lpr?.arrivedAt && !lpr?.departedAt) return false
+          return false
+        })
+      } else if (statusFilter === "online") {
+        // Online = badge ONLINE (non-manual, non-pay_on_site, non-LPR fără rezervare)
+        filtered = filtered.filter((b) => {
+          const isPayOnSite = b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
+          const isLprNoReservation = b.status === "unmatched_lpr" || b.source === "lpr"
+          return b.source !== "manual" && !isPayOnSite && !isLprNoReservation
+        })
       } else {
         filtered = filtered.filter((b) => b.status === statusFilter)
       }
@@ -591,6 +630,12 @@ function BookingsPageContent() {
   const isPayOnSiteBooking = (b: Booking) =>
     b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
 
+  const isPayOnSiteOverThreshold = (b: Booking) => {
+    if (!isPayOnSiteBooking(b)) return false
+    const s = String(b.status || "").toLowerCase()
+    return Boolean((b as any).payOnSiteOverdueMoreThan3h) || s.includes("cancelled_pay_on_site_timeout")
+  }
+
   const isOnlineBooking = (b: Booking) => {
     // Match the table "ONLINE" badge meaning: non-manual, non-pay_on_site, non-LPR-without-reservation
     if (b.source === "manual") return false
@@ -620,9 +665,17 @@ function BookingsPageContent() {
     .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
   const onlineUnpaidCount = Math.max(0, onlineTotalCount - onlineReceivedCount)
 
+  // Pay-on-site: show all in-table pay_on_site count (even those over threshold),
+  // and also how many are over threshold / auto-cancelled. Value remains computed for non-lost ones only.
+  const payOnSiteTotalCount = statsBookings.filter((b) => isPayOnSiteBooking(b)).length
+  const payOnSiteOverThresholdCount = statsBookings.filter((b) => isPayOnSiteOverThreshold(b)).length
+
   const payOnSiteEstimatedCount = statsBookings.filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b)).length
   const payOnSiteEstimatedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b))
+    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+  const payOnSiteTotalValue = statsBookings
+    .filter((b) => isPayOnSiteBooking(b))
     .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
 
   const manualPaidCount = statsBookings.filter((b) => !isLostBooking(b) && isManualPaidBooking(b)).length
@@ -631,8 +684,21 @@ function BookingsPageContent() {
     .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
 
   const lprNoReservationCount = statsBookings.filter((b) => isLprWithoutReservation(b)).length
+  const lostCount = statsBookings.filter((b) => isLostBooking(b)).length
+  const billableCount = statsBookings.filter(
+    (b) =>
+      !isLostBooking(b) &&
+      !isLprWithoutReservation(b) &&
+      (isOnlinePaidBooking(b) || isPayOnSiteBooking(b) || isManualPaidBooking(b)),
+  ).length
 
+  // "Încasat/Estimare" (operațional)
   const totalProRataValue = onlineReceivedValue + payOnSiteEstimatedValue + manualPaidValue
+  // "Valoare totală (potențială)" pentru toate rezervările din tabel (except LPR fără rezervare),
+  // inclusiv Plată la parcare auto-anulată, ca să fie "calculat pentru toate 36".
+  const totalPotentialValue = statsBookings
+    .filter((b) => !isLprWithoutReservation(b))
+    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
 
   const handleViewBooking = (booking: Booking) => {
     setSelectedBooking(booking)
@@ -1623,13 +1689,16 @@ function BookingsPageContent() {
                     <div className="text-xs leading-relaxed">
                       <div className="font-semibold mb-1">Valoare totală =</div>
                       <div>
-                        Online încasat ({onlineReceivedCount}) + Pay-on-site estimat ({payOnSiteEstimatedCount}) + Manual achitat ({manualPaidCount})
+                         Online încasat ({onlineReceivedCount}) + Plata la parcare ({payOnSiteTotalCount}) + Manual achitat ({manualPaidCount})
+                      </div>
+                      <div className="mt-1 text-muted-foreground">
+                        În tabel: {totalCount} rânduri (LPR fără rezervare: {lprNoReservationCount}, anulate/expirate: {lostCount}). În valoare intră: {billableCount}.
                       </div>
                       <div className="mt-1">
                         {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
-                        {payOnSiteEstimatedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
+                        {payOnSiteTotalValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
                         {manualPaidValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ={" "}
-                        {totalProRataValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                        {totalPotentialValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
                       </div>
                       <div className="mt-1 text-muted-foreground">
                         LPR fără rezervare nu intră în valoare (doar număr).
@@ -1646,18 +1715,18 @@ function BookingsPageContent() {
             <p className="text-xs text-muted-foreground">
               Valoare totală:{" "}
               <span className="font-semibold">
-                {totalProRataValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                {totalPotentialValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
               {pricesLoading && (
                 <span className="ml-2 text-[10px] text-gray-500">(se calculează tarifele…)</span>
               )}
             </p>
+            
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">Online</CardTitle>
-            <CardDescription className="text-xs">Total online + încasat (card)</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-700">{onlineReceivedCount}</div>
@@ -1667,29 +1736,24 @@ function BookingsPageContent() {
                 {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
             </p>
-            <p className="text-xs text-muted-foreground">
-              Total online în tabel: <span className="font-semibold">{onlineTotalCount}</span>
-              {onlineUnpaidCount > 0 && (
-                <>
-                  {" "}• Neplătite: <span className="font-semibold text-red-700">{onlineUnpaidCount}</span>
-                </>
-              )}
-            </p>
+          
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Pay-on-site estimat</CardTitle>
+            <CardTitle className="text-sm font-medium">Plata la parcare</CardTitle>
             <CardDescription className="text-xs">De încasat la parcare</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-orange-700">{payOnSiteEstimatedCount}</div>
+            <div className="text-2xl font-bold text-orange-700">{payOnSiteTotalCount}</div>
             <p className="text-xs text-muted-foreground">
               Valoare totală:{" "}
               <span className="font-semibold text-orange-700">
-                {payOnSiteEstimatedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                {payOnSiteTotalValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
             </p>
+            
+           
           </CardContent>
         </Card>
         <Card>
@@ -1737,7 +1801,7 @@ function BookingsPageContent() {
           <CardContent className="py-4 text-sm text-slate-700">
             Pentru intervalul selectat, sistemul ia toate rezervările care se suprapun cu perioada aleasă și calculează
             valoarea doar pentru zilele care cad în acel interval. Tariful pe zi este luat automat din pagina Prețuri.
-            Apoi sumele sunt separate în: Online încasat (deja plătit), Pay-on-site estimat (de încasat la parcare) și
+            Apoi sumele sunt separate în: Online încasat (deja plătit), Plata la parcare (de încasat la parcare) și
             Manual achitat. LPR fără rezervare este afișat separat ca număr.
           </CardContent>
         </Card>
@@ -1747,6 +1811,15 @@ function BookingsPageContent() {
         <TabsList>
           <TabsTrigger value="all" onClick={() => setStatusFilter("all")}>
             Toate
+          </TabsTrigger>
+          <TabsTrigger value="occupied" onClick={() => setStatusFilter("occupied")}>
+            Ocupate
+          </TabsTrigger>
+          <TabsTrigger value="exited" onClick={() => setStatusFilter("exited")}>
+            Ieșite
+          </TabsTrigger>
+          <TabsTrigger value="online" onClick={() => setStatusFilter("online")}>
+            Online
           </TabsTrigger>
        
           <TabsTrigger value="manual" onClick={() => setStatusFilter("manual")}>

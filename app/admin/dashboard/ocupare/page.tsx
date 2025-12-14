@@ -185,7 +185,7 @@ export default function OccupancyPage() {
     
           <Button variant="outline" onClick={handleSetAllOutside} disabled={resetting || loading}>
             {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-            Setează toate isInside=false
+            Setează ocuparea la 0
           </Button>
        
           <Button onClick={fetchData} disabled={loading}>

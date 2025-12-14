@@ -155,10 +155,23 @@ export default function EntriesExitsPage() {
       const snap = await getDocs(q)
       const items: PriceEntry[] = snap.docs.map((d) => {
         const data: any = d.data()
+        const standardPrice = Number(data.standardPrice || 0)
+        const reducereAplicata = data.reducereAplicata !== undefined ? Number(data.reducereAplicata) : undefined
+        const discountedFromReduction =
+          standardPrice > 0 && typeof reducereAplicata === "number" && !Number.isNaN(reducereAplicata)
+            ? Math.max(0, standardPrice - reducereAplicata)
+            : undefined
+        const discountedFromField = data.discountedPrice ? Number(data.discountedPrice) : undefined
         return {
           days: Number(data.days || 0),
-          standardPrice: Number(data.standardPrice || 0),
-          discountedPrice: data.discountedPrice ? Number(data.discountedPrice) : undefined
+          standardPrice,
+          // Prefer "Preț Final (RON)" (discounted) if available; otherwise derive it from reducereAplicata.
+          discountedPrice:
+            typeof discountedFromField === "number" && !Number.isNaN(discountedFromField) && discountedFromField > 0
+              ? discountedFromField
+              : typeof discountedFromReduction === "number" && discountedFromReduction > 0
+                ? discountedFromReduction
+                : undefined,
         }
       }).filter((p) => p.days > 0 && p.standardPrice > 0)
       setPriceTable(items)
