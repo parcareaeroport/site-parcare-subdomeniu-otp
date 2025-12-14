@@ -31,6 +31,9 @@ interface OccupancyCounterProps {
 
   /** Interval selectat (ex: pagina Bookings). Dacă lipsește și mode="active", se folosește ziua de azi. */
   range?: { from?: Date; to?: Date }
+
+  /** Dacă este setat, afișează exact această valoare (pentru consistență cu tabelul/filtrele UI). */
+  countOverride?: number
 }
 
 export function OccupancyCounter({
@@ -42,6 +45,7 @@ export function OccupancyCounter({
   size = "default",
   mode = "live",
   range,
+  countOverride,
 }: OccupancyCounterProps) {
   const [occupiedCount, setOccupiedCount] = useState<number>(0)
   const [fallbackOccupiedCount, setFallbackOccupiedCount] = useState<number>(0)
@@ -139,19 +143,9 @@ export function OccupancyCounter({
           const endDate = String(b.endDate || "")
           if (!startDate || !endDate) return
           if (startDate > toKey) return // starts after the selected interval
-
-          const source = String(b.source || "")
-          const paymentStatus = String(b.paymentStatus || "")
-          const status = String(b.status || "")
-
-          const eligible =
-            source === "manual" ||
-            source === "pay_on_site" ||
-            paymentStatus === "paid" ||
-            status === "confirmed_paid" ||
-            status === "paid"
-
-          if (!eligible) return
+          // În mode="active" numărăm TOATE rezervările active care se suprapun peste interval,
+          // indiferent dacă sunt încă neplătite (ex: rezervare online creată dar fără confirmare plată).
+          // "Încasat" este un card separat și rămâne strict pe paid.
           scheduled += 1
         })
 
@@ -190,9 +184,10 @@ export function OccupancyCounter({
   }, [])
 
   const displayOccupiedCount = useMemo(() => {
+    if (typeof countOverride === "number") return Math.max(0, countOverride)
     if (mode === "active") return activeRangeCount
     return occupiedCount > 0 ? occupiedCount : fallbackOccupiedCount
-  }, [activeRangeCount, fallbackOccupiedCount, mode, occupiedCount])
+  }, [activeRangeCount, countOverride, fallbackOccupiedCount, mode, occupiedCount])
   const percentage = maxLimit > 0 ? Math.min(100, Math.round((displayOccupiedCount / maxLimit) * 100)) : 0
   const isWarning = percentage >= 80 && percentage < 100
   const isCritical = percentage >= 100

@@ -577,9 +577,9 @@ function BookingsPageContent() {
     return 0
   }
 
-  const statsBookings = bookings.filter((b) =>
-    overlapsRange(b.startDate, b.endDate, dateRange.from, dateRange.to),
-    )
+  // IMPORTANT: keep cards in sync with the table filters (tab + search + date range).
+  // filteredBookings is exactly what the table uses (before pagination).
+  const statsBookings = filteredBookings
 
   const totalCount = statsBookings.length
 
@@ -1800,6 +1800,7 @@ function BookingsPageContent() {
                 title="Ocupare"
                 mode="active"
                 range={{ from: dateRange.from, to: dateRange.to }}
+                countOverride={filteredBookings.length}
                 inline
                 className="w-full sm:w-auto"
               />

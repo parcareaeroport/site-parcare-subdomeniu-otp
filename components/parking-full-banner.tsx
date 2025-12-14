@@ -2,15 +2,16 @@
 
 import { useEffect, useMemo, useState } from "react"
 import { db } from "@/lib/firebase"
-import { doc, onSnapshot } from "firebase/firestore"
+import { collection, doc, getCountFromServer, onSnapshot, query, where } from "firebase/firestore"
 
 type BannerState = {
   occupiedCount: number
+  fallbackOccupiedCount: number
   maxLimit: number
 }
 
 export default function ParkingFullBanner() {
-  const [state, setState] = useState<BannerState>({ occupiedCount: 0, maxLimit: 0 })
+  const [state, setState] = useState<BannerState>({ occupiedCount: 0, fallbackOccupiedCount: 0, maxLimit: 0 })
 
   useEffect(() => {
     const unsubLive = onSnapshot(
@@ -37,10 +38,35 @@ export default function ParkingFullBanner() {
     }
   }, [])
 
+  // Fallback: dacă parkingLive e 0/stale, numărăm realitatea LPR (count where lpr.isInside=true)
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      try {
+        const q = query(collection(db, "bookings"), where("lpr.isInside", "==", true))
+        const snap = await getCountFromServer(q)
+        const c = Math.max(0, Number((snap.data() as any)?.count ?? 0))
+        if (!cancelled) setState((prev) => ({ ...prev, fallbackOccupiedCount: c }))
+      } catch (e) {
+        console.error("ParkingFullBanner: fallback count error", e)
+      }
+    }
+    refresh()
+    const id = setInterval(refresh, 60000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
+
+  const displayOccupiedCount = useMemo(() => {
+    return state.occupiedCount > 0 ? state.occupiedCount : state.fallbackOccupiedCount
+  }, [state.fallbackOccupiedCount, state.occupiedCount])
+
   const isFull = useMemo(() => {
     if (!state.maxLimit) return false
-    return state.occupiedCount >= state.maxLimit
-  }, [state.maxLimit, state.occupiedCount])
+    return displayOccupiedCount >= state.maxLimit
+  }, [displayOccupiedCount, state.maxLimit])
 
   if (!isFull) return null
 
