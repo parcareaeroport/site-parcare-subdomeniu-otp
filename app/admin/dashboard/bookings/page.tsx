@@ -1798,6 +1798,8 @@ function BookingsPageContent() {
             <div className="w-full sm:w-auto">
               <OccupancyCounter
                 title="Ocupare"
+                mode="active"
+                range={{ from: dateRange.from, to: dateRange.to }}
                 inline
                 className="w-full sm:w-auto"
               />

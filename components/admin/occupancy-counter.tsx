@@ -1,12 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useMemo, useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { AlertTriangle, Car } from "lucide-react"
 import { db } from "@/lib/firebase"
-import { collection, doc, getCountFromServer, onSnapshot, query, where } from "firebase/firestore"
+import { collection, doc, getCountFromServer, getDocs, limit, onSnapshot, orderBy, query, where } from "firebase/firestore"
 import { cn } from "@/lib/utils"
+import { format as formatDateFn } from "date-fns"
 
 interface OccupancyCounterProps {
   /** Titlu custom pentru contor (default: "Ocupare Actuală") */
@@ -21,6 +22,15 @@ interface OccupancyCounterProps {
   className?: string
   /** Dimensiune: default sau sm (text mai mic) */
   size?: "default" | "sm"
+
+  /**
+   * mode="live": afișează ocuparea live (parkingLive), cu fallback la count(lpr.isInside==true)
+   * mode="active": calculează ocuparea pentru o zi/interval (rezervări active în range + LPR fără rezervare inside)
+   */
+  mode?: "live" | "active"
+
+  /** Interval selectat (ex: pagina Bookings). Dacă lipsește și mode="active", se folosește ziua de azi. */
+  range?: { from?: Date; to?: Date }
 }
 
 export function OccupancyCounter({
@@ -30,14 +40,18 @@ export function OccupancyCounter({
   icon,
   className,
   size = "default",
+  mode = "live",
+  range,
 }: OccupancyCounterProps) {
   const [occupiedCount, setOccupiedCount] = useState<number>(0)
   const [fallbackOccupiedCount, setFallbackOccupiedCount] = useState<number>(0)
+  const [activeRangeCount, setActiveRangeCount] = useState<number>(0)
   const [maxLimit, setMaxLimit] = useState<number>(0)
   const [loading, setLoading] = useState(true)
 
   // Snapshot pentru occupiedCount din parkingLive
   useEffect(() => {
+    if (mode !== "live") return
     const unsub = onSnapshot(
       doc(db, "config", "parkingLive"),
       (snap) => {
@@ -51,10 +65,11 @@ export function OccupancyCounter({
       }
     )
     return () => unsub()
-  }, [])
+  }, [mode])
 
   // Fallback: dacă parkingLive e 0/stale, calculează ocuparea din realitatea LPR (count where lpr.isInside=true)
   useEffect(() => {
+    if (mode !== "live") return
     let cancelled = false
     const refresh = async () => {
       try {
@@ -74,7 +89,90 @@ export function OccupancyCounter({
       cancelled = true
       clearInterval(id)
     }
-  }, [])
+  }, [mode])
+
+  // mode="active": calculează ocuparea pentru zi/interval:
+  // (1) Rezervări active care se suprapun peste range-ul selectat (manual + pay_on_site + online paid)
+  // (2) + LPR fără rezervare (unmatched_lpr) care sunt inside
+  useEffect(() => {
+    if (mode !== "active") return
+    let cancelled = false
+
+    const from = range?.from ?? new Date()
+    const to = range?.to ?? range?.from ?? new Date()
+    const fromKey = formatDateFn(from, "yyyy-MM-dd")
+    const toKey = formatDateFn(to, "yyyy-MM-dd")
+
+    const activeStatuses = ["confirmed_paid", "confirmed_test", "confirmed", "paid", "confirmed_pay_on_site"]
+
+    const refresh = async () => {
+      try {
+        // 1) Count unmatched LPR inside
+        let unmatchedInside = 0
+        try {
+          const qUnmatched = query(
+            collection(db, "bookings"),
+            where("status", "==", "unmatched_lpr"),
+            where("lpr.isInside", "==", true),
+          )
+          const snapUnmatched = await getCountFromServer(qUnmatched)
+          unmatchedInside = Math.max(0, Number((snapUnmatched.data() as any)?.count ?? 0))
+        } catch (e) {
+          console.error("OccupancyCounter(active): failed counting unmatched_lpr inside", e)
+        }
+
+        // 2) Fetch candidate active bookings (endDate >= fromKey) then filter client-side by overlap (startDate <= toKey)
+        // NOTE: Firestore doesn't allow range filters on two different fields in one query.
+        const qCandidates = query(
+          collection(db, "bookings"),
+          where("status", "in", activeStatuses),
+          where("endDate", ">=", fromKey),
+          orderBy("endDate", "asc"),
+          limit(2500),
+        )
+        const snap = await getDocs(qCandidates)
+
+        let scheduled = 0
+        snap.forEach((d) => {
+          const b: any = d.data()
+          const startDate = String(b.startDate || "")
+          const endDate = String(b.endDate || "")
+          if (!startDate || !endDate) return
+          if (startDate > toKey) return // starts after the selected interval
+
+          const source = String(b.source || "")
+          const paymentStatus = String(b.paymentStatus || "")
+          const status = String(b.status || "")
+
+          const eligible =
+            source === "manual" ||
+            source === "pay_on_site" ||
+            paymentStatus === "paid" ||
+            status === "confirmed_paid" ||
+            status === "paid"
+
+          if (!eligible) return
+          scheduled += 1
+        })
+
+        const total = Math.max(0, scheduled + unmatchedInside)
+        if (!cancelled) {
+          setActiveRangeCount(total)
+          setLoading(false)
+        }
+      } catch (e) {
+        console.error("OccupancyCounter(active): failed computing active occupancy", e)
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    refresh()
+    const id = setInterval(refresh, 60000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [mode, range?.from, range?.to])
 
   // Snapshot pentru maxLimit din reservationSettings
   useEffect(() => {
@@ -91,7 +189,10 @@ export function OccupancyCounter({
     return () => unsub()
   }, [])
 
-  const displayOccupiedCount = occupiedCount > 0 ? occupiedCount : fallbackOccupiedCount
+  const displayOccupiedCount = useMemo(() => {
+    if (mode === "active") return activeRangeCount
+    return occupiedCount > 0 ? occupiedCount : fallbackOccupiedCount
+  }, [activeRangeCount, fallbackOccupiedCount, mode, occupiedCount])
   const percentage = maxLimit > 0 ? Math.min(100, Math.round((displayOccupiedCount / maxLimit) * 100)) : 0
   const isWarning = percentage >= 80 && percentage < 100
   const isCritical = percentage >= 100

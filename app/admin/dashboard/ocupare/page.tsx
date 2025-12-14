@@ -182,18 +182,12 @@ export default function OccupancyPage() {
             <Printer className="h-4 w-4 mr-2" />
             Printează
           </Button>
-          <Button variant="outline" onClick={handleRecalculate} disabled={resetting || loading}>
-            {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-            Recalculează contor (din isInside)
-          </Button>
+    
           <Button variant="outline" onClick={handleSetAllOutside} disabled={resetting || loading}>
             {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
             Setează toate isInside=false
           </Button>
-          <Button variant="destructive" onClick={handleReset} disabled={resetting || loading}>
-            {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-            Reset contor la 0 (azi)
-          </Button>
+       
           <Button onClick={fetchData} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
             Reîncarcă
