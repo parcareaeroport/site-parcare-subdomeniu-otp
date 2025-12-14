@@ -1800,7 +1800,9 @@ function BookingsPageContent() {
                 title="Ocupare"
                 mode="active"
                 range={{ from: dateRange.from, to: dateRange.to }}
-                countOverride={filteredBookings.length}
+                // IMPORTANT: keep in sync with table, but exclude bookings already exited per LPR.
+                // If lpr.isInside is not true, we treat it as "not present" for occupancy.
+                countOverride={filteredBookings.filter((b) => (b as any)?.lpr?.isInside === true).length}
                 inline
                 className="w-full sm:w-auto"
               />
