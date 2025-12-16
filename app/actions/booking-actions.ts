@@ -852,46 +852,46 @@ export async function createBookingWithFirestore(
           if (!invoiceBookingId) {
             console.warn('⚠️ Oblio invoice skipped: missing booking id (both apiBookingNumber and firestoreId are empty)')
           } else {
-            console.log(`🧾 Starting Oblio invoice generation for booking ${invoiceBookingId}`)
-
-            const { generateOblioInvoice } = await import('@/lib/oblio-integration')
-
-            const oblioInvoiceData = {
-              // Prefer Multipark booking number; fallback to Firestore doc id to avoid STRIPE-undefined in Oblio.
-              bookingId: invoiceBookingId,
-              clientName: completeBookingData.clientName || 'Client Site Parcări',
-              clientEmail: additionalData.clientEmail || '',
-              clientPhone: additionalData.clientPhone,
-              licensePlate: completeBookingData.licensePlate,
-              startDate: completeBookingData.startDate,
-              endDate: completeBookingData.endDate,
-              location: 'Site Parcări', // Ai putea să îl faci dinamic
+          console.log(`🧾 Starting Oblio invoice generation for booking ${invoiceBookingId}`)
+          
+          const { generateOblioInvoice } = await import('@/lib/oblio-integration')
+          
+          const oblioInvoiceData = {
+            // Prefer Multipark booking number; fallback to Firestore doc id to avoid STRIPE-undefined in Oblio.
+            bookingId: invoiceBookingId,
+            clientName: completeBookingData.clientName || 'Client Site Parcări',
+            clientEmail: additionalData.clientEmail || '',
+            clientPhone: additionalData.clientPhone,
+            licensePlate: completeBookingData.licensePlate,
+            startDate: completeBookingData.startDate,
+            endDate: completeBookingData.endDate,
+            location: 'Site Parcări', // Ai putea să îl faci dinamic
               parkingSpot: invoiceBookingId,
-              totalCost: additionalData.amount || 0,
-              billingType: (additionalData.company ? 'corporate' : 'individual') as 'corporate' | 'individual',
-              company: additionalData.company,
-              companyVAT: additionalData.companyVAT,
-              companyReg: additionalData.companyReg,
-              companyAddress: additionalData.companyAddress,
-              // Date adresă client individual pentru ANAF
-              clientAddress: additionalData.address,
-              clientCity: additionalData.city,
-              clientCounty: additionalData.county,
-              clientCountry: additionalData.country,
-            }
+            totalCost: additionalData.amount || 0,
+            billingType: (additionalData.company ? 'corporate' : 'individual') as 'corporate' | 'individual',
+            company: additionalData.company,
+            companyVAT: additionalData.companyVAT,
+            companyReg: additionalData.companyReg,
+            companyAddress: additionalData.companyAddress,
+            // Date adresă client individual pentru ANAF
+            clientAddress: additionalData.address,
+            clientCity: additionalData.city,
+            clientCounty: additionalData.county,
+            clientCountry: additionalData.country,
+          }
 
-            // Timeout pentru Oblio (max 10 secunde)
-            const oblioPromise = generateOblioInvoice(oblioInvoiceData)
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Oblio timeout')), 10000)
-            )
-
-            const invoiceResult = await Promise.race([oblioPromise, timeoutPromise]) as any
-
-            if (invoiceResult.success) {
-              console.log('✅ Factură Oblio generată cu succes:', invoiceResult.invoiceNumber, '- Link:', invoiceResult.invoiceUrl)
-            } else {
-              console.error('❌ Eroare la generarea facturii Oblio:', invoiceResult.error)
+          // Timeout pentru Oblio (max 10 secunde)
+          const oblioPromise = generateOblioInvoice(oblioInvoiceData)
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Oblio timeout')), 10000)
+          )
+          
+          const invoiceResult = await Promise.race([oblioPromise, timeoutPromise]) as any
+          
+          if (invoiceResult.success) {
+            console.log('✅ Factură Oblio generată cu succes:', invoiceResult.invoiceNumber, '- Link:', invoiceResult.invoiceUrl)
+          } else {
+            console.error('❌ Eroare la generarea facturii Oblio:', invoiceResult.error)
             }
           }
         } catch (error) {
@@ -1211,6 +1211,11 @@ export async function createManualBooking(formData: FormData) {
     const clientPhone = formData.get('clientPhone') as string || ''
     const clientEmail = formData.get('clientEmail') as string || ''
     const numberOfPersons = parseInt(formData.get('numberOfPersons') as string) || 1
+    const manualPaymentStatusRaw = String(formData.get('manualPaymentStatus') || 'not_paid')
+    const manualPaymentStatus =
+      manualPaymentStatusRaw === 'paid' ? 'paid' : 'not_paid'
+    const manualIsInsideRaw = String(formData.get('manualIsInside') || 'true')
+    const manualIsInside = manualIsInsideRaw === 'true'
 
     console.log(`🔧 [${manualProcessId}] Form data extracted:`)
     console.log(`🔧 [${manualProcessId}]   License Plate: ${licensePlate}`)
@@ -1288,8 +1293,8 @@ export async function createManualBooking(formData: FormData) {
       days,
       amount: 0, // Fără cost - adăugată manual de operator
       status: 'confirmed_paid', // Status pentru rezervări reale manuale
-      paymentStatus: 'n/a', // Nu este relevantă pentru rezervările manuale
-      manualPaymentStatus: 'not_paid', // Inițial nu este plătită - va fi actualizată manual
+      paymentStatus: manualPaymentStatus === 'paid' ? 'paid' : 'n/a',
+      manualPaymentStatus, // Setat din dialog (Achitat/Neplătit)
       source: 'manual',
       numberOfPersons,
       apiSuccess: false, // Se va actualiza după apelul API
@@ -1317,33 +1322,38 @@ export async function createManualBooking(formData: FormData) {
     console.log(`✅ [${manualProcessId}]   Document ID: ${bookingDocRef.id}`)
     console.log(`✅ [${manualProcessId}]   Save Duration: ${firestoreDuration}ms`)
 
-    // Increment ocupare (manual = intrat) cu idempotency flags
-    try {
-      await updateDoc(bookingDocRef, {
-        occupancyIncremented: true,
-        occupancyIncrementedAt: serverTimestamp(),
-        occupancyAt: serverTimestamp(),
-        "lpr.isInside": true,
-        "lpr.arrivedAt": serverTimestamp(),
-        "lpr.lastEventType": "entry",
-        lastUpdated: serverTimestamp()
-      })
-      const occupancyDocRef = doc(db, "config", "parkingLive")
-      // IMPORTANT: don't reset occupiedCount to 0 here; just ensure doc exists
-      await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
-      await updateDoc(occupancyDocRef, {
-        occupiedCount: increment(1),
-        lastUpdated: serverTimestamp(),
-        lastChange: {
-          type: "entry_manual",
-          bookingId: bookingDocRef.id,
-          plateNumber: normalizeLicensePlate(licensePlate),
-          at: new Date().toISOString()
-        }
-      })
-      console.log(`➕ [${manualProcessId}] Occupancy incremented for manual booking`)
-    } catch (occErr) {
-      console.error(`❌ [${manualProcessId}] Failed to increment occupancy for manual booking`, occErr)
+    // Dacă admin-ul bifează "Mașina se află înăuntru?", atunci marcăm isInside=true și incrementăm ocuparea.
+    if (manualIsInside) {
+      try {
+        await updateDoc(bookingDocRef, {
+          occupancyIncremented: true,
+          occupancyIncrementedAt: serverTimestamp(),
+          occupancyAt: serverTimestamp(),
+          "lpr.isInside": true,
+          // IMPORTANT: manual bookings are NOT LPR events; do not set lpr.arrivedAt here
+          // (otherwise it shows up in LPR column with confusing timezone/clock semantics).
+          "lpr.lastEventType": "entry",
+          lastUpdated: serverTimestamp()
+        })
+        const occupancyDocRef = doc(db, "config", "parkingLive")
+        // IMPORTANT: don't reset occupiedCount to 0 here; just ensure doc exists
+        await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
+        await updateDoc(occupancyDocRef, {
+          occupiedCount: increment(1),
+          lastUpdated: serverTimestamp(),
+          lastChange: {
+            type: "entry_manual",
+            bookingId: bookingDocRef.id,
+            plateNumber: normalizeLicensePlate(licensePlate),
+            at: new Date().toISOString()
+          }
+        })
+        console.log(`➕ [${manualProcessId}] Occupancy incremented for manual booking (manualIsInside=true)`)
+      } catch (occErr) {
+        console.error(`❌ [${manualProcessId}] Failed to increment occupancy for manual booking`, occErr)
+      }
+    } else {
+      console.log(`ℹ️ [${manualProcessId}] manualIsInside=false -> skipping occupancy increment and lpr.isInside`)
     }
 
     console.log(`🌐 [${manualProcessId}] ===== CALLING PARKING API =====`)

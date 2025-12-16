@@ -146,8 +146,7 @@ export default function OccupancyPage() {
     }
   }
 
-  const lprCount = data?.plates?.length ?? 0
-  const liveCount = lprCount // folosim direct numărul din LPR isInside
+  const lprCount = data?.plates?.length ?? 0 // strict: count from lpr.isInside==true
   const maxLimit = data?.maxLimit ?? 0
 
   const handleSetAllOutside = async () => {
@@ -201,9 +200,8 @@ export default function OccupancyPage() {
         </Card>
       )}
 
-      <OccupancyCounter 
-        title="Ocupare Curentă" 
-      />
+      {/* IMPORTANT: on /ocupare we want strict LPR reality: count must match table length */}
+      <OccupancyCounter title="Ocupare Curentă" countOverride={lprCount} />
 
       <Card id="plates-table-section">
         <CardHeader>

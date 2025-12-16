@@ -4,23 +4,18 @@ import { collection, doc, getDoc, getDocs, query, serverTimestamp, setDoc, where
 
 export async function GET() {
   try {
-    const liveDoc = await getDoc(doc(db, "config", "parkingLive"))
-    let occupiedCount = 0
-    if (liveDoc.exists()) {
-      occupiedCount = Math.max(0, Number(liveDoc.data().occupiedCount || 0))
-    }
-
     const settingsDoc = await getDoc(doc(db, "config", "reservationSettings"))
     const maxLimit = settingsDoc.exists() ? Number(settingsDoc.data().maxTotalReservations || 0) : 0
 
     const bookingsRef = collection(db, "bookings")
-    const q = query(bookingsRef, where("lpr.isInside", "==", true))
-    const snap = await getDocs(q)
-    if (!occupiedCount) {
-      occupiedCount = snap.size
-    }
+    // IMPORTANT: /admin/dashboard/ocupare must be strictly based on real LPR:
+    // list ONLY bookings where lpr.isInside==true and count must match that list.
+    const qInside = query(bookingsRef, where("lpr.isInside", "==", true))
+    const snapInside = await getDocs(qInside)
+    const occupiedCount = snapInside.size
+    const docsForPlates = snapInside.docs
 
-    const plates = snap.docs.map((d) => {
+    const plates = docsForPlates.map((d: any) => {
       const b = d.data() as any
       return {
         id: d.id,

@@ -651,10 +651,10 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
         const scheduled = new Date(`${booking.startDate}T${booking.startTime}:00Z`)
         const actual = parseFirestoreDate(lpr.arrivedAt)
         if (actual) {
-          const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-          if (!Number.isNaN(diffMin)) {
-            delayMinutes = diffMin
-          }
+        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+        if (!Number.isNaN(diffMin)) {
+          delayMinutes = diffMin
+        }
           // Show camera time (UTC clock) consistently across the admin UI
           actualTime = actual.toISOString().slice(11, 16)
         }
@@ -724,10 +724,10 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         const scheduled = new Date(`${booking.endDate}T${booking.endTime}:00Z`)
         const actual = parseFirestoreDate(lpr.departedAt)
         if (actual) {
-          const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-          if (!Number.isNaN(diffMin)) {
-            delayMinutes = diffMin
-          }
+        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+        if (!Number.isNaN(diffMin)) {
+          delayMinutes = diffMin
+        }
           actualTime = actual.toISOString().slice(11, 16)
         }
       }

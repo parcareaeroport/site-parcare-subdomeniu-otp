@@ -196,6 +196,8 @@ function BookingsPageContent() {
   const [manualClientPhone, setManualClientPhone] = useState("")
   const [manualClientEmail, setManualClientEmail] = useState("")
   const [manualNumberOfPersons, setManualNumberOfPersons] = useState("1")
+  const [manualPaymentStatusInput, setManualPaymentStatusInput] = useState<"not_paid" | "paid">("not_paid")
+  const [manualIsInside, setManualIsInside] = useState(true)
   const [manualDuplicateError, setManualDuplicateError] = useState<string | null>(null)
   
   // State pentru logul vizual al răspunsului API multipark
@@ -1149,6 +1151,8 @@ function BookingsPageContent() {
       formData.append('clientPhone', manualClientPhone)
       formData.append('clientEmail', manualClientEmail)
       formData.append('numberOfPersons', manualNumberOfPersons)
+      formData.append('manualPaymentStatus', manualPaymentStatusInput)
+      formData.append('manualIsInside', manualIsInside ? 'true' : 'false')
 
       console.log(`🏗️ [${uiProcessId}] FormData prepared with all fields`)
       console.log(`🏗️ [${uiProcessId}] Calling createManualBooking server action...`)
@@ -1227,6 +1231,8 @@ function BookingsPageContent() {
         setManualClientPhone("")
         setManualClientEmail("")
         setManualNumberOfPersons("1")
+        setManualPaymentStatusInput("not_paid")
+        setManualIsInside(true)
         setManualDuplicateError(null)
 
         console.log(`🔄 [${uiProcessId}] Refreshing bookings list...`)
@@ -1503,43 +1509,9 @@ function BookingsPageContent() {
   }
 
   const renderPaymentStatusCell = (booking: Booking) => {
-    // Pentru rezervările manuale, afișăm dropdown-ul editabil
+    // Pentru rezervările manuale, în tabel afișăm DOAR badge (fără modificări din tabel).
     if (booking.source === "manual") {
-      return (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="h-auto p-1 hover:bg-transparent"
-              disabled={isUpdatingPayment && updatingPaymentBookingId === booking.id}
-            >
-              {isUpdatingPayment && updatingPaymentBookingId === booking.id ? (
-                <div className="flex items-center">
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  <span className="text-xs">Actualizare...</span>
-                </div>
-              ) : (
-                getManualPaymentStatusBadge(booking)
-              )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem 
-              onClick={() => handleUpdateManualPaymentStatus(booking, "not_paid")}
-              disabled={isUpdatingPayment}
-            >
-              <Badge className="bg-red-500 text-white mr-2 w-28 justify-center">Neplatit</Badge>
-            </DropdownMenuItem>
-            <DropdownMenuItem 
-              onClick={() => handleUpdateManualPaymentStatus(booking, "paid")}
-              disabled={isUpdatingPayment}
-            >
-              <Badge className="bg-green-500 text-white mr-2 w-28 justify-center">Achitat</Badge>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )
+      return getManualPaymentStatusBadge(booking)
     }
     
     // Pentru rezervările cu plată la parcare, afișăm dropdown-ul editabil
@@ -2881,6 +2853,19 @@ function BookingsPageContent() {
               </div>
 
               <div className="space-y-2">
+                <label className="text-sm font-medium">Mașina se află înăuntru?</label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={manualIsInside}
+                    onChange={(e) => setManualIsInside(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  <span>{manualIsInside ? "Da (ocupă un loc)" : "Nu (doar rezervare, nu ocupă loc)"}</span>
+                </label>
+              </div>
+
+              <div className="space-y-2">
                 <label className="text-sm font-medium">Data Intrare *</label>
                 <div className="relative">
                   <Input
@@ -2972,6 +2957,20 @@ function BookingsPageContent() {
                   onChange={(e) => setManualClientPhone(e.target.value)}
                   placeholder="Ex: 0721123456"
                 />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Plată (manual)</label>
+                <select
+                  value={manualPaymentStatusInput}
+                  onChange={(e) =>
+                    setManualPaymentStatusInput(e.target.value === "paid" ? "paid" : "not_paid")
+                  }
+                  className="w-full h-10 px-3 border border-gray-200 rounded-md bg-white text-sm"
+                >
+                  <option value="not_paid">Neplătit</option>
+                  <option value="paid">Achitat</option>
+                </select>
               </div>
 
               <div className="space-y-2 md:col-span-2">

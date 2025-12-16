@@ -132,8 +132,8 @@ async function findMatchingActiveBookingByPlate(
     let strictlyInside = false
     let distanceMin = Number.POSITIVE_INFINITY
     if (window) {
-      const { start, end } = window
-      // Use 120 min tolerance each side (matches “Acces cu max 2h înainte” UI hint)
+    const { start, end } = window
+    // Use 120 min tolerance each side (matches “Acces cu max 2h înainte” UI hint)
       inWindow = withinTolerance(eventTime, start, end, 120)
       strictlyInside = eventTime >= start && eventTime <= end
       const anchor = eventType === "exit" ? end : start
