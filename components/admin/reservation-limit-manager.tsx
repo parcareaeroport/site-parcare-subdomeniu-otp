@@ -29,6 +29,7 @@ export function ReservationLimitManager() {
 
   // statistici
   const [activeBookings, setActiveBookings] = useState<number | null>(null)
+  const [lprInsideCount, setLprInsideCount] = useState<number | null>(null)
   const [payOnSiteCancelMinutes, setPayOnSiteCancelMinutes] = useState<number | null>(null)
   const [payOnSiteCancelMinutesInput, setPayOnSiteCancelMinutesInput] = useState("")
 
@@ -92,6 +93,36 @@ export function ReservationLimitManager() {
     )
 
     return () => unsub()
+  }, [])
+
+  // IMPORTANT: Keep the dashboard occupancy card consistent with /admin/dashboard/ocupare:
+  // use strict LPR reality (count of bookings where lpr.isInside == true) via /api/admin/occupancy
+  useEffect(() => {
+    let cancelled = false
+
+    const refresh = async () => {
+      try {
+        const res = await fetch("/api/admin/occupancy")
+        if (!res.ok) return
+        const json = (await res.json()) as { occupiedCount?: number; plates?: any[] }
+        const count =
+          typeof json?.occupiedCount === "number"
+            ? json.occupiedCount
+            : Array.isArray(json?.plates)
+              ? json.plates.length
+              : null
+        if (!cancelled) setLprInsideCount(typeof count === "number" ? Math.max(0, count) : null)
+      } catch {
+        // ignore: we'll just fall back to live counter
+      }
+    }
+
+    refresh()
+    const id = setInterval(refresh, 60000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [])
 
   /*──────────────────────────────────┐
@@ -302,7 +333,9 @@ export function ReservationLimitManager() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <OccupancyCounter 
             title="Ocupare curenta" 
-            compact 
+            compact
+            // same as /admin/dashboard/ocupare
+            countOverride={typeof lprInsideCount === "number" ? lprInsideCount : undefined}
           />
           <div className="space-y-2 p-4 rounded-lg border-2 bg-blue-50 border-blue-200">
             <Label>Status Rezervări</Label>
