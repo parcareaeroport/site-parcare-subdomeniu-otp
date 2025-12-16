@@ -94,12 +94,10 @@ async function findMatchingActiveBookingByPlate(
 
   const bookingsRef = collection(db, "bookings")
   // Broad query: active statuses and not ended before the event day
-  const q = query(
-    bookingsRef,
-    where("status", "in", activeStatuses),
-    where("endDate", ">=", eventDay)
-  )
-  const snapshot = await getDocs(q)
+  // NOTE: this may miss some edge cases (e.g. manual bookings with unexpected status),
+  // so we also have a plate-specific fallback below.
+  const q = query(bookingsRef, where("status", "in", activeStatuses), where("endDate", ">=", eventDay))
+  let snapshot = await getDocs(q)
 
   let candidates: Array<{
     booking: MatchedBooking
@@ -107,11 +105,14 @@ async function findMatchingActiveBookingByPlate(
     strictlyInside: boolean
     distanceMin: number
     preferState: number
+    preferSource: number
   }> = []
-  snapshot.forEach(docSnap => {
+  const pushCandidate = (docSnap: any) => {
     const data = docSnap.data() as any
     const normalizedDbPlate = normalizeLicensePlate(data.licensePlate || "")
     if (normalizedDbPlate !== normalizedTarget) return
+    // Never match against unmatched_lpr placeholders.
+    if (data.status === "unmatched_lpr") return
 
     const lprInside = data?.lpr?.isInside === true
     // Prefer bookings that align with the event direction:
@@ -119,12 +120,14 @@ async function findMatchingActiveBookingByPlate(
     // - exit: prefer already inside
     const preferState =
       eventType === "exit" ? (lprInside ? 1 : 0) : eventType === "entry" ? (lprInside ? 0 : 1) : 0
+    // Prefer manual bookings when plate collides (admin expects LPR to fill the manual row, not create a new one).
+    const preferSource = data.source === "manual" ? 1 : 0
 
     const window = getBookingWindow({
       startDate: data.startDate,
       startTime: data.startTime,
       endDate: data.endDate,
-      endTime: data.endTime
+      endTime: data.endTime,
     })
 
     // If we can parse the window, compute a good match score; otherwise keep as weaker fallback.
@@ -132,8 +135,8 @@ async function findMatchingActiveBookingByPlate(
     let strictlyInside = false
     let distanceMin = Number.POSITIVE_INFINITY
     if (window) {
-    const { start, end } = window
-    // Use 120 min tolerance each side (matches “Acces cu max 2h înainte” UI hint)
+      const { start, end } = window
+      // Use 120 min tolerance each side (matches “Acces cu max 2h înainte” UI hint)
       inWindow = withinTolerance(eventTime, start, end, 120)
       strictlyInside = eventTime >= start && eventTime <= end
       const anchor = eventType === "exit" ? end : start
@@ -152,25 +155,43 @@ async function findMatchingActiveBookingByPlate(
         apiBookingNumber: data.apiBookingNumber,
         occupancyIncremented: data.occupancyIncremented,
         occupancyDecremented: data.occupancyDecremented,
-        source: data.source
+        source: data.source,
       },
       inWindow,
       strictlyInside,
       distanceMin,
-      preferState
+      preferState,
+      preferSource,
     })
-  })
+  }
+
+  snapshot.forEach(pushCandidate)
+
+  // Fallback: If the broad status-based query returned no plate matches, do a plate-specific lookup.
+  // This prevents creating new unmatched_lpr records when an admin-created manual booking exists but has an unexpected status/value.
+  if (candidates.length === 0 && normalizedTarget) {
+    try {
+      const qByPlate = query(bookingsRef, where("licensePlate", "==", normalizedTarget))
+      snapshot = await getDocs(qByPlate)
+      snapshot.forEach(pushCandidate)
+    } catch (e) {
+      // If fallback fails (indexes/permissions), we'll behave as "no match".
+      console.error("LPR: fallback plate-only lookup failed", e)
+    }
+  }
 
   if (candidates.length === 0) return null
 
   // Prefer candidates inside the (start..end) window (with tolerance),
   // then by state alignment (exit prefers inside, entry prefers outside),
+  // then prefer manual source (admin-created row should receive the LPR),
   // then by distance to expected anchor (entry≈start, exit≈end),
   // then by earliest end (stable).
   candidates.sort((a, b) => {
     if (a.inWindow !== b.inWindow) return a.inWindow ? -1 : 1
     if (a.strictlyInside !== b.strictlyInside) return a.strictlyInside ? -1 : 1
     if (a.preferState !== b.preferState) return b.preferState - a.preferState
+    if (a.preferSource !== b.preferSource) return b.preferSource - a.preferSource
     if (a.distanceMin !== b.distanceMin) return a.distanceMin - b.distanceMin
     const aEnd = new Date(`${a.booking.endDate}T${a.booking.endTime}:00`).getTime()
     const bEnd = new Date(`${b.booking.endDate}T${b.booking.endTime}:00`).getTime()
