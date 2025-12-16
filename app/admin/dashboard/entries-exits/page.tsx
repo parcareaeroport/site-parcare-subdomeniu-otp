@@ -325,7 +325,16 @@ export default function EntriesExitsPage() {
 
   if (!isClient) return null
 
-  const renderTable = (rows: EnrichedRow[], kind: "entry" | "exit") => {
+  const renderTable = (
+    rows: EnrichedRow[],
+    kind: "entry" | "exit",
+    opts?: {
+      showDelay?: boolean
+      showLprTime?: boolean
+    },
+  ) => {
+    const showDelay = opts?.showDelay ?? kind === "exit"
+    const showLprTime = opts?.showLprTime ?? kind === "entry"
     const cardBg = kind === "entry" ? "bg-blue-50 border-blue-200" : "bg-amber-50 border-amber-200"
     return (
     <>
@@ -338,7 +347,8 @@ export default function EntriesExitsPage() {
               <th className="text-left py-2 px-2 font-semibold">NR ÎNMATRICULARE</th>
               <th className="text-left py-2 px-2 font-semibold">TEL</th>
               <th className="text-left py-2 px-2 font-semibold">NR PERSOANE</th>
-              <th className="text-left py-2 px-2 font-semibold">Ore întârziate</th>
+              {showLprTime && <th className="text-left py-2 px-2 font-semibold">LPR</th>}
+              {showDelay && <th className="text-left py-2 px-2 font-semibold">Ore întârziate</th>}
               {kind === "exit" && <th className="text-left py-2 px-2 font-semibold">Valoarea de plată</th>}
             </tr>
           </thead>
@@ -379,9 +389,16 @@ export default function EntriesExitsPage() {
                 </td>
                 <td className="py-3 px-2">{row.phone}</td>
                 <td className="py-3 px-2 text-center">{row.numberOfPersons}</td>
-                <td className={`py-3 px-2 ${row.delayMinutesComputed && row.delayMinutesComputed > 0 ? "text-red-700 font-semibold" : ""}`}>
-                  {row.delayMinutesComputed !== undefined ? formatDelay(row.delayMinutesComputed) : "-"}
-                </td>
+                {showLprTime && (
+                  <td className="py-3 px-2">
+                    {row.actualTime ? <span className="font-semibold">{row.actualTime}</span> : "-"}
+                  </td>
+                )}
+                {showDelay && (
+                  <td className={`py-3 px-2 ${row.delayMinutesComputed && row.delayMinutesComputed > 0 ? "text-red-700 font-semibold" : ""}`}>
+                    {row.delayMinutesComputed !== undefined ? formatDelay(row.delayMinutesComputed) : "-"}
+                  </td>
+                )}
               {kind === "exit" && (
                 <td className="py-3 px-2">
                   {row.amountDueText ? (
@@ -441,10 +458,21 @@ export default function EntriesExitsPage() {
               <div className="text-muted-foreground">Nr persoane</div>
               <div className="text-right text-gray-900">{row.numberOfPersons}</div>
 
-              <div className="text-muted-foreground">Întârziere</div>
-              <div className={`text-right ${row.delayMinutesComputed && row.delayMinutesComputed > 0 ? "text-red-700 font-semibold" : "text-gray-900"}`}>
-                {row.delayMinutesComputed !== undefined ? formatDelay(row.delayMinutesComputed) : "-"}
-              </div>
+              {showLprTime && (
+                <>
+                  <div className="text-muted-foreground">LPR</div>
+                  <div className="text-right text-gray-900">{row.actualTime || "-"}</div>
+                </>
+              )}
+
+              {showDelay && (
+                <>
+                  <div className="text-muted-foreground">Întârziere</div>
+                  <div className={`text-right ${row.delayMinutesComputed && row.delayMinutesComputed > 0 ? "text-red-700 font-semibold" : "text-gray-900"}`}>
+                    {row.delayMinutesComputed !== undefined ? formatDelay(row.delayMinutesComputed) : "-"}
+                  </div>
+                </>
+              )}
 
               {kind === "exit" && (
                 <>
@@ -532,7 +560,7 @@ export default function EntriesExitsPage() {
                 <CardTitle>Intrări</CardTitle>
             </CardHeader>
             <CardContent>
-                {mainEntries.length === 0 ? <p className="text-gray-500">Nu există intrări.</p> : renderTable(mainEntries, "entry")}
+                {mainEntries.length === 0 ? <p className="text-gray-500">Nu există intrări.</p> : renderTable(mainEntries, "entry", { showDelay: false, showLprTime: true })}
             </CardContent>
           </Card>
             )}
@@ -544,7 +572,7 @@ export default function EntriesExitsPage() {
              
             </CardHeader>
             <CardContent>
-                {lateEntries.length === 0 ? <p className="text-gray-500">Nu există intrări întârziate.</p> : renderTable(lateEntries, "entry")}
+                {lateEntries.length === 0 ? <p className="text-gray-500">Nu există intrări întârziate.</p> : renderTable(lateEntries, "entry", { showDelay: true, showLprTime: true })}
             </CardContent>
           </Card>
             )}

@@ -297,6 +297,20 @@ function BookingsPageContent() {
     })
   }
 
+  const parseFirestoreDate = (value: any): Date | null => {
+    if (!value) return null
+    try {
+      if (typeof value?.toDate === "function") {
+        const d = value.toDate()
+        return Number.isNaN(d.getTime()) ? null : d
+      }
+      const d = new Date(value)
+      return Number.isNaN(d.getTime()) ? null : d
+    } catch {
+      return null
+    }
+  }
+
   const formatDateKey = (d: Date) => formatDateFn(d, "yyyy-MM-dd")
   const isoDayRange = (d: Date) => {
     const start = startOfDay(d).toISOString()
@@ -2345,8 +2359,10 @@ function BookingsPageContent() {
                   {(() => {
                     const lpr: any = (selectedBooking as any).lpr || {}
                     if (selectedBooking.startDate && selectedBooking.startTime && lpr.arrivedAt) {
-                      const plannedStart = new Date(`${selectedBooking.startDate}T${selectedBooking.startTime}:00`)
-                      const actualArr = new Date(lpr.arrivedAt)
+                      // IMPORTANT: compare in the same basis as LPR display (camera-local stored as UTC clock).
+                      const plannedStart = new Date(`${selectedBooking.startDate}T${selectedBooking.startTime}:00Z`)
+                      const actualArr = parseFirestoreDate(lpr.arrivedAt)
+                      if (!actualArr) return null
                       const diffMin = Math.round((actualArr.getTime() - plannedStart.getTime()) / (1000 * 60))
                       if (!Number.isNaN(diffMin) && diffMin !== 0) {
                         if (diffMin < 0) {
@@ -2377,8 +2393,9 @@ function BookingsPageContent() {
                   {(() => {
                     const lpr: any = (selectedBooking as any).lpr || {}
                     if (selectedBooking.endDate && selectedBooking.endTime && lpr.departedAt) {
-                      const planned = new Date(`${selectedBooking.endDate}T${selectedBooking.endTime}:00`)
-                      const actual = new Date(lpr.departedAt)
+                      const planned = new Date(`${selectedBooking.endDate}T${selectedBooking.endTime}:00Z`)
+                      const actual = parseFirestoreDate(lpr.departedAt)
+                      if (!actual) return null
                       const diffMin = Math.round((actual.getTime() - planned.getTime()) / (1000 * 60))
                       if (!Number.isNaN(diffMin) && diffMin !== 0) {
                         if (diffMin < 0) {
