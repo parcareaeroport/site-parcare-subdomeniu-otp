@@ -41,6 +41,13 @@ function parseDateTime(date?: string, time?: string) {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+function parseDateTimeUTC(date?: string, time?: string) {
+  if (!date || !time) return null
+  const asIso = `${date}T${time.length === 5 ? `${time}:00` : time}Z`
+  const d = new Date(asIso)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
 function getExactPriceForDays(priceTable: PriceEntry[], days: number): number | null {
   if (!days || days <= 0) return null
   if (!priceTable || priceTable.length === 0) return null
@@ -185,9 +192,20 @@ export default function EntriesExitsPage() {
     const withDates = row as Partial<EnrichedRow>
     const scheduledDate = kind === "entry" ? withDates.startDate ?? selectedDate : withDates.endDate ?? selectedDate
     const scheduledTime = row.time
-    const scheduled = parseDateTime(scheduledDate, scheduledTime)
+    // IMPORTANT: keep LPR comparisons consistent with how LPR times are stored (UTC clock for camera-local time)
+    const scheduled = parseDateTimeUTC(scheduledDate, scheduledTime)
     const now = new Date()
     let delay = row.delayMinutes
+
+    // Prefer actual LPR time (if available) for delay calculation.
+    // This prevents showing "late" just because "now" is after scheduled, when the car actually arrived early.
+    if (delay === undefined && scheduled && row.actualTime) {
+      const actual = parseDateTimeUTC(scheduledDate, row.actualTime)
+      if (actual) {
+        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+        if (!Number.isNaN(diffMin)) delay = diffMin
+      }
+    }
 
     if (delay === undefined && scheduled) {
       const diffMin = Math.round((now.getTime() - scheduled.getTime()) / (1000 * 60))

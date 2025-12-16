@@ -595,6 +595,20 @@ export async function getRecentBookings(): Promise<RecentBooking[]> {
   }
 }
 
+function parseFirestoreDate(value: any): Date | null {
+  if (!value) return null
+  try {
+    if (typeof value?.toDate === "function") {
+      const d = value.toDate()
+      return Number.isNaN(d.getTime()) ? null : d
+    }
+    const d = new Date(value)
+    return Number.isNaN(d.getTime()) ? null : d
+  } catch {
+    return null
+  }
+}
+
 /**
  * Obține intrările (rezervările care încep) pentru o dată specifică
  */
@@ -631,13 +645,19 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
       let actualTime: string | undefined
       let delayMinutes: number | undefined
       if (lpr.arrivedAt && booking.startDate && booking.startTime) {
-        const scheduled = new Date(`${booking.startDate}T${booking.startTime}:00`)
-        const actual = new Date(lpr.arrivedAt)
-        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-        if (!Number.isNaN(diffMin)) {
-          delayMinutes = diffMin
+        // IMPORTANT:
+        // LPR times are stored as ISO (UTC) but represent the camera's local clock.
+        // To compare apples-to-apples, we also parse the scheduled time as UTC (add "Z").
+        const scheduled = new Date(`${booking.startDate}T${booking.startTime}:00Z`)
+        const actual = parseFirestoreDate(lpr.arrivedAt)
+        if (actual) {
+          const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+          if (!Number.isNaN(diffMin)) {
+            delayMinutes = diffMin
+          }
+          // Show camera time (UTC clock) consistently across the admin UI
+          actualTime = actual.toISOString().slice(11, 16)
         }
-        actualTime = actual.toTimeString().slice(0, 5)
       }
       
       entries.push({
@@ -700,13 +720,16 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
       let actualTime: string | undefined
       let delayMinutes: number | undefined
       if (lpr.departedAt && booking.endDate && booking.endTime) {
-        const scheduled = new Date(`${booking.endDate}T${booking.endTime}:00`)
-        const actual = new Date(lpr.departedAt)
-        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-        if (!Number.isNaN(diffMin)) {
-          delayMinutes = diffMin
+        // See note above: parse scheduled as UTC for consistent comparison
+        const scheduled = new Date(`${booking.endDate}T${booking.endTime}:00Z`)
+        const actual = parseFirestoreDate(lpr.departedAt)
+        if (actual) {
+          const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+          if (!Number.isNaN(diffMin)) {
+            delayMinutes = diffMin
+          }
+          actualTime = actual.toISOString().slice(11, 16)
         }
-        actualTime = actual.toTimeString().slice(0, 5)
       }
       
       exits.push({
