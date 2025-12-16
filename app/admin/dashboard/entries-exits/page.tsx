@@ -318,7 +318,9 @@ export default function EntriesExitsPage() {
   const enrichedEntries = useMemo(() => entries.map((e) => enrichRow(e, "entry")), [entries])
   const enrichedExits = useMemo(() => exits.map((e) => enrichRow(e, "exit")), [exits])
 
-  const mainEntries = useMemo(() => enrichedEntries.filter((e) => !e.isLate), [enrichedEntries])
+  // "Intrări" (main) should list only upcoming entries (not yet arrived via LPR).
+  // Entries that already happened (have LPR actualTime) should not appear here.
+  const mainEntries = useMemo(() => enrichedEntries.filter((e) => !e.isLate && !e.actualTime), [enrichedEntries])
   const mainExits = useMemo(() => enrichedExits.filter((e) => !e.isLate), [enrichedExits])
   const lateEntries = enrichedEntries.filter((e) => e.isLate)
   const lateExits = enrichedExits.filter((e) => e.isLate)
