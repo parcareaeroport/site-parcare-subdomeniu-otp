@@ -15,7 +15,7 @@ import {
   updateDoc,
   query,
   orderBy,
-  type Timestamp, // Import Timestamp
+  Timestamp, // Import Timestamp (runtime + type)
   increment,
   serverTimestamp,
   setDoc,
@@ -365,40 +365,30 @@ function BookingsPageContent() {
         const defaultFrom = today
         const fromDate = range?.from ?? dateRange.from ?? defaultFrom
         const toDate = range?.to ?? dateRange.to ?? today
-        const fromKey = formatDateKey(fromDate)
-        const toKey = formatDateKey(toDate)
 
         const bookingsCollectionRef = collection(db, "bookings")
 
-        // Query 1: după startDate în interval
-        const qStart = query(
+        // IMPORTANT: On this page, the date interval filters by "Creată la" (createdAt), not by booking period.
+        // We include all bookings whose createdAt is within the selected [from..to] (whole days).
+        const fromTs = Timestamp.fromDate(startOfDay(fromDate))
+        const toTs = Timestamp.fromDate(endOfDay(toDate))
+        const qCreated = query(
           bookingsCollectionRef,
-          where("startDate", ">=", fromKey),
-          where("startDate", "<=", toKey),
-          orderBy("startDate", "desc"),
-          limit(500),
-        )
-
-        // Query 2: după endDate în interval
-        const qEnd = query(
-          bookingsCollectionRef,
-          where("endDate", ">=", fromKey),
-          where("endDate", "<=", toKey),
-          orderBy("endDate", "desc"),
-          limit(500),
+          where("createdAt", ">=", fromTs),
+          where("createdAt", "<=", toTs),
+          orderBy("createdAt", "desc"),
+          limit(1000),
         )
         const now = new Date()
         const nowTs = now.getTime()
 
-        // Combinăm doc-urile din toate sursele (startDate + endDate + LPR arrived + LPR departed)
-        const [dataStart, dataEnd] = await Promise.all([getDocs(qStart), getDocs(qEnd)])
+        const dataCreated = await getDocs(qCreated)
         const combinedDocsMap = new Map<string, any>()
         const pushDocSnap = (docSnap: any) => {
           if (!docSnap) return
           combinedDocsMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() })
         }
-        dataStart.docs.forEach(pushDocSnap)
-        dataEnd.docs.forEach(pushDocSnap)
+        dataCreated.docs.forEach(pushDocSnap)
 
         const combined = Array.from(combinedDocsMap.values())
 
@@ -450,11 +440,8 @@ function BookingsPageContent() {
             return raw as Booking
           }),
         )
-        // Sortează după startDate (desc) apoi createdAt (desc)
+        // Sortează după createdAt (desc)
         const sorted = [...fetchedBookings].sort((a, b) => {
-          const aStart = a.startDate || ""
-          const bStart = b.startDate || ""
-          if (aStart !== bStart) return bStart.localeCompare(aStart)
           const aCreated = (a.createdAt as any)?.toMillis?.() ?? 0
           const bCreated = (b.createdAt as any)?.toMillis?.() ?? 0
           return bCreated - aCreated
@@ -532,24 +519,23 @@ function BookingsPageContent() {
     if (dateRange.from || dateRange.to) {
       const from = dateRange.from
       const to = dateRange.to
-      filtered = filtered.filter((b) => overlapsRange(b.startDate, b.endDate, from, to))
+      // IMPORTANT: interval = "Creată la" (createdAt), not booking period.
+      filtered = filtered.filter((b) => createdAtInRange(b.createdAt, from, to))
     }
     setFilteredBookings(filtered)
     // Resetăm pagina curentă când se schimbă filtrarea
     setCurrentPage(1)
   }, [bookings, searchTerm, statusFilter, dateRange])
 
-  // Statistici rapide pentru bara de sus (în funcție de data selectată)
-  const overlapsRange = (start?: string, end?: string, from?: Date, to?: Date) => {
-    // Inclusiv pe zile întregi (start-of-day / end-of-day) ca să evităm probleme de fus orar
-    if (!start) return false
+  // Interval filter helper: createdAt within [from..to] (whole days).
+  const createdAtInRange = (createdAt?: Timestamp, from?: Date, to?: Date) => {
+    if (!createdAt) return false
     if (!from && !to) return true
     try {
-      const bookingStart = startOfDay(parseISO(start))
-      const bookingEnd = endOfDay(end ? parseISO(end) : parseISO(start))
-      const rangeStart = from ? startOfDay(from) : bookingStart
-      const rangeEnd = to ? endOfDay(to) : bookingEnd
-      return bookingStart <= rangeEnd && bookingEnd >= rangeStart
+      const created = createdAt.toDate()
+      const rangeStart = from ? startOfDay(from) : startOfDay(created)
+      const rangeEnd = to ? endOfDay(to) : endOfDay(created)
+      return created >= rangeStart && created <= rangeEnd
     } catch {
       return false
     }
@@ -616,20 +602,14 @@ function BookingsPageContent() {
     }
   }
 
-  const computeBookingProRataValue = (b: Booking, from?: Date, to?: Date): number => {
-    const totalDays = computeDurationDays(b)
-    const overlapDays = computeOverlapDays(b, from, to)
-    if (totalDays <= 0 || overlapDays <= 0) return 0
-
-    // Prefer pricing table => per-day from prices
-    const perDayFromPrices = computePerDayFromPrices(totalDays)
-    if (perDayFromPrices > 0) return perDayFromPrices * overlapDays
-
-    // Fallback => use stored amount prorated over totalDays
+  // Value per row (full booking value). Since the page interval is "Creată la", we don't pro-rate by booking period.
+  const computeBookingRowValue = (b: Booking): number => {
     const amount = Number(b.amount || 0) || 0
-    if (amount > 0) return (amount / totalDays) * overlapDays
-
-    return 0
+    if (amount > 0) return amount
+    const totalDays = computeDurationDays(b)
+    if (totalDays <= 0) return 0
+    const price = computePriceForDays(totalDays)
+    return price > 0 ? price : 0
   }
 
   // IMPORTANT: keep cards in sync with the table filters (tab + search + date range).
@@ -673,12 +653,12 @@ function BookingsPageContent() {
 
   const isLprWithoutReservation = (b: Booking) => b.status === "unmatched_lpr" || b.source === "lpr"
 
-  // Pro-rata (pe zile) + split
+  // Split (based on the filtered table = createdAt interval + other filters)
   const onlineTotalCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlineBooking(b)).length
   const onlineReceivedCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b)).length
   const onlineReceivedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b))
-    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
   const onlineUnpaidCount = Math.max(0, onlineTotalCount - onlineReceivedCount)
 
   // Pay-on-site: show all in-table pay_on_site count (even those over threshold),
@@ -689,15 +669,15 @@ function BookingsPageContent() {
   const payOnSiteEstimatedCount = statsBookings.filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b)).length
   const payOnSiteEstimatedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b))
-    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
   const payOnSiteTotalValue = statsBookings
     .filter((b) => isPayOnSiteBooking(b))
-    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   const manualPaidCount = statsBookings.filter((b) => !isLostBooking(b) && isManualPaidBooking(b)).length
   const manualPaidValue = statsBookings
     .filter((b) => !isLostBooking(b) && isManualPaidBooking(b))
-    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   const lprNoReservationCount = statsBookings.filter((b) => isLprWithoutReservation(b)).length
   const lostCount = statsBookings.filter((b) => isLostBooking(b)).length
@@ -714,7 +694,7 @@ function BookingsPageContent() {
   // inclusiv Plată la parcare auto-anulată, ca să fie "calculat pentru toate 36".
   const totalPotentialValue = statsBookings
     .filter((b) => !isLprWithoutReservation(b))
-    .reduce((s, b) => s + computeBookingProRataValue(b, dateRange.from, dateRange.to), 0)
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   const handleViewBooking = (booking: Booking) => {
     setSelectedBooking(booking)
@@ -1626,7 +1606,7 @@ function BookingsPageContent() {
               </Button>
             )}
             <div className="text-xs text-blue-700 font-mono">
-              Interval:{" "}
+              Creată la:{" "}
               {dateRange.from
                 ? dateRange.to
                   ? `${formatDateFn(dateRange.from, "dd.MM.yyyy")} - ${formatDateFn(dateRange.to, "dd.MM.yyyy")}`
@@ -1875,26 +1855,7 @@ function BookingsPageContent() {
               <CardTitle>Lista Rezervărilor</CardTitle>
               <CardDescription>Vizualizează și gestionează rezervările.</CardDescription>
             </div>
-            <div className="w-full sm:w-auto">
-              <OccupancyCounter
-                title="Ocupare"
-                mode="active"
-                range={{ from: dateRange.from, to: dateRange.to }}
-                // IMPORTANT: keep in sync with table, but exclude bookings already exited per LPR.
-                // If LPR says it exited (departedAt), it's NOT present.
-                // If LPR says it's inside (isInside=true), it IS present.
-                // If there is no LPR exit info yet (e.g. "-/-" in table), we consider it present for the selected interval.
-                countOverride={filteredBookings.filter((b) => {
-                  const lpr: any = (b as any)?.lpr || {}
-                  if (lpr?.isInside === true) return true
-                  if (lpr?.departedAt) return false
-                  if (lpr?.arrivedAt && !lpr?.departedAt) return true
-                  return true
-                }).length}
-                inline
-                className="w-full sm:w-auto"
-              />
-            </div>
+         
           </CardHeader>
           <CardContent>
             {/* Info paginare (deasupra tabelului) */}
