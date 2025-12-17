@@ -209,7 +209,13 @@ export default function EntriesExitsPage() {
 
     if (delay === undefined && scheduled) {
       const diffMin = Math.round((now.getTime() - scheduled.getTime()) / (1000 * 60))
-      delay = diffMin > 0 ? diffMin : 0
+      // NOTE:
+      // The UI "ORA" values are treated as Romania local clock time by operations,
+      // but here `scheduled` is parsed as UTC (with "Z") for consistency with stored LPR clock strings.
+      // When there is NO LPR time yet (we compare against "now"), this would undercount lateness by the local UTC offset.
+      // Fix by compensating with the local timezone offset (e.g. RO winter +120 min, summer +180 min).
+      const tzCompMin = -now.getTimezoneOffset()
+      delay = diffMin + tzCompMin > 0 ? diffMin + tzCompMin : 0
     }
 
     let amountDueText: string | undefined
