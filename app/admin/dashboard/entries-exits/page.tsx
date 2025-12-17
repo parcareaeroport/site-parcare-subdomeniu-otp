@@ -325,7 +325,9 @@ export default function EntriesExitsPage() {
   // "Intrări întârziate" should list only bookings that are late AND still not arrived (no LPR actualTime yet).
   // Once LPR confirms arrival, it should disappear from this list.
   const lateEntries = useMemo(() => enrichedEntries.filter((e) => e.isLate && !e.actualTime), [enrichedEntries])
-  const lateExits = enrichedExits.filter((e) => e.isLate)
+  // "Ieșiri întârziate" should list only bookings that are late AND still not departed (no LPR actualTime yet).
+  // Once LPR confirms departure, it should disappear from this list.
+  const lateExits = useMemo(() => enrichedExits.filter((e) => e.isLate && !e.actualTime), [enrichedExits])
 
   if (!isClient) return null
 
