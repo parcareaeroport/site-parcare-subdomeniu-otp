@@ -246,6 +246,7 @@ function BookingsPageContent() {
   const [lprExitTime, setLprExitTime] = useState("12:00")
   const [lprClientName, setLprClientName] = useState("")
   const [lprClientPhone, setLprClientPhone] = useState("")
+  const [lprClientEmail, setLprClientEmail] = useState("")
   const [lprPersons, setLprPersons] = useState("1")
 
   // Paginare pentru tabelul de rezervări
@@ -2062,6 +2063,7 @@ function BookingsPageContent() {
                                       setLprExitTime("12:00")
                                       setLprClientName(booking.clientName || "")
                                       setLprClientPhone(booking.clientPhone || "")
+                                      setLprClientEmail(booking.clientEmail || "")
                                       setLprPersons(
                                         (booking.numberOfPersons || 1).toString(),
                                       )
@@ -2648,6 +2650,7 @@ function BookingsPageContent() {
                     durationMinutes,
                     clientName: lprClientName || lprBookingToComplete.clientName || "",
                     clientPhone: lprClientPhone || lprBookingToComplete.clientPhone || "",
+                    clientEmail: lprClientEmail || lprBookingToComplete.clientEmail || "",
                     numberOfPersons: persons,
                     source: "pay_on_site",
                     status: "confirmed_pay_on_site",
@@ -2738,6 +2741,15 @@ function BookingsPageContent() {
                     onChange={(e) => setLprClientPhone(e.target.value)}
                     placeholder="Ex: 0722123456"
                     required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Adresa de mail</label>
+                  <Input
+                    type="email"
+                    value={lprClientEmail}
+                    onChange={(e) => setLprClientEmail(e.target.value)}
+                    placeholder="Ex: client@email.com"
                   />
                 </div>
                 <div className="space-y-2">
