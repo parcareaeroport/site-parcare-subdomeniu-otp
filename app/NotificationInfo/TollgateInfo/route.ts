@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleLprEvent } from "@/lib/lpr-service";
+import { isTollgateWhitelistedPlate } from "@/lib/lpr-tollgate-whitelist";
+import { db } from "@/lib/firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { normalizeLicensePlate } from "@/lib/utils";
 
 type Nullable<T> = T | null;
 
@@ -86,6 +90,42 @@ export async function POST(req: NextRequest) {
     ...event,
     raw: body,
   });
+
+  // IMPORTANT: Hard short-circuit (NO Firebase) for whitelisted plates.
+  // This bypasses handleLprEvent entirely, so we do not touch Firestore at all for these numbers.
+  if (isTollgateWhitelistedPlate(event.plateNumber)) {
+    try {
+      console.log("[LPR API] Plate is in Tollgate whitelist - skipping ALL processing", {
+        plateNumber: event.plateNumber,
+        deviceId: event.deviceId,
+        direction: event.direction,
+      })
+    } catch {}
+    return NextResponse.json({ status: "ok", skipped: "tollgate_whitelist" })
+  }
+
+  // IMPORTANT: Admin whitelist (Firestore `lpr_whitelist`) short-circuit:
+  // If the plate exists in `/admin/dashboard/whitelist`, we skip ALL processing and do NOT write anything.
+  // (We still do a single read to check the whitelist entry.)
+  const normalized = normalizeLicensePlate(event.plateNumber || "")
+  if (normalized) {
+    try {
+      const whitelistDoc = await getDoc(doc(db, "lpr_whitelist", normalized))
+      if (whitelistDoc.exists()) {
+        try {
+          console.log("[LPR API] Plate is in Firestore whitelist - skipping ALL processing", {
+            plateNumber: event.plateNumber,
+            normalizedPlate: normalized,
+            deviceId: event.deviceId,
+            direction: event.direction,
+          })
+        } catch {}
+        return NextResponse.json({ status: "ok", skipped: "firestore_whitelist" })
+      }
+    } catch (e) {
+      console.error("[LPR API] Failed to check Firestore whitelist, continuing processing", e)
+    }
+  }
 
   try {
     console.log('[LPR API] Delegating to handleLprEvent...')
