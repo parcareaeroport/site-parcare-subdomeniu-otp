@@ -1698,12 +1698,16 @@ function BookingsPageContent() {
             <CardTitle className="text-sm font-medium">Online</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-700">{onlineReceivedCount}</div>
+            <div className="text-2xl font-bold text-green-700">{onlineTotalCount}</div>
             <p className="text-xs text-muted-foreground">
               Încasat:{" "}
               <span className="font-semibold text-green-700">
                 {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
+            </p>
+            <p className="text-[11px] text-muted-foreground">
+              Achitate: <span className="font-semibold">{onlineReceivedCount}</span> · Neplătite:{" "}
+              <span className="font-semibold">{onlineUnpaidCount}</span>
             </p>
           
           </CardContent>
