@@ -147,27 +147,21 @@ export async function POST(request: NextRequest) {
 
     const range = parseRoDateRange(ro.data_intrare_iesire);
 
-    // Determinăm metoda de plată din form_data.metoda_de_plata
-    // Convenție:
-    //  - "1" = plata cash/card la parcare (pay_on_site)
-    //  - "2" = plata online cu cardul
+    // IMPORTANT:
+    // This endpoint is ONLY for card payments. Even if WP/JET metadata is inconsistent/missing,
+    // we must always mark the booking as PAID so it shows "Achitat" in admin and triggers QR email sending.
+    // (WooCommerce/Jet can omit `metoda_de_plata` or use different keys.)
     const roPayment = ro.metoda_de_plata;
-    // În WooCommerce avem și câmpul payment_method la nivel de comandă (ex: 'netopiapayments').
     const wcPaymentMethod = typeof body?.payment_method === "string" ? body.payment_method : "";
-    const isNetopiaCard = wcPaymentMethod === "netopiapayments";
-
-    const resolvedPaymentMethod =
-      roPayment === "2"
-        ? "card"
-        : roPayment === "1"
-        ? "pay_on_site"
-        : isNetopiaCard
-        ? "card"
-        : undefined;
-
-    if (resolvedPaymentMethod !== "card" && !isNetopiaCard) {
+    const resolvedPaymentMethod: "card" = "card";
+    if (roPayment && roPayment !== "2") {
       console.warn(
-        `[WP-CARD][${reqId}] Payment method is not 'card' (metoda_de_plata=${roPayment}, payment_method=${wcPaymentMethod}). This endpoint is intended for card payments.`
+        `[WP-CARD][${reqId}] metoda_de_plata=${roPayment} (expected "2" for card). Forcing paymentMethod=card for wp-card-booking endpoint.`
+      );
+    }
+    if (wcPaymentMethod && wcPaymentMethod !== "netopiapayments") {
+      console.warn(
+        `[WP-CARD][${reqId}] payment_method=${wcPaymentMethod} (expected "netopiapayments"). Forcing paymentMethod=card for wp-card-booking endpoint.`
       );
     }
 
@@ -228,8 +222,8 @@ export async function POST(request: NextRequest) {
     fd.append("endDate", String(endDate));
     fd.append("endTime", String(endTime));
 
-    const firstName = ro.prenume || "";
-    const lastName = ro.nume || "";
+    const firstName = ro.prenume || body?.billing?.first_name || "";
+    const lastName = ro.nume || body?.billing?.last_name || "";
     const clientName = `${firstName} ${lastName}`.trim() || undefined;
 
     if (clientName) {
@@ -239,17 +233,28 @@ export async function POST(request: NextRequest) {
       fd.append("clientTitle", String(firstName));
     }
 
-    const email = ro.e_mail || undefined;
-    const phone = ro.telefon || undefined;
+    const email =
+      ro.e_mail ||
+      ro.email ||
+      ro.adresa_email ||
+      body?.billing?.email ||
+      body?.customer?.email ||
+      undefined;
+    const phone =
+      ro.telefon ||
+      ro.phone ||
+      body?.billing?.phone ||
+      body?.customer?.phone ||
+      undefined;
     const numberOfPersons =
       ro.numar_persoane !== undefined
         ? parseInt(String(ro.numar_persoane), 10) || 1
         : 1;
 
-    // Rezolvăm statusul plății și sursa
-    const isCard = resolvedPaymentMethod === "card";
+    // Rezolvăm statusul plății și sursa (FORCED: card bookings are always paid on this endpoint)
+    const isCard = true;
     const resolvedSource: "webhook" = "webhook";
-    const resolvedPaymentStatus: PaymentStatus = isCard ? "paid" : "pending";
+    const resolvedPaymentStatus: PaymentStatus = "paid";
 
     // Convertim amount în number (dacă este posibil)
     let amount: number | undefined = undefined;
