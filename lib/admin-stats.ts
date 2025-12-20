@@ -598,10 +598,24 @@ export async function getRecentBookings(): Promise<RecentBooking[]> {
 function parseFirestoreDate(value: any): Date | null {
   if (!value) return null
   try {
+    // Firestore Timestamp instance
     if (typeof value?.toDate === "function") {
       const d = value.toDate()
       return Number.isNaN(d.getTime()) ? null : d
     }
+    // Firestore Timestamp-like plain objects (can appear in nested maps)
+    const seconds =
+      typeof value?.seconds === "number"
+        ? value.seconds
+        : typeof value?._seconds === "number"
+          ? value._seconds
+          : null
+    if (typeof seconds === "number" && !Number.isNaN(seconds)) {
+      const d = new Date(seconds * 1000)
+      return Number.isNaN(d.getTime()) ? null : d
+    }
+
+    // ISO string / epoch millis / Date
     const d = new Date(value)
     return Number.isNaN(d.getTime()) ? null : d
   } catch {
@@ -648,19 +662,19 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
       const scheduledTimeStr: string = booking.startTime || 'N/A'
       let actualTime: string | undefined
       let delayMinutes: number | undefined
-      if (lpr.arrivedAt && booking.startDate && booking.startTime) {
-        // IMPORTANT:
-        // LPR times are stored as ISO (UTC) but represent the camera's local clock.
-        // To compare apples-to-apples, we also parse the scheduled time as UTC (add "Z").
-        const scheduled = new Date(`${booking.startDate}T${booking.startTime}:00Z`)
+      if (lpr.arrivedAt) {
         const actual = parseFirestoreDate(lpr.arrivedAt)
         if (actual) {
-        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-        if (!Number.isNaN(diffMin)) {
-          delayMinutes = diffMin
-        }
           // Show camera time (UTC clock) consistently across the admin UI
           actualTime = actual.toISOString().slice(11, 16)
+          if (booking.startDate && booking.startTime) {
+            // IMPORTANT:
+            // LPR times are stored as ISO (UTC) but represent the camera's local clock.
+            // To compare apples-to-apples, we also parse the scheduled time as UTC (add "Z").
+            const scheduled = new Date(`${booking.startDate}T${booking.startTime}:00Z`)
+            const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+            if (!Number.isNaN(diffMin)) delayMinutes = diffMin
+          }
         }
       }
       
@@ -725,16 +739,16 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
       const scheduledTimeStr: string = booking.endTime || 'N/A'
       let actualTime: string | undefined
       let delayMinutes: number | undefined
-      if (lpr.departedAt && booking.endDate && booking.endTime) {
-        // See note above: parse scheduled as UTC for consistent comparison
-        const scheduled = new Date(`${booking.endDate}T${booking.endTime}:00Z`)
+      if (lpr.departedAt) {
         const actual = parseFirestoreDate(lpr.departedAt)
         if (actual) {
-        const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
-        if (!Number.isNaN(diffMin)) {
-          delayMinutes = diffMin
-        }
           actualTime = actual.toISOString().slice(11, 16)
+          if (booking.endDate && booking.endTime) {
+            // See note above: parse scheduled as UTC for consistent comparison
+            const scheduled = new Date(`${booking.endDate}T${booking.endTime}:00Z`)
+            const diffMin = Math.round((actual.getTime() - scheduled.getTime()) / (1000 * 60))
+            if (!Number.isNaN(diffMin)) delayMinutes = diffMin
+          }
         }
       }
       
