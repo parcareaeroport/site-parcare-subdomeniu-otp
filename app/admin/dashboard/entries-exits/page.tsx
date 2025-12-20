@@ -87,6 +87,16 @@ function formatDelay(minutes?: number) {
   return minutes > 0 ? label : `- ${label}`
 }
 
+function getScheduledSortKey(row: Partial<EnrichedRow>, kind: "entry" | "exit", fallbackDate: string): number {
+  const date = kind === "entry" ? row.startDate ?? fallbackDate : row.endDate ?? fallbackDate
+  const time = row.time
+  const dt = parseDateTime(date, time)
+  if (dt) return dt.getTime()
+  // Fallback: sort unknown/invalid times last, but keep deterministic ordering by string
+  const t = normalizeHHmm(time) ?? ""
+  return Number.MAX_SAFE_INTEGER - Math.min(999_999, t.length)
+}
+
 async function autoCancelPayOnSite(id: string) {
   try {
     await updateDoc(doc(db, "bookings", id), {
@@ -344,16 +354,38 @@ export default function EntriesExitsPage() {
 
   // "Intrări" (main) should list only upcoming entries (not yet arrived via LPR).
   // Entries that already happened (have LPR actualTime) should not appear here.
-  const mainEntries = useMemo(() => enrichedEntries.filter((e) => !e.isLate && !e.actualTime), [enrichedEntries])
+  const mainEntries = useMemo(() => {
+    const rows = enrichedEntries.filter((e) => !e.isLate && !e.actualTime)
+    return [...rows].sort(
+      (a, b) =>
+        getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
+    )
+  }, [enrichedEntries, selectedDate])
   // "Ieșiri" (main) should list only upcoming exits (not yet departed via LPR).
   // Exits that already happened (have LPR actualTime) should not appear here.
-  const mainExits = useMemo(() => enrichedExits.filter((e) => !e.isLate && !e.actualTime), [enrichedExits])
+  const mainExits = useMemo(() => {
+    const rows = enrichedExits.filter((e) => !e.isLate && !e.actualTime)
+    return [...rows].sort(
+      (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
+    )
+  }, [enrichedExits, selectedDate])
   // "Intrări întârziate" should list only bookings that are late AND still not arrived (no LPR actualTime yet).
   // Once LPR confirms arrival, it should disappear from this list.
-  const lateEntries = useMemo(() => enrichedEntries.filter((e) => e.isLate && !e.actualTime), [enrichedEntries])
+  const lateEntries = useMemo(() => {
+    const rows = enrichedEntries.filter((e) => e.isLate && !e.actualTime)
+    return [...rows].sort(
+      (a, b) =>
+        getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
+    )
+  }, [enrichedEntries, selectedDate])
   // "Ieșiri întârziate" should list only bookings that are late AND still not departed (no LPR actualTime yet).
   // Once LPR confirms departure, it should disappear from this list.
-  const lateExits = useMemo(() => enrichedExits.filter((e) => e.isLate && !e.actualTime), [enrichedExits])
+  const lateExits = useMemo(() => {
+    const rows = enrichedExits.filter((e) => e.isLate && !e.actualTime)
+    return [...rows].sort(
+      (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
+    )
+  }, [enrichedExits, selectedDate])
 
   if (!isClient) return null
 
