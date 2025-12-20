@@ -278,9 +278,11 @@ export default function EntriesExitsPage() {
           }
         }
 
-        // Extra days should count only after full 24h blocks, not for a few hours delay.
-        // (Example: 3h delay => 0 extra days; 25h delay => 1 extra day.)
-        const extraDays = overdueMin > 0 ? Math.floor(overdueMin / (60 * 24)) : 0
+        // Extra days billing policy (pay-on-site / unpaid):
+        // The payment terminal charges an additional full day for ANY overdue time past the scheduled end,
+        // so we must round up (ceil) instead of counting only full 24h blocks.
+        // (Example: 3h delay => 1 extra day; 25h delay => 2 extra days.)
+        const extraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
         const totalDays = Math.max(1, bookedDays + extraDays)
 
         const totalPrice = getExactPriceForDays(priceTable, totalDays)
