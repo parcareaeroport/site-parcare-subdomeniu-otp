@@ -382,7 +382,15 @@ export default function EntriesExitsPage() {
                         MANUAL
                       </Badge>
                     )}
-                    {row.isOnlinePaid && row.source !== "manual" && row.source !== "pay_on_site" && (
+                    {(row.source === "lpr" || row.bookingStatus === "unmatched_lpr") && (
+                      <Badge
+                        variant="outline"
+                        className="text-purple-700 border-purple-400 bg-purple-100 text-[10px] leading-tight whitespace-nowrap px-2 py-1"
+                      >
+                        LPR
+                      </Badge>
+                    )}
+                    {row.isOnlinePaid && row.source !== "manual" && row.source !== "pay_on_site" && row.source !== "lpr" && (
                       <Badge
                         variant="outline"
                         className="text-green-700 border-green-400 bg-green-100 text-[10px] leading-tight whitespace-nowrap px-2 py-1"
@@ -450,7 +458,12 @@ export default function EntriesExitsPage() {
                     MANUAL
                   </Badge>
                 )}
-                {row.isOnlinePaid && row.source !== "manual" && row.source !== "pay_on_site" && (
+                {(row.source === "lpr" || row.bookingStatus === "unmatched_lpr") && (
+                  <Badge variant="outline" className="text-purple-700 border-purple-400 bg-purple-100 text-xs">
+                    LPR
+                  </Badge>
+                )}
+                {row.isOnlinePaid && row.source !== "manual" && row.source !== "pay_on_site" && row.source !== "lpr" && (
                   <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 text-xs">
                     ONLINE
                   </Badge>

@@ -60,7 +60,9 @@ export default function OccupancyPage() {
       case "manual":
         return "Manual"
       case "lpr":
-        return "LPR fără rezervare"
+        // NOTE: `source="lpr"` can mean either an unmatched placeholder (status=unmatched_lpr)
+        // or a booking completed from LPR (still source=lpr). Distinguish by status at render time.
+        return "LPR"
       case "test_mode":
       case "webhook":
       case "card":
@@ -231,6 +233,10 @@ export default function OccupancyPage() {
                   const pay = paymentInfo(p.paymentStatus)
                   const startLabel = `${p.startDate || "-"}${p.startTime ? ` ${p.startTime}` : ""}`
                   const endLabel = `${p.endDate || "-"}${p.endTime ? ` ${p.endTime}` : ""}`
+                  const srcLabel =
+                    p.source === "lpr" && p.status === "unmatched_lpr"
+                      ? "LPR fără rezervare"
+                      : sourceLabel(p.source)
                   return (
                     <tr
                       key={p.id}
@@ -240,7 +246,7 @@ export default function OccupancyPage() {
                       <td className="py-2 text-xs text-muted-foreground">
                         {startLabel} → {endLabel}
                       </td>
-                      <td className="py-2 text-xs">{sourceLabel(p.source)}</td>
+                      <td className="py-2 text-xs">{srcLabel}</td>
                       <td className="py-2">
                         <Badge className={pay.className}>{pay.label}</Badge>
                       </td>

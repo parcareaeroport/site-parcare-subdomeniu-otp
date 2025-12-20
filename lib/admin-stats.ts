@@ -636,9 +636,13 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
     snapshot.forEach(doc => {
       const booking = doc.data() as any
       // Determină sursa rezervării
-      let source = booking.source || 'webhook'
+      const bookingSource = booking.source
+      let source = bookingSource || 'webhook'
+      // IMPORTANT:
+      // `confirmed_pay_on_site` is a STATUS, not always a "pay_on_site" SOURCE.
+      // LPR-completed bookings can have confirmed_pay_on_site but must remain source="lpr" for correct badges in admin UI.
       if (booking.status === 'confirmed_pay_on_site') {
-        source = 'pay_on_site'
+        source = bookingSource === 'lpr' ? 'lpr' : 'pay_on_site'
       }
       const lpr = booking.lpr || {}
       const scheduledTimeStr: string = booking.startTime || 'N/A'
@@ -711,9 +715,11 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
     snapshot.forEach(doc => {
       const booking = doc.data() as any
       // Determină sursa rezervării
-      let source = booking.source || 'webhook'
+      const bookingSource = booking.source
+      let source = bookingSource || 'webhook'
+      // Keep the same rule as entries: do not overwrite LPR source.
       if (booking.status === 'confirmed_pay_on_site') {
-        source = 'pay_on_site'
+        source = bookingSource === 'lpr' ? 'lpr' : 'pay_on_site'
       }
       const lpr = booking.lpr || {}
       const scheduledTimeStr: string = booking.endTime || 'N/A'

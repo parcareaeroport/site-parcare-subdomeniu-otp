@@ -510,7 +510,7 @@ function BookingsPageContent() {
         // Online = badge ONLINE (non-manual, non-pay_on_site, non-LPR fără rezervare)
         filtered = filtered.filter((b) => {
           const isPayOnSite = b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
-          const isLprNoReservation = b.status === "unmatched_lpr" || b.source === "lpr"
+          const isLprNoReservation = b.status === "unmatched_lpr"
           return b.source !== "manual" && !isPayOnSite && !isLprNoReservation
         })
       } else {
@@ -652,7 +652,9 @@ function BookingsPageContent() {
     return m === "paid" || b.paymentStatus === "paid"
   }
 
-  const isLprWithoutReservation = (b: Booking) => b.status === "unmatched_lpr" || b.source === "lpr"
+  // "LPR fără rezervare" refers strictly to unmatched placeholder rows (created when a car enters without any booking).
+  // LPR-completed bookings can keep source="lpr" but must NOT be treated as "fără rezervare".
+  const isLprWithoutReservation = (b: Booking) => b.status === "unmatched_lpr"
 
   // Split (based on the filtered table = createdAt interval + other filters)
   const onlineTotalCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlineBooking(b)).length
@@ -1496,7 +1498,7 @@ function BookingsPageContent() {
     }
     
     // Pentru rezervările cu plată la parcare, afișăm dropdown-ul editabil
-    if (booking.source === "pay_on_site") {
+    if (isPayOnSiteBooking(booking)) {
       // Dacă rezervarea este anulată, afișăm doar badge-ul fără dropdown
       if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin") {
         return getPayOnSiteStatusBadge(booking)
@@ -1950,6 +1952,11 @@ function BookingsPageContent() {
                           {booking.source === "manual" && (
                             <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 mr-2 text-xs">
                               MANUAL
+                            </Badge>
+                          )}
+                          {(booking.source === "lpr" || booking.status === "unmatched_lpr") && (
+                            <Badge variant="outline" className="text-purple-700 border-purple-400 bg-purple-100 mr-2 text-xs">
+                              LPR
                             </Badge>
                           )}
                           {booking.source !== "manual" &&
@@ -2652,7 +2659,7 @@ function BookingsPageContent() {
                     clientPhone: lprClientPhone || lprBookingToComplete.clientPhone || "",
                     clientEmail: lprClientEmail || lprBookingToComplete.clientEmail || "",
                     numberOfPersons: persons,
-                    source: "pay_on_site",
+                    source: "lpr",
                     status: "confirmed_pay_on_site",
                     paymentStatus: "pending",
                     lastUpdated: serverTimestamp(),
