@@ -34,16 +34,32 @@ type PriceEntry = {
   discountedPrice?: number
 }
 
+function normalizeHHmm(time?: string) {
+  if (!time) return time
+  const t = String(time).trim()
+  // Accept "H:mm" or "HH:mm" and normalize to "HH:mm"
+  const m = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return t
+  const hh = m[1].padStart(2, "0")
+  const mm = m[2]
+  const ss = m[3]
+  return ss ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`
+}
+
 function parseDateTime(date?: string, time?: string) {
   if (!date || !time) return null
-  const asIso = `${date}T${time.length === 5 ? `${time}:00` : time}`
+  const tt = normalizeHHmm(time)
+  if (!tt || tt.toLowerCase() === "n/a") return null
+  const asIso = `${date}T${tt.length === 5 ? `${tt}:00` : tt}`
   const d = new Date(asIso)
   return Number.isNaN(d.getTime()) ? null : d
 }
 
 function parseDateTimeUTC(date?: string, time?: string) {
   if (!date || !time) return null
-  const asIso = `${date}T${time.length === 5 ? `${time}:00` : time}Z`
+  const tt = normalizeHHmm(time)
+  if (!tt || tt.toLowerCase() === "n/a") return null
+  const asIso = `${date}T${tt.length === 5 ? `${tt}:00` : tt}Z`
   const d = new Date(asIso)
   return Number.isNaN(d.getTime()) ? null : d
 }
