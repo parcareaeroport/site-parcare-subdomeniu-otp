@@ -256,6 +256,9 @@ export async function POST(request: NextRequest) {
     const resolvedSource: "webhook" = "webhook";
     const resolvedPaymentStatus: PaymentStatus = "paid";
 
+    // Email flow note (actual send happens inside createBookingWithFirestore via /api/send-confirmation-email)
+    console.log(`[WP-CARD][${reqId}] Email flow: if Multipark returns bookingNumber AND email exists, we will send EMAIL WITH QR via /api/send-confirmation-email. email=${email ? "present" : "missing"}`);
+
     // Convertim amount în number (dacă este posibil)
     let amount: number | undefined = undefined;
     if (resolvedAmountRaw !== undefined) {
@@ -314,6 +317,15 @@ export async function POST(request: NextRequest) {
       `[WP-CARD][${reqId}] Firestore + Multipark + Oblio booking result:`,
       result
     );
+    try {
+      const debugLogs: string[] = Array.isArray((result as any)?.debugLogs) ? (result as any).debugLogs : [];
+      const emailSent = debugLogs.some((l) => typeof l === "string" && l.includes("✅ Email sent successfully"));
+      const emailAttempted = debugLogs.some((l) => typeof l === "string" && l.includes("📧 Starting email processing"));
+      const bookingNumber = (result as any)?.bookingNumber;
+      console.log(`[WP-CARD][${reqId}] Email summary: attempted=${emailAttempted}, sent=${emailSent}, bookingNumber=${bookingNumber ?? "undefined"}`);
+    } catch (e) {
+      console.warn(`[WP-CARD][${reqId}] Could not compute email summary from result.debugLogs`, e);
+    }
 
     return NextResponse.json(result, {
       status: 200,

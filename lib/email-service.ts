@@ -232,7 +232,16 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
 /**
  * Trimite email de confirmare rezervare cu QR code
  */
-export async function sendBookingConfirmationEmail(bookingData: BookingEmailData): Promise<{ success: boolean, error?: string }> {
+export async function sendBookingConfirmationEmail(
+  bookingData: BookingEmailData
+): Promise<{
+  success: boolean
+  error?: string
+  messageId?: string
+  response?: string
+  qrIncluded?: boolean
+  qrBytes?: number
+}> {
   // Pentru pay-on-site folosim licensePlate în loc de bookingNumber în emailProcessId
   const bookingRef = bookingData.bookingNumber || `pay_on_site_${bookingData.licensePlate}`
   const emailProcessId = `${bookingRef}_${Date.now()}`
@@ -266,7 +275,8 @@ export async function sendBookingConfirmationEmail(bookingData: BookingEmailData
     
     // Generează QR code-ul ca buffer pentru atașament (doar pentru rezervările cu plată)
     let qrBuffer: Buffer | null = null
-    if (bookingData.source !== 'pay_on_site' && bookingData.bookingNumber) {
+    const qrIncluded = bookingData.source !== 'pay_on_site' && !!bookingData.bookingNumber
+    if (qrIncluded) {
       console.log(`🔲 [EMAIL-${emailProcessId}] Generating QR code buffer...`)
       qrBuffer = await generateMultiparkQRBuffer(bookingData.bookingNumber)
       console.log(`✅ [EMAIL-${emailProcessId}] QR code generated, buffer size: ${qrBuffer.length} bytes`)
@@ -340,7 +350,13 @@ export async function sendBookingConfirmationEmail(bookingData: BookingEmailData
     console.log(`✅ [EMAIL-${emailProcessId}] Recipient Confirmed: ${bookingData.clientEmail}`)
     console.log(`✅ [EMAIL-${emailProcessId}] Booking Confirmed: ${formattedBookingNumber}`)
     
-    return { success: true }
+    return {
+      success: true,
+      messageId: result?.messageId,
+      response: result?.response,
+      qrIncluded,
+      qrBytes: qrBuffer ? qrBuffer.length : 0,
+    }
     
   } catch (error) {
     console.error(`❌ [EMAIL-${emailProcessId}] ===== EMAIL FAILED =====`)
@@ -358,7 +374,8 @@ export async function sendBookingConfirmationEmail(bookingData: BookingEmailData
     
     return { 
       success: false, 
-      error: error instanceof Error ? error.message : 'Unknown email error' 
+      error: error instanceof Error ? error.message : 'Unknown email error',
+      qrIncluded: bookingData.source !== 'pay_on_site' && !!bookingData.bookingNumber
     }
   }
 }

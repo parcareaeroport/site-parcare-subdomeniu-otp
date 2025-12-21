@@ -659,6 +659,9 @@ function BookingsPageContent() {
   // Split (based on the filtered table = createdAt interval + other filters)
   const onlineTotalCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlineBooking(b)).length
   const onlineReceivedCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b)).length
+  const onlineTotalValue = statsBookings
+    .filter((b) => isOnlineBooking(b))
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
   const onlineReceivedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
@@ -680,6 +683,10 @@ function BookingsPageContent() {
   const manualPaidCount = statsBookings.filter((b) => !isLostBooking(b) && isManualPaidBooking(b)).length
   const manualPaidValue = statsBookings
     .filter((b) => !isLostBooking(b) && isManualPaidBooking(b))
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
+  const manualTotalCount = statsBookings.filter((b) => b.source === "manual").length
+  const manualTotalValue = statsBookings
+    .filter((b) => b.source === "manual")
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   const lprNoReservationCount = statsBookings.filter((b) => isLprWithoutReservation(b)).length
@@ -1656,20 +1663,30 @@ function BookingsPageContent() {
                   </TooltipTrigger>
                   <TooltipContent className="max-w-sm">
                     <div className="text-xs leading-relaxed">
-                      <div className="font-semibold mb-1">Valoare totală =</div>
+                      <div className="font-semibold mb-1">Valoare totală (potențială) =</div>
                       <div>
-                         Online încasat ({onlineReceivedCount}) + Plata la parcare ({payOnSiteTotalCount}) + Manual achitat ({manualPaidCount})
+                        Online ({onlineTotalCount}) + Plata la parcare ({payOnSiteTotalCount}) + Manual ({manualTotalCount})
                       </div>
-                      <div className="mt-1 text-muted-foreground">
-                        În tabel: {totalCount} rânduri (LPR fără rezervare: {lprNoReservationCount}, anulate/expirate: {lostCount}). În valoare intră: {billableCount}.
+                      <div className="mt-1">
+                        {onlineTotalValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
+                        {payOnSiteTotalValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
+                        {manualTotalValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ={" "}
+                        {totalPotentialValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                      </div>
+
+                      <div className="mt-2 font-semibold">Încasat / estimare operațională =</div>
+                      <div>
+                        Online achitat ({onlineReceivedCount}) + Plata la parcare ({payOnSiteEstimatedCount}) + Manual achitat ({manualPaidCount})
                       </div>
                       <div className="mt-1">
                         {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
-                        {payOnSiteTotalValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
+                        {payOnSiteEstimatedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} +{" "}
                         {manualPaidValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ={" "}
-                        {totalPotentialValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                        {totalProRataValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
                       </div>
-                      <div className="mt-1 text-muted-foreground">
+
+                      <div className="mt-2 text-muted-foreground">
+                        În tabel: {totalCount} rânduri (LPR fără rezervare: {lprNoReservationCount}, anulate/expirate: {lostCount}).
                         LPR fără rezervare nu intră în valoare (doar număr).
                       </div>
                     </div>

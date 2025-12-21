@@ -779,6 +779,8 @@ export async function createBookingWithFirestore(
         // ⚡ SINCRON: Trimite email prin API endpoint pentru a funcționa pe Vercel
         try {
           console.log(`📧 Calling email API endpoint for ${bookingReference}`)
+          const emailCorrelationId = `EMAIL_API_${bookingReference}_${Date.now()}`
+          console.log(`📧 Email correlation id: ${emailCorrelationId}`)
           
           const emailApiUrl = process.env.NODE_ENV === 'development' 
             ? 'http://localhost:3000/api/send-confirmation-email'
@@ -788,6 +790,7 @@ export async function createBookingWithFirestore(
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
+              'x-email-request-id': emailCorrelationId,
             },
             body: JSON.stringify({
               bookingData: {
@@ -813,7 +816,12 @@ export async function createBookingWithFirestore(
             const emailResult = await emailResponse.json()
             if (emailResult.success) {
               debugLogs.push(`✅ Email sent successfully to ${completeBookingData.clientEmail}`)
-              console.log(`✅ Email API success for ${bookingReference}`)
+              console.log(`✅ Email API success for ${bookingReference}`, {
+                correlationId: emailResult?.correlationId,
+                emailMessageId: emailResult?.emailMessageId,
+                qrIncluded: emailResult?.qrIncluded,
+                qrBytes: emailResult?.qrBytes,
+              })
             } else {
               debugLogs.push(`⚠️ Email API failed: ${emailResult.error}`)
               console.error(`⚠️ Email API failed for ${bookingReference}:`, emailResult.error)

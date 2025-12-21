@@ -8,13 +8,26 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { bookingData, firestoreId } = body
     
-    const emailProcessId = `API_EMAIL_${bookingData.bookingNumber}_${Date.now()}`
+    const incomingReqId =
+      request.headers.get("x-email-request-id") ||
+      request.headers.get("x-request-id") ||
+      undefined
+    const bookingRef = bookingData.bookingNumber || `pay_on_site_${bookingData.licensePlate || "unknown"}`
+    const emailProcessId = `API_EMAIL_${bookingRef}_${Date.now()}`
     
     console.log(`📧 [${emailProcessId}] ===== EMAIL API ENDPOINT CALLED =====`)
+    if (incomingReqId) {
+      console.log(`📧 [${emailProcessId}] Correlation request id: ${incomingReqId}`)
+    }
     console.log(`📧 [${emailProcessId}] Booking Number: ${bookingData.bookingNumber}`)
     console.log(`📧 [${emailProcessId}] Client Email: ${bookingData.clientEmail}`)
     console.log(`📧 [${emailProcessId}] Source: ${bookingData.source}`)
     console.log(`📧 [${emailProcessId}] Firestore ID: ${firestoreId}`)
+    const willIncludeQr = bookingData.source !== "pay_on_site" && !!bookingData.bookingNumber
+    console.log(`📧 [${emailProcessId}] Will include QR: ${willIncludeQr}`)
+    if (!willIncludeQr && bookingData.source !== "pay_on_site") {
+      console.warn(`⚠️ [${emailProcessId}] No bookingNumber provided for non-pay_on_site source. This will fail validation.`)
+    }
     
     // Validează că avem toate datele necesare
     // Pentru pay-on-site nu avem bookingNumber, dar tot trimitem email
@@ -44,12 +57,13 @@ export async function POST(request: NextRequest) {
       createdAt: new Date()
     }
     
-    console.log(`📧 [${emailProcessId}] Calling sendBookingConfirmationEmail...`)
+    console.log(`📧 [${emailProcessId}] Calling sendBookingConfirmationEmail... (QR: ${willIncludeQr ? "YES" : "NO"})`)
     
     // Trimite email-ul
     const emailResult = await sendBookingConfirmationEmail(emailData)
     
     console.log(`📧 [${emailProcessId}] Email result: ${emailResult.success ? 'SUCCESS' : 'FAILED'}`)
+    console.log(`📧 [${emailProcessId}] Email meta: messageId=${(emailResult as any)?.messageId || 'N/A'}, qrIncluded=${(emailResult as any)?.qrIncluded ?? 'N/A'}, qrBytes=${(emailResult as any)?.qrBytes ?? 'N/A'}`)
     
     if (emailResult.success) {
       // Actualizează statusul în Firestore
@@ -59,6 +73,10 @@ export async function POST(request: NextRequest) {
             emailSentAt: serverTimestamp(),
             emailStatus: "sent",
             emailSentViaAPI: true,
+            emailMessageId: (emailResult as any)?.messageId || null,
+            emailQrIncluded: (emailResult as any)?.qrIncluded ?? null,
+            emailQrBytes: (emailResult as any)?.qrBytes ?? null,
+            emailTransportResponse: (emailResult as any)?.response || null,
             lastUpdated: serverTimestamp()
           })
           console.log(`📊 [${emailProcessId}] Firestore updated successfully`)
@@ -70,7 +88,11 @@ export async function POST(request: NextRequest) {
       console.log(`✅ [${emailProcessId}] Email sent successfully`)
       return NextResponse.json({ 
         success: true, 
-        message: 'Email sent successfully' 
+        message: 'Email sent successfully',
+        correlationId: incomingReqId || null,
+        emailMessageId: (emailResult as any)?.messageId || null,
+        qrIncluded: (emailResult as any)?.qrIncluded ?? null,
+        qrBytes: (emailResult as any)?.qrBytes ?? null,
       })
     } else {
       // Actualizează statusul de eșec în Firestore
@@ -80,6 +102,10 @@ export async function POST(request: NextRequest) {
             emailStatus: "failed",
             emailError: emailResult.error,
             emailFailedAt: serverTimestamp(),
+            emailMessageId: (emailResult as any)?.messageId || null,
+            emailQrIncluded: (emailResult as any)?.qrIncluded ?? null,
+            emailQrBytes: (emailResult as any)?.qrBytes ?? null,
+            emailTransportResponse: (emailResult as any)?.response || null,
             lastUpdated: serverTimestamp()
           })
           console.log(`📊 [${emailProcessId}] Firestore updated with failure`)
@@ -91,7 +117,11 @@ export async function POST(request: NextRequest) {
       console.error(`❌ [${emailProcessId}] Email failed: ${emailResult.error}`)
       return NextResponse.json({ 
         success: false, 
-        error: emailResult.error 
+        error: emailResult.error,
+        correlationId: incomingReqId || null,
+        emailMessageId: (emailResult as any)?.messageId || null,
+        qrIncluded: (emailResult as any)?.qrIncluded ?? null,
+        qrBytes: (emailResult as any)?.qrBytes ?? null,
       }, { status: 500 })
     }
     

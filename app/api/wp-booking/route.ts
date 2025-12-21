@@ -395,6 +395,10 @@ export async function POST(request: NextRequest) {
     const resolvedSource: "pay_on_site" = "pay_on_site";
     const resolvedPaymentStatus: PaymentStatus = "pending";
 
+    // Email flow note (actual send happens inside createBookingWithFirestore via /api/send-confirmation-email)
+    // Pay on site: email is sent WITHOUT QR, bookingNumber is not required.
+    console.log(`[WP-BOOKING][${reqId}] Email flow: if email exists, we will send EMAIL WITHOUT QR via /api/send-confirmation-email (pay_on_site). email=${email ? "present" : "missing"}`);
+
     console.log(`[WP-BOOKING][${reqId}] Mapped booking core data:`, {
       licensePlate: normalizeLicensePlate(String(licensePlate)),
       startDate,
@@ -458,6 +462,14 @@ export async function POST(request: NextRequest) {
       `[WP-BOOKING][${reqId}] Firestore booking result:`,
       result
     );
+    try {
+      const debugLogs: string[] = Array.isArray((result as any)?.debugLogs) ? (result as any).debugLogs : [];
+      const emailSent = debugLogs.some((l) => typeof l === "string" && l.includes("✅ Email sent successfully"));
+      const emailAttempted = debugLogs.some((l) => typeof l === "string" && l.includes("📧 Starting email processing"));
+      console.log(`[WP-BOOKING][${reqId}] Email summary: attempted=${emailAttempted}, sent=${emailSent}, mode=pay_on_site_no_qr`);
+    } catch (e) {
+      console.warn(`[WP-BOOKING][${reqId}] Could not compute email summary from result.debugLogs`, e);
+    }
 
     return NextResponse.json(result, {
       status: 200,
