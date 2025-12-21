@@ -180,15 +180,31 @@ export async function POST(request: NextRequest) {
       body?.total;
 
     // chei obligatorii mapate
-    const licensePlate = ro.numar_inmatriculare
-      ? normalizeLicensePlate(String(ro.numar_inmatriculare))
-      : undefined;
-    const startDate = range.start;
-    const endDate = range.end;
-    const startTime = ro.ora_intrare || undefined;
-    const endTime = ro.ora_iesire || undefined;
+    // 2.1) Fallback: unele integrări trimit direct cheile standard la root (licensePlate/startDate/...)
+    const rootLicensePlateRaw =
+      body?.licensePlate ?? body?.license_plate ?? body?.plate ?? undefined;
+    const rootStartDate = body?.startDate ?? body?.start_date ?? undefined;
+    const rootEndDate = body?.endDate ?? body?.end_date ?? undefined;
+    const rootStartTime = body?.startTime ?? body?.start_time ?? undefined;
+    const rootEndTime = body?.endTime ?? body?.end_time ?? undefined;
 
-    console.log(`[WP-CARD][${reqId}] Mapped RO → standard:`, {
+    const licensePlate =
+      ro.numar_inmatriculare
+        ? normalizeLicensePlate(String(ro.numar_inmatriculare))
+        : rootLicensePlateRaw
+          ? normalizeLicensePlate(String(rootLicensePlateRaw))
+          : undefined;
+    const startDate = range.start ?? (rootStartDate ? String(rootStartDate) : undefined);
+    const endDate = range.end ?? (rootEndDate ? String(rootEndDate) : undefined);
+    const startTime = (ro.ora_intrare || undefined) ?? (rootStartTime ? String(rootStartTime) : undefined);
+    const endTime = (ro.ora_iesire || undefined) ?? (rootEndTime ? String(rootEndTime) : undefined);
+
+    const mappedSource =
+      ro && typeof ro === "object" && Object.keys(ro).length > 0
+        ? "jet_form_data"
+        : "root_standard_keys";
+
+    console.log(`[WP-CARD][${reqId}] Mapped input → standard (${mappedSource}):`, {
       licensePlate,
       startDate,
       endDate,
@@ -237,6 +253,7 @@ export async function POST(request: NextRequest) {
       ro.e_mail ||
       ro.email ||
       ro.adresa_email ||
+      body?.email ||
       body?.billing?.email ||
       body?.customer?.email ||
       undefined;
