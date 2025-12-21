@@ -482,13 +482,23 @@ export async function retryFailedEmails(bookingId?: string): Promise<{ success: 
 
 export async function createBooking(formData: FormData) {
   try {
+    const normalizeTimeHHmm = (t: string): string => {
+      const s = String(t || "").trim()
+      // Accept "H:mm" / "HH:mm" / "H:m" / "HH:m"
+      const m = s.match(/^(\d{1,2})\s*:\s*(\d{1,2})$/)
+      if (!m) return s
+      const hh = String(parseInt(m[1], 10)).padStart(2, "0")
+      const mm = String(parseInt(m[2], 10)).padStart(2, "0")
+      return `${hh}:${mm}`
+    }
+
     // Parse and validate form data
     const rawData = {
       licensePlate: normalizeLicensePlate(formData.get("licensePlate") as string),
       startDate: formData.get("startDate") as string,
-      startTime: formData.get("startTime") as string,
+      startTime: normalizeTimeHHmm(formData.get("startTime") as string),
       endDate: formData.get("endDate") as string,
-      endTime: formData.get("endTime") as string,
+      endTime: normalizeTimeHHmm(formData.get("endTime") as string),
       clientName: (formData.get("clientName") as string) || "",
       clientTitle: (formData.get("clientTitle") as string) || "",
     }
@@ -498,6 +508,13 @@ export async function createBooking(formData: FormData) {
     // Calculate duration in minutes (real duration)
     const startDateTime = new Date(`${validatedData.startDate}T${validatedData.startTime}:00`)
     const endDateTime = new Date(`${validatedData.endDate}T${validatedData.endTime}:00`)
+    if (Number.isNaN(startDateTime.getTime()) || Number.isNaN(endDateTime.getTime())) {
+      return {
+        success: false,
+        message: `Invalid date/time provided: start=${validatedData.startDate} ${validatedData.startTime}, end=${validatedData.endDate} ${validatedData.endTime}`,
+        apiErrorCode: "INVALID_DATETIME",
+      }
+    }
     const durationMinutes = Math.round((endDateTime.getTime() - startDateTime.getTime()) / (1000 * 60))
 
     if (durationMinutes <= 0) {
@@ -640,6 +657,16 @@ export async function createBookingWithFirestore(
   const debugLogs: string[] = []
   
   try {
+    const normalizeTimeHHmm = (t?: string): string | undefined => {
+      if (!t) return undefined
+      const s = String(t).trim()
+      const m = s.match(/^(\d{1,2})\s*:\s*(\d{1,2})$/)
+      if (!m) return s
+      const hh = String(parseInt(m[1], 10)).padStart(2, "0")
+      const mm = String(parseInt(m[2], 10)).padStart(2, "0")
+      return `${hh}:${mm}`
+    }
+
     debugLogs.push(`🚀 Starting booking process for ${formData.get("licensePlate")} (${additionalData?.source || "manual"})`)
     
     let apiResult: any
@@ -663,6 +690,68 @@ export async function createBookingWithFirestore(
       apiResult = await createBooking(formData)
       debugLogs.push(`📞 MULTIPARK API: ${apiResult.success ? "SUCCESS" : "FAILED"} - ${apiResult.message}`)
     }
+
+    // 🚫 HARD STOP: dacă Multipark spune că rezervarea există deja, NU salvăm în Firestore și NU continuăm cu email/factură.
+    // Motiv: această rezervare nu a fost creată de noi (sau este duplicat) și nu vrem să poluăm Firestore cu "api_error".
+    const apiErrorCode = (apiResult as any)?.apiErrorCode
+    const apiErrorCodeStr = apiErrorCode !== undefined && apiErrorCode !== null ? String(apiErrorCode) : ""
+    const apiMessageStr = typeof (apiResult as any)?.message === "string" ? (apiResult as any).message : ""
+    const isDuplicateReservation =
+      apiErrorCodeStr === "41" ||
+      apiMessageStr.toLowerCase().includes("il existe déjà une réservation") ||
+      apiMessageStr.toLowerCase().includes("exista deja o rezervare") ||
+      apiMessageStr.toLowerCase().includes("deja există o rezervare")
+
+    if (!apiResult.success && isDuplicateReservation) {
+      const plate = normalizeLicensePlate(formData.get("licensePlate") as string)
+      const period = `${formData.get("startDate")} ${formData.get("startTime")} → ${formData.get("endDate")} ${formData.get("endTime")}`
+      const msg = `Rezervare DUPLICATĂ în Multipark pentru ${plate} (${period}). Multipark a răspuns: ${apiMessageStr || "N/A"} (ErrorCode=${apiErrorCodeStr || "N/A"})`
+      debugLogs.push(`🚫 MULTIPARK DUPLICATE: ${msg}`)
+      console.error(`🚫 ${msg}`)
+
+      return {
+        firestoreId: undefined,
+        firestoreSuccess: false,
+        firestoreError: "MULTIPARK_DUPLICATE_RESERVATION",
+        debugLogs,
+        success: false,
+        message: msg,
+        bookingNumber: null,
+        reservationData: null,
+        qrData: null,
+        bookingDetails: null,
+        duplicateReservation: true,
+        apiErrorCode: apiErrorCodeStr || undefined,
+      } as any
+    }
+
+    // 🚫 HARD STOP (webhook/online): dacă Multipark nu a creat rezervarea, nu salvăm nimic în Firestore și nu continuăm.
+    if (additionalData?.source === "webhook" && !apiResult.success) {
+      const plate = normalizeLicensePlate(formData.get("licensePlate") as string)
+      const period = `${formData.get("startDate")} ${formData.get("startTime")} → ${formData.get("endDate")} ${formData.get("endTime")}`
+      const apiErrorCodeStr2 =
+        (apiResult as any)?.apiErrorCode !== undefined && (apiResult as any)?.apiErrorCode !== null
+          ? String((apiResult as any).apiErrorCode)
+          : undefined
+      const apiMessageStr2 = typeof (apiResult as any)?.message === "string" ? (apiResult as any).message : "N/A"
+      const msg = `MULTIPARK FAILED (webhook) for ${plate} (${period}). ${apiMessageStr2}${apiErrorCodeStr2 ? ` (ErrorCode=${apiErrorCodeStr2})` : ""}`
+      debugLogs.push(`🚫 ${msg}`)
+      console.error(`🚫 ${msg}`)
+
+      return {
+        firestoreId: undefined,
+        firestoreSuccess: false,
+        firestoreError: "MULTIPARK_FAILED",
+        debugLogs,
+        success: false,
+        message: msg,
+        bookingNumber: null,
+        reservationData: null,
+        qrData: null,
+        bookingDetails: null,
+        apiErrorCode: apiErrorCodeStr2,
+      } as any
+    }
     
     // Verifică că amount-ul este corect calculat
     if (additionalData?.amount) {
@@ -682,9 +771,9 @@ export async function createBookingWithFirestore(
       // Date de bază din formData
       licensePlate: normalizeLicensePlate(formData.get("licensePlate") as string),
       startDate: formData.get("startDate") as string,
-      startTime: formData.get("startTime") as string,
+      startTime: normalizeTimeHHmm(formData.get("startTime") as string) as string,
       endDate: formData.get("endDate") as string,
-      endTime: formData.get("endTime") as string,
+      endTime: normalizeTimeHHmm(formData.get("endTime") as string) as string,
       clientName: formData.get("clientName") as string || "",
       clientTitle: formData.get("clientTitle") as string || "",
       
@@ -695,15 +784,15 @@ export async function createBookingWithFirestore(
       
       // Date calculate
       durationMinutes: Math.round(
-        (new Date(`${formData.get("endDate")}T${formData.get("endTime")}:00`).getTime() - 
-         new Date(`${formData.get("startDate")}T${formData.get("startTime")}:00`).getTime()) / (1000 * 60)
+        (new Date(`${formData.get("endDate")}T${normalizeTimeHHmm(formData.get("endTime") as string)}:00`).getTime() - 
+         new Date(`${formData.get("startDate")}T${normalizeTimeHHmm(formData.get("startTime") as string)}:00`).getTime()) / (1000 * 60)
       ),
       multiparkDurationMinutes: (() => {
         // Calculează minutele rotunjite pentru Multipark (doar dacă nu e pay-on-site)
         if (additionalData?.source === "pay_on_site") return undefined
         const realMinutes = Math.round(
-          (new Date(`${formData.get("endDate")}T${formData.get("endTime")}:00`).getTime() - 
-           new Date(`${formData.get("startDate")}T${formData.get("startTime")}:00`).getTime()) / (1000 * 60)
+          (new Date(`${formData.get("endDate")}T${normalizeTimeHHmm(formData.get("endTime") as string)}:00`).getTime() - 
+           new Date(`${formData.get("startDate")}T${normalizeTimeHHmm(formData.get("startTime") as string)}:00`).getTime()) / (1000 * 60)
         )
         const actualHours = realMinutes / 60
         const roundedUpDays = Math.ceil(actualHours / 24)
