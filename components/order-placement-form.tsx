@@ -389,8 +389,12 @@ export default function OrderPlacementForm() {
       const hasFirestoreSuccess = 'firestoreSuccess' in result ? result.firestoreSuccess : false
       if (!result.success || !hasFirestoreSuccess) {
         console.error(`🚨 [${payOnSiteProcessId}] Booking issues detected:`)
-        if ('debugLogs' in result && result.debugLogs) {
-          result.debugLogs.forEach((log, index) => {
+        const debugLogs: string[] =
+          'debugLogs' in result && Array.isArray((result as any).debugLogs)
+            ? ((result as any).debugLogs as string[])
+            : []
+        if (debugLogs.length) {
+          debugLogs.forEach((log: string, index: number) => {
             console.log(`${index + 1}. ${log}`)
           })
         }
