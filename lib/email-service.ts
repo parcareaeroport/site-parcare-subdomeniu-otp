@@ -276,7 +276,7 @@ export async function sendBookingConfirmationEmail(
     // Generează QR code-ul ca buffer pentru atașament (doar pentru rezervările cu plată)
     let qrBuffer: Buffer | null = null
     const qrIncluded = bookingData.source !== 'pay_on_site' && !!bookingData.bookingNumber
-    if (qrIncluded) {
+    if (bookingData.source !== 'pay_on_site' && bookingData.bookingNumber) {
       console.log(`🔲 [EMAIL-${emailProcessId}] Generating QR code buffer...`)
       qrBuffer = await generateMultiparkQRBuffer(bookingData.bookingNumber)
       console.log(`✅ [EMAIL-${emailProcessId}] QR code generated, buffer size: ${qrBuffer.length} bytes`)
