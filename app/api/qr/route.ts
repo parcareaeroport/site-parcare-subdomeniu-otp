@@ -33,7 +33,9 @@ export async function GET(request: NextRequest) {
 
   try {
     const buf = await generateMultiparkQRBuffer(bookingNumber);
-    return new NextResponse(buf, {
+    // NextResponse expects a Web `BodyInit` type; convert Node Buffer to Uint8Array explicitly
+    const body = new Uint8Array(buf);
+    return new NextResponse(body, {
       status: 200,
       headers: {
         "Content-Type": "image/png",
