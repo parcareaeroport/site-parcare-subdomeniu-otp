@@ -4,6 +4,7 @@ import { generateMultiparkQRBuffer } from './qr-generator'
 import nodemailer from 'nodemailer'
 import fs from 'fs'
 import path from 'path'
+import { buildSignedQrUrl, getSiteBaseUrl } from './qr-link'
 
 // Interfață pentru datele de rezervare pentru email
 interface BookingEmailData {
@@ -26,6 +27,15 @@ interface BookingEmailData {
   status: string
   source: "webhook" | "test_mode" | "manual" | "pay_on_site"
   createdAt: Date
+  // Rendering helpers (optional; computed in sendBookingConfirmationEmail)
+  qrImageSrc?: string
+}
+
+type QrMode = "attachment" | "remote";
+
+function getQrMode(): QrMode {
+  const raw = String(process.env.EMAIL_QR_MODE || "").trim().toLowerCase();
+  return raw === "remote" ? "remote" : "attachment";
 }
 
 /**
@@ -56,6 +66,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
   const formattedBookingNumber = bookingData.bookingNumber ? bookingData.bookingNumber.padStart(6, '0') : ''
   const isTestMode = bookingData.source === 'test_mode'
   const isPayOnSite = bookingData.source === 'pay_on_site'
+  const qrImgSrc = bookingData.qrImageSrc || 'cid:qrcode'
   
   return `
     <!DOCTYPE html>
@@ -155,8 +166,13 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
           <div class="qr-section">
             <h3>Cod QR pentru Acces</h3>
             <p>Pentru accesul în parcare puteți folosi codul QR de mai jos!</p>
-            <img src="cid:qrcode" alt="QR Code pentru acces" class="qr-code" />
+            <img src="${qrImgSrc}" alt="QR Code pentru acces" class="qr-code" />
             <p><small>Cod QR: MPK_RES=${formattedBookingNumber}</small></p>
+            <p style="margin-top: 10px;">
+              <a href="${getSiteBaseUrl()}/tracking?bookingNumber=${formattedBookingNumber}" style="color: #ee7f1a; text-decoration: underline;">
+                Deschide pagina rezervării / QR (dacă nu se afișează imaginea)
+              </a>
+            </p>
           </div>
           `}
           
@@ -273,15 +289,35 @@ export async function sendBookingConfirmationEmail(
     console.log(`📧 [EMAIL-${emailProcessId}] Gmail User: ${process.env.GMAIL_USER ? 'SET' : 'NOT SET'}`)
     console.log(`📧 [EMAIL-${emailProcessId}] Gmail Password: ${process.env.GMAIL_APP_PASSWORD ? 'SET (length=' + process.env.GMAIL_APP_PASSWORD.length + ')' : 'NOT SET'}`)
     
-    // Generează QR code-ul ca buffer pentru atașament (doar pentru rezervările cu plată)
+    // Generează QR code-ul: attachment (default) sau remote image (signed URL)
     let qrBuffer: Buffer | null = null
-    const qrIncluded = bookingData.source !== 'pay_on_site' && !!bookingData.bookingNumber
-    if (bookingData.source !== 'pay_on_site' && bookingData.bookingNumber) {
-      console.log(`🔲 [EMAIL-${emailProcessId}] Generating QR code buffer...`)
-      qrBuffer = await generateMultiparkQRBuffer(bookingData.bookingNumber)
-      console.log(`✅ [EMAIL-${emailProcessId}] QR code generated, buffer size: ${qrBuffer.length} bytes`)
+    const shouldHaveQr = bookingData.source !== 'pay_on_site' && !!bookingData.bookingNumber
+    const mode = getQrMode()
+    const qrIncluded = shouldHaveQr
+
+    if (shouldHaveQr && bookingData.bookingNumber) {
+      if (mode === "remote") {
+        const signedUrl = buildSignedQrUrl(bookingData.bookingNumber)
+        if (signedUrl) {
+          bookingData.qrImageSrc = signedUrl
+          console.log(`🌐 [EMAIL-${emailProcessId}] QR mode=remote (signed URL), skipping attachment generation`)
+        } else {
+          // Fallback to attachment when secret is missing
+          console.warn(`⚠️ [EMAIL-${emailProcessId}] EMAIL_QR_MODE=remote but QR_LINK_SECRET missing. Falling back to attachment.`)
+          console.log(`🔲 [EMAIL-${emailProcessId}] Generating QR code buffer...`)
+          qrBuffer = await generateMultiparkQRBuffer(bookingData.bookingNumber)
+          console.log(`✅ [EMAIL-${emailProcessId}] QR code generated, buffer size: ${qrBuffer.length} bytes`)
+          bookingData.qrImageSrc = "cid:qrcode"
+        }
+      } else {
+        console.log(`🔲 [EMAIL-${emailProcessId}] Generating QR code buffer...`)
+        qrBuffer = await generateMultiparkQRBuffer(bookingData.bookingNumber)
+        console.log(`✅ [EMAIL-${emailProcessId}] QR code generated, buffer size: ${qrBuffer.length} bytes`)
+        bookingData.qrImageSrc = "cid:qrcode"
+      }
     } else {
       console.log(`💳 [EMAIL-${emailProcessId}] Skipping QR code generation for pay_on_site reservation or missing booking number`)
+      bookingData.qrImageSrc = undefined
     }
     
     // Nu mai folosim logo în email pentru a reduce complexitatea și dimensiunea bundle-ului
