@@ -1,6 +1,5 @@
 // Notă: Trebuie instalat pachetul: npm install nodemailer @types/nodemailer
 
-import { generateMultiparkQRBuffer } from './qr-generator'
 import nodemailer from 'nodemailer'
 import fs from 'fs'
 import path from 'path'
@@ -28,14 +27,7 @@ interface BookingEmailData {
   source: "webhook" | "test_mode" | "manual" | "pay_on_site"
   createdAt: Date
   // Rendering helpers (optional; computed in sendBookingConfirmationEmail)
-  qrImageSrc?: string
-}
-
-type QrMode = "attachment" | "remote";
-
-function getQrMode(): QrMode {
-  const raw = String(process.env.EMAIL_QR_MODE || "").trim().toLowerCase();
-  return raw === "remote" ? "remote" : "attachment";
+  qrLinkUrl?: string
 }
 
 /**
@@ -66,7 +58,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
   const formattedBookingNumber = bookingData.bookingNumber ? bookingData.bookingNumber.padStart(6, '0') : ''
   const isTestMode = bookingData.source === 'test_mode'
   const isPayOnSite = bookingData.source === 'pay_on_site'
-  const qrImgSrc = bookingData.qrImageSrc || 'cid:qrcode'
+  const qrLink = bookingData.qrLinkUrl || ''
   
   return `
     <!DOCTYPE html>
@@ -87,7 +79,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
         .detail-label { font-weight: bold; color: #666; }
         .detail-value { color: #333; }
         .qr-section { text-align: center; background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
-        .qr-code { max-width: 200px; height: auto; border: 2px solid #ddd; border-radius: 8px; }
+        .qr-button { display: inline-block; background: #ee7f1a; color: white !important; padding: 12px 16px; border-radius: 8px; text-decoration: none; font-weight: bold; }
         .warning { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 8px; margin: 20px 0; }
         .test-mode { background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; padding: 15px; border-radius: 8px; margin: 20px 0; }
         .contact-section { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
@@ -165,14 +157,21 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
           ` : `
           <div class="qr-section">
             <h3>Cod QR pentru Acces</h3>
-            <p>Pentru accesul în parcare puteți folosi codul QR de mai jos!</p>
-            <img src="${qrImgSrc}" alt="QR Code pentru acces" class="qr-code" />
-            <p><small>Cod QR: MPK_RES=${formattedBookingNumber}</small></p>
-            <p style="margin-top: 10px;">
-              <a href="${getSiteBaseUrl()}/tracking?bookingNumber=${formattedBookingNumber}" style="color: #ee7f1a; text-decoration: underline;">
-                Deschide pagina rezervării / QR (dacă nu se afișează imaginea)
-              </a>
-            </p>
+            <p>Pentru a accesa codul qr, acceseaza link-ul de mai jos la sosirea la parcare.</p>
+            ${qrLink ? `
+              <p style="margin: 14px 0;">
+                <a class="qr-button" href="${qrLink}">Generează / Deschide codul QR</a>
+              </p>
+              <p><small>Cod QR: MPK_RES=${formattedBookingNumber}</small></p>
+              <p style="margin-top: 10px;">
+                <a href="${qrLink}" style="color: #ee7f1a; text-decoration: underline;">
+                  Dacă butonul nu funcționează, apăsați aici
+                </a>
+              </p>
+            ` : `
+              <p style="color:#b91c1c;"><strong>Link QR indisponibil momentan.</strong></p>
+              <p><small>Cod rezervare: ${formattedBookingNumber}</small></p>
+            `}
           </div>
           `}
           
@@ -289,35 +288,33 @@ export async function sendBookingConfirmationEmail(
     console.log(`📧 [EMAIL-${emailProcessId}] Gmail User: ${process.env.GMAIL_USER ? 'SET' : 'NOT SET'}`)
     console.log(`📧 [EMAIL-${emailProcessId}] Gmail Password: ${process.env.GMAIL_APP_PASSWORD ? 'SET (length=' + process.env.GMAIL_APP_PASSWORD.length + ')' : 'NOT SET'}`)
     
-    // Generează QR code-ul: attachment (default) sau remote image (signed URL)
-    let qrBuffer: Buffer | null = null
-    const shouldHaveQr = bookingData.source !== 'pay_on_site' && !!bookingData.bookingNumber
-    const mode = getQrMode()
-    const qrIncluded = shouldHaveQr
-
-    if (shouldHaveQr && bookingData.bookingNumber) {
-      if (mode === "remote") {
-        const signedUrl = buildSignedQrUrl(bookingData.bookingNumber)
-        if (signedUrl) {
-          bookingData.qrImageSrc = signedUrl
-          console.log(`🌐 [EMAIL-${emailProcessId}] QR mode=remote (signed URL), skipping attachment generation`)
-        } else {
-          // Fallback to attachment when secret is missing
-          console.warn(`⚠️ [EMAIL-${emailProcessId}] EMAIL_QR_MODE=remote but QR_LINK_SECRET missing. Falling back to attachment.`)
-          console.log(`🔲 [EMAIL-${emailProcessId}] Generating QR code buffer...`)
-          qrBuffer = await generateMultiparkQRBuffer(bookingData.bookingNumber)
-          console.log(`✅ [EMAIL-${emailProcessId}] QR code generated, buffer size: ${qrBuffer.length} bytes`)
-          bookingData.qrImageSrc = "cid:qrcode"
-        }
+    // IMPORTANT: No QR attachments/inline images (deliverability).
+    // We only include a link that generates the QR on demand.
+    const shouldHaveQrLink = bookingData.source !== "pay_on_site" && !!bookingData.bookingNumber
+    const qrIncluded = false
+    if (shouldHaveQrLink && bookingData.bookingNumber) {
+      const signedQrApiUrl = buildSignedQrUrl(bookingData.bookingNumber)
+      if (signedQrApiUrl) {
+        // Link to a human-friendly page that loads /api/qr underneath
+        const base = getSiteBaseUrl()
+        const u = new URL(signedQrApiUrl)
+        const bn = u.searchParams.get("bookingNumber") || bookingData.bookingNumber
+        const sig = u.searchParams.get("sig") || ""
+        bookingData.qrLinkUrl = `${base}/qr?bookingNumber=${encodeURIComponent(bn)}&sig=${encodeURIComponent(sig)}`
+        console.log(`🔗 [EMAIL-${emailProcessId}] QR link prepared (no attachment)`)
       } else {
-        console.log(`🔲 [EMAIL-${emailProcessId}] Generating QR code buffer...`)
-        qrBuffer = await generateMultiparkQRBuffer(bookingData.bookingNumber)
-        console.log(`✅ [EMAIL-${emailProcessId}] QR code generated, buffer size: ${qrBuffer.length} bytes`)
-        bookingData.qrImageSrc = "cid:qrcode"
+        // Development-only: allow /api/qr bypass with sig=dev (see app/api/qr/route.ts)
+        if (process.env.NODE_ENV === "development") {
+          const base = getSiteBaseUrl()
+          bookingData.qrLinkUrl = `${base}/qr?bookingNumber=${encodeURIComponent(bookingData.bookingNumber)}&sig=dev`
+          console.warn(`⚠️ [EMAIL-${emailProcessId}] QR_LINK_SECRET missing; using development QR link (sig=dev).`)
+        } else {
+          console.warn(`⚠️ [EMAIL-${emailProcessId}] QR link not available (QR_LINK_SECRET missing). Email will be sent without QR link.`)
+          bookingData.qrLinkUrl = undefined
+        }
       }
     } else {
-      console.log(`💳 [EMAIL-${emailProcessId}] Skipping QR code generation for pay_on_site reservation or missing booking number`)
-      bookingData.qrImageSrc = undefined
+      bookingData.qrLinkUrl = undefined
     }
     
     // Nu mai folosim logo în email pentru a reduce complexitatea și dimensiunea bundle-ului
@@ -332,17 +329,6 @@ export async function sendBookingConfirmationEmail(
     // Pentru pay-on-site nu avem booking number, folosim licensePlate pentru nume fișiere
     const formattedBookingNumber = bookingData.bookingNumber ? bookingData.bookingNumber.padStart(6, '0') : bookingData.licensePlate
     const attachments: any[] = []
-    
-    // Adaugă QR code doar pentru rezervările cu plată
-    if (qrBuffer !== null) {
-      attachments.push({
-        filename: `qr-code-${formattedBookingNumber}.png`,
-        content: qrBuffer,
-        cid: 'qrcode', // Content ID pentru a fi referenciat în HTML
-      })
-    }
-    
-    // Nu mai adăugăm logo în email
     
     const mailOptions = {
       from: {
@@ -361,7 +347,7 @@ export async function sendBookingConfirmationEmail(
     console.log(`📧 [EMAIL-${emailProcessId}]   Subject: ${mailOptions.subject}`)
     console.log(`📧 [EMAIL-${emailProcessId}]   HTML Length: ${mailOptions.html.length} chars`)
     console.log(`📧 [EMAIL-${emailProcessId}]   Attachments: ${mailOptions.attachments.length} files`)
-    console.log(`📧 [EMAIL-${emailProcessId}]   QR Attachment Size: ${qrBuffer ? qrBuffer.length + ' bytes' : 'No QR code (pay on site)'}`)
+    console.log(`📧 [EMAIL-${emailProcessId}]   QR link included: ${bookingData.qrLinkUrl ? "YES" : "NO"}`)
     console.log(`📧 [EMAIL-${emailProcessId}]   Logo Attachment: No logo attached`)
     
     // Trimite email-ul cu timeout
@@ -391,7 +377,7 @@ export async function sendBookingConfirmationEmail(
       messageId: result?.messageId,
       response: result?.response,
       qrIncluded,
-      qrBytes: qrBuffer ? qrBuffer.length : 0,
+      qrBytes: 0,
     }
     
   } catch (error) {

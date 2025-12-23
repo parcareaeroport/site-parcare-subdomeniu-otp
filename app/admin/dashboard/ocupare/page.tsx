@@ -6,6 +6,9 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Loader2, Printer, RefreshCw, Info } from "lucide-react"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { OccupancyForecast } from "@/components/admin/occupancy-forecast"
+import { useSearchParams } from "next/navigation"
 
 type PlateItem = {
   id: string
@@ -27,10 +30,13 @@ type ApiResponse = {
 }
 
 export default function OccupancyPage() {
+  const searchParams = useSearchParams()
   const [data, setData] = useState<ApiResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const initialTab = searchParams.get("tab") === "forecast" ? "forecast" : "live"
+  const [activeTab, setActiveTab] = useState<"live" | "forecast">(initialTab as "live" | "forecast")
 
   const fetchData = async () => {
     setLoading(true)
@@ -175,89 +181,102 @@ export default function OccupancyPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Ocupare parcare</h1>
           <p className="text-sm text-muted-foreground">
-            Total mașini prezente + listă printabilă cu status plată.
+            Ocupare live (LPRInside) + ocupare estimată pe zile (forecast).
           </p>
-        </div>
-        <div className="flex gap-2 flex-wrap">
-          <Button variant="outline" onClick={handlePrint}>
-            <Printer className="h-4 w-4 mr-2" />
-            Printează
-          </Button>
-    
-          <Button variant="outline" onClick={handleSetAllOutside} disabled={resetting || loading}>
-            {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-            Setează ocuparea la 0
-          </Button>
-       
-          <Button onClick={fetchData} disabled={loading}>
-            {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-            Reîncarcă
-          </Button>
         </div>
       </div>
 
-      {error && (
-        <Card className="border-red-200 bg-red-50">
-          <CardContent className="py-3 text-red-700">{error}</CardContent>
-        </Card>
-      )}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="live">Ocupare curentă (LPRInside)</TabsTrigger>
+          <TabsTrigger value="forecast">Ocupare pe zile (forecast)</TabsTrigger>
+        </TabsList>
 
-      {/* IMPORTANT: on /ocupare we want strict LPR reality: count must match table length */}
-      <OccupancyCounter title="Ocupare Curentă" countOverride={lprCount} />
+        <TabsContent value="live" className="space-y-6">
+          <div className="flex gap-2 flex-wrap">
+            <Button variant="outline" onClick={handlePrint}>
+              <Printer className="h-4 w-4 mr-2" />
+              Printează
+            </Button>
 
-      <Card id="plates-table-section">
-        <CardHeader>
-          <CardTitle>Numarul total al masinilor prezente in parecare/grad ocupare</CardTitle>
-       
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
-          {loading ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Se încarcă lista...
-            </div>
-          ) : (data?.plates?.length ?? 0) === 0 ? (
-            <p className="text-sm text-muted-foreground">Nicio mașină prezentă.</p>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs text-muted-foreground border-b">
-                  <th className="py-2">Nr. Înmatriculare</th>
-                  <th className="py-2">Perioada</th>
-                  <th className="py-2">Sursă</th>
-                  <th className="py-2">Status plată</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data?.plates?.map((p) => {
-                  const pay = paymentInfo(p.paymentStatus)
-                  const startLabel = `${p.startDate || "-"}${p.startTime ? ` ${p.startTime}` : ""}`
-                  const endLabel = `${p.endDate || "-"}${p.endTime ? ` ${p.endTime}` : ""}`
-                  const srcLabel =
-                    p.source === "lpr" && p.status === "unmatched_lpr"
-                      ? "LPR fără rezervare"
-                      : sourceLabel(p.source)
-                  return (
-                    <tr
-                      key={p.id}
-                      className={`border-b last:border-0 ${pay.label === "Neplătit" ? "bg-orange-50" : ""}`}
-                    >
-                      <td className="py-2 font-semibold">{p.licensePlate}</td>
-                      <td className="py-2 text-xs text-muted-foreground">
-                        {startLabel} → {endLabel}
-                      </td>
-                      <td className="py-2 text-xs">{srcLabel}</td>
-                      <td className="py-2">
-                        <Badge className={pay.className}>{pay.label}</Badge>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+            <Button variant="outline" onClick={handleSetAllOutside} disabled={resetting || loading}>
+              {resetting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+              Setează ocuparea la 0
+            </Button>
+
+            <Button onClick={fetchData} disabled={loading}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+              Reîncarcă
+            </Button>
+          </div>
+
+          {error && (
+            <Card className="border-red-200 bg-red-50">
+              <CardContent className="py-3 text-red-700">{error}</CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+
+          {/* IMPORTANT: on /ocupare we want strict LPR reality: count must match table length */}
+          <OccupancyCounter title="Ocupare Curentă" countOverride={lprCount} />
+
+          <Card id="plates-table-section">
+            <CardHeader>
+              <CardTitle>Numarul total al masinilor prezente in parecare/grad ocupare</CardTitle>
+            </CardHeader>
+            <CardContent className="overflow-x-auto">
+              {loading ? (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Se încarcă lista...
+                </div>
+              ) : (data?.plates?.length ?? 0) === 0 ? (
+                <p className="text-sm text-muted-foreground">Nicio mașină prezentă.</p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground border-b">
+                      <th className="py-2">Nr. Înmatriculare</th>
+                      <th className="py-2">Perioada</th>
+                      <th className="py-2">Sursă</th>
+                      <th className="py-2">Status plată</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data?.plates?.map((p) => {
+                      const pay = paymentInfo(p.paymentStatus)
+                      const startLabel = `${p.startDate || "-"}${p.startTime ? ` ${p.startTime}` : ""}`
+                      const endLabel = `${p.endDate || "-"}${p.endTime ? ` ${p.endTime}` : ""}`
+                      const srcLabel =
+                        p.source === "lpr" && p.status === "unmatched_lpr"
+                          ? "LPR fără rezervare"
+                          : sourceLabel(p.source)
+                      return (
+                        <tr
+                          key={p.id}
+                          className={`border-b last:border-0 ${pay.label === "Neplătit" ? "bg-orange-50" : ""}`}
+                        >
+                          <td className="py-2 font-semibold">{p.licensePlate}</td>
+                          <td className="py-2 text-xs text-muted-foreground">
+                            {startLabel} → {endLabel}
+                          </td>
+                          <td className="py-2 text-xs">{srcLabel}</td>
+                          <td className="py-2">
+                            <Badge className={pay.className}>{pay.label}</Badge>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="forecast">
+          <OccupancyForecast />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
