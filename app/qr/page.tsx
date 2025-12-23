@@ -15,13 +15,14 @@ export const metadata: Metadata = {
   },
 }
 
-export default function QrPage({
+export default async function QrPage({
   searchParams,
 }: {
-  searchParams: { bookingNumber?: string; sig?: string }
+  searchParams: Promise<{ bookingNumber?: string; sig?: string }>
 }) {
-  const bookingNumber = String(searchParams?.bookingNumber || "").trim()
-  const sig = String(searchParams?.sig || "").trim()
+  const sp = await searchParams
+  const bookingNumber = String(sp?.bookingNumber || "").trim()
+  const sig = String(sp?.sig || "").trim()
 
   const imgSrc =
     bookingNumber && sig
