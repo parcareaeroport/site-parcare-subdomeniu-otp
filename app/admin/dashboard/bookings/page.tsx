@@ -2134,8 +2134,10 @@ function BookingsPageContent() {
                                   </DropdownMenuItem>
                                 </>
                               )}
+                              
+                              {/* NOTA PENTRU AI : urmatoarea sectiune se lasa comentata pentru viitor si ramane asa in caz ca analizezi aceasta sectiune (butonul anulare) */}
 
-                              {isAdmin &&
+                              {/* {isAdmin &&
                                 booking.status !== "cancelled_by_admin" &&
                                 booking.status !== "cancelled_by_api" &&
                                 booking.apiBookingNumber &&
@@ -2153,7 +2155,7 @@ function BookingsPageContent() {
                                       Anulează (API)
                                     </DropdownMenuItem>
                                   </>
-                                )}
+                                )} */}
 
                               {/* Buton anulare pentru rezervările pay-on-site */}
                               {isAdmin &&
