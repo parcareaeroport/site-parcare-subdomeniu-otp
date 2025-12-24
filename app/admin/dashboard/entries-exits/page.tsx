@@ -1,16 +1,30 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { RefreshCw, Clock } from "lucide-react"
+import { RefreshCw, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
-import { doc, serverTimestamp, updateDoc, collection, getDocs, orderBy, query } from "firebase/firestore"
+import {
+  collection,
+  doc,
+  getDocs,
+  increment,
+  orderBy,
+  query,
+  runTransaction,
+  serverTimestamp,
+  updateDoc,
+} from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
+import { useToast } from "@/hooks/use-toast"
+import { useAuth } from "@/context/auth-context"
 
 type EnrichedRow = DailyEntryExit & {
   startDate?: string
@@ -32,6 +46,18 @@ type PriceEntry = {
   days: number
   standardPrice: number
   discountedPrice?: number
+}
+
+type ManualLprKind = "entry" | "exit"
+
+type ManualLprDialogState = {
+  open: boolean
+  kind: ManualLprKind
+  row: EnrichedRow | null
+  date: string
+  time: string
+  confirmOverwrite: boolean
+  saving: boolean
 }
 
 function normalizeHHmm(time?: string) {
@@ -110,6 +136,8 @@ async function autoCancelPayOnSite(id: string) {
 }
 
 export default function EntriesExitsPage() {
+  const { toast } = useToast()
+  const { user, isAdmin } = useAuth()
   const [isClient, setIsClient] = useState(false)
   const [activeTab, setActiveTab] = useState<"entries" | "exits">("entries")
   const [includeFuture, setIncludeFuture] = useState(false)
@@ -124,6 +152,15 @@ export default function EntriesExitsPage() {
   const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
   const [entriesView, setEntriesView] = useState<"both" | "main" | "late">("both")
   const [exitsView, setExitsView] = useState<"both" | "main" | "late">("both")
+  const [manualLpr, setManualLpr] = useState<ManualLprDialogState>({
+    open: false,
+    kind: "entry",
+    row: null,
+    date: "",
+    time: "",
+    confirmOverwrite: false,
+    saving: false,
+  })
   const jumpToTab = (tab: "entries" | "exits") => {
     setActiveTab(tab)
     setEntriesView("both")
@@ -163,6 +200,181 @@ export default function EntriesExitsPage() {
     const id = setInterval(tick, 60000)
     return () => clearInterval(id)
   }, [])
+
+  const openManualLprDialog = (row: EnrichedRow, kind: ManualLprKind) => {
+    const fallbackDate =
+      kind === "entry" ? (row.startDate ?? selectedDate) : (row.endDate ?? selectedDate)
+    const defaultTime = normalizeHHmm(row.actualTime) || normalizeHHmm(row.time) || normalizeHHmm(currentTime) || "12:00"
+    setManualLpr({
+      open: true,
+      kind,
+      row,
+      date: fallbackDate,
+      time: defaultTime,
+      confirmOverwrite: false,
+      saving: false,
+    })
+  }
+
+  const closeManualLprDialog = () => {
+    setManualLpr((s) => ({ ...s, open: false, row: null, saving: false, confirmOverwrite: false }))
+  }
+
+  const toManualLprIsoZ = (date: string, time: string): string | null => {
+    if (!date || !time) return null
+    const d = String(date).trim()
+    const t = normalizeHHmm(time)
+    if (!t || t.toLowerCase() === "n/a") return null
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null
+    if (!/^\d{2}:\d{2}(:\d{2})?$/.test(t)) return null
+    const iso = `${d}T${t.length === 5 ? `${t}:00` : t}Z`
+    const parsed = new Date(iso)
+    return Number.isNaN(parsed.getTime()) ? null : iso
+  }
+
+  const saveManualLpr = async () => {
+    const row = manualLpr.row
+    if (!row?.id) return
+
+    if (!isAdmin) {
+      toast({
+        title: "Acces restricționat",
+        description: "Doar administratorii pot seta manual intrarea/ieșirea LPR.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const isoZ = toManualLprIsoZ(manualLpr.date, manualLpr.time)
+    if (!isoZ) {
+      toast({
+        title: "Dată/Oră invalidă",
+        description: "Verifică data și ora (ex: 2025-12-24 și 14:30).",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const hasExisting = Boolean(row.actualTime)
+    if (hasExisting && !manualLpr.confirmOverwrite) {
+      toast({
+        title: "Confirmare necesară",
+        description: "Există deja o valoare LPR. Bifează confirmarea ca să suprascrii.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setManualLpr((s) => ({ ...s, saving: true }))
+
+      const bookingRef = doc(db, "bookings", row.id)
+      const occupancyRef = doc(db, "config", "parkingLive")
+      const kind = manualLpr.kind
+      const plate = row.licensePlate || ""
+
+      await runTransaction(db, async (tx) => {
+        const bookingSnap = await tx.get(bookingRef)
+        if (!bookingSnap.exists()) throw new Error("Booking not found")
+        const booking: any = bookingSnap.data() || {}
+        const lpr: any = booking.lpr || {}
+
+        const wasInside = lpr.isInside === true
+        const occupancyIncremented = booking.occupancyIncremented === true
+        const occupancyDecremented = booking.occupancyDecremented === true
+
+        const audit = {
+          "lpr.manualOverride": true,
+          "lpr.manualOverrideAt": serverTimestamp(),
+          "lpr.manualOverrideByUid": user?.uid ?? null,
+          "lpr.manualOverrideByEmail": user?.email ?? null,
+          lastUpdated: serverTimestamp(),
+        } as const
+
+        const lastChangeBase = {
+          bookingId: row.id,
+          plateNumber: plate,
+          at: isoZ,
+          byUid: user?.uid ?? null,
+          byEmail: user?.email ?? null,
+        }
+
+        if (kind === "entry") {
+          const shouldIncrement = !wasInside && !occupancyIncremented
+          tx.update(bookingRef, {
+            "lpr.arrivedAt": isoZ,
+            "lpr.isInside": true,
+            "lpr.lastEventType": "entry",
+            ...(shouldIncrement
+              ? {
+                  occupancyIncremented: true,
+                  occupancyIncrementedAt: serverTimestamp(),
+                }
+              : {}),
+            ...audit,
+          })
+
+          if (shouldIncrement) {
+            tx.set(
+              occupancyRef,
+              {
+                occupiedCount: increment(1),
+                lastUpdated: serverTimestamp(),
+                lastChange: { type: "entry_manual_override", ...lastChangeBase },
+              },
+              { merge: true },
+            )
+          } else {
+            tx.set(occupancyRef, { lastUpdated: serverTimestamp() }, { merge: true })
+          }
+        } else {
+          const shouldDecrement = wasInside && occupancyIncremented && !occupancyDecremented
+          tx.update(bookingRef, {
+            "lpr.departedAt": isoZ,
+            "lpr.isInside": false,
+            "lpr.lastEventType": "exit",
+            ...(shouldDecrement
+              ? {
+                  occupancyDecremented: true,
+                  occupancyDecrementedAt: serverTimestamp(),
+                }
+              : {}),
+            ...audit,
+          })
+
+          if (shouldDecrement) {
+            tx.set(
+              occupancyRef,
+              {
+                occupiedCount: increment(-1),
+                lastUpdated: serverTimestamp(),
+                lastChange: { type: "exit_manual_override", ...lastChangeBase },
+              },
+              { merge: true },
+            )
+          } else {
+            tx.set(occupancyRef, { lastUpdated: serverTimestamp() }, { merge: true })
+          }
+        }
+      })
+
+      toast({
+        title: "Salvat",
+        description:
+          manualLpr.kind === "entry" ? "Intrarea LPR a fost setată manual." : "Ieșirea LPR a fost setată manual.",
+      })
+      closeManualLprDialog()
+      await loadData()
+    } catch (e: any) {
+      console.error("Manual LPR override failed", e)
+      toast({
+        title: "Eroare la salvare",
+        description: e?.message ? String(e.message) : "Nu s-a putut salva modificarea.",
+        variant: "destructive",
+      })
+      setManualLpr((s) => ({ ...s, saving: false }))
+    }
+  }
 
   const loadData = async () => {
     try {
@@ -456,7 +668,14 @@ export default function EntriesExitsPage() {
                         PLATĂ LA PARCARE
                       </Badge>
                     )}
-                    <span className="font-semibold">{row.licensePlate}</span>
+                    <Button
+                      type="button"
+                      variant="link"
+                      className="h-auto p-0 font-semibold text-left"
+                      onClick={() => openManualLprDialog(row, kind)}
+                    >
+                      {row.licensePlate}
+                    </Button>
                   </div>
                 </td>
                 <td className="py-3 px-2">{row.phone}</td>
@@ -523,7 +742,14 @@ export default function EntriesExitsPage() {
                     PLATĂ LA PARCARE
                   </Badge>
                 )}
-                <span className="font-semibold text-base">{row.licensePlate}</span>
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto p-0 font-semibold text-base"
+                  onClick={() => openManualLprDialog(row, kind)}
+                >
+                  {row.licensePlate}
+                </Button>
               </div>
               <span className="text-sm font-semibold">{row.time}</span>
             </div>
@@ -683,6 +909,101 @@ export default function EntriesExitsPage() {
           </div>
             </TabsContent>
           </Tabs>
+
+      <Dialog
+        open={manualLpr.open}
+        onOpenChange={(open) => {
+          if (!open) closeManualLprDialog()
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>
+              {manualLpr.kind === "entry" ? "Setează Intrare LPR (manual)" : "Setează Ieșire LPR (manual)"}
+            </DialogTitle>
+            <DialogDescription>
+              {manualLpr.row?.licensePlate ? (
+                <>
+                  Nr: <span className="font-semibold">{manualLpr.row.licensePlate}</span>
+                </>
+              ) : (
+                "Completează data și ora."
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {!isAdmin && (
+            <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+              Doar administratorii pot salva modificări manuale LPR.
+            </div>
+          )}
+
+          <div className="grid gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label htmlFor="manual-lpr-date">Data</Label>
+                <Input
+                  id="manual-lpr-date"
+                  type="date"
+                  value={manualLpr.date}
+                  disabled={manualLpr.saving}
+                  onChange={(e) => setManualLpr((s) => ({ ...s, date: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="manual-lpr-time">Ora</Label>
+                <Input
+                  id="manual-lpr-time"
+                  type="time"
+                  value={manualLpr.time}
+                  disabled={manualLpr.saving}
+                  onChange={(e) => setManualLpr((s) => ({ ...s, time: e.target.value }))}
+                />
+              </div>
+            </div>
+
+            {Boolean(manualLpr.row?.actualTime) && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <div className="text-sm text-amber-900">
+                  Există deja o valoare LPR pentru acest rând:{" "}
+                  <span className="font-semibold">{manualLpr.row?.actualTime}</span>. Pentru suprascriere, bifează
+                  confirmarea.
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <Checkbox
+                    id="manual-lpr-overwrite"
+                    checked={manualLpr.confirmOverwrite}
+                    disabled={manualLpr.saving}
+                    onCheckedChange={(v) => setManualLpr((s) => ({ ...s, confirmOverwrite: v === true }))}
+                  />
+                  <Label htmlFor="manual-lpr-overwrite" className="text-sm">
+                    Confirm suprascrierea valorii LPR existente
+                  </Label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button type="button" variant="outline" onClick={closeManualLprDialog} disabled={manualLpr.saving}>
+              Renunță
+            </Button>
+            <Button
+              type="button"
+              onClick={saveManualLpr}
+              disabled={
+                manualLpr.saving ||
+                !manualLpr.row?.id ||
+                !isAdmin ||
+                (Boolean(manualLpr.row?.actualTime) && !manualLpr.confirmOverwrite)
+              }
+            >
+              {manualLpr.saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Salvează
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bottom quick-nav for mobile */}
       <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white border-t shadow">
