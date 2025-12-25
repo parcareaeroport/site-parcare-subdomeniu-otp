@@ -8,23 +8,14 @@ import { RefreshCw, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
-import {
-  collection,
-  doc,
-  getDocs,
-  increment,
-  orderBy,
-  query,
-  runTransaction,
-  serverTimestamp,
-  updateDoc,
-} from "firebase/firestore"
+import { collection, doc, getDocs, orderBy, query, serverTimestamp, updateDoc } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/context/auth-context"
+import { writeManualLprEvent } from "@/lib/manual-lpr-event"
 
 type EnrichedRow = DailyEntryExit & {
   startDate?: string
@@ -268,94 +259,14 @@ export default function EntriesExitsPage() {
     try {
       setManualLpr((s) => ({ ...s, saving: true }))
 
-      const bookingRef = doc(db, "bookings", row.id)
-      const occupancyRef = doc(db, "config", "parkingLive")
       const kind = manualLpr.kind
-      const plate = row.licensePlate || ""
-
-      await runTransaction(db, async (tx) => {
-        const bookingSnap = await tx.get(bookingRef)
-        if (!bookingSnap.exists()) throw new Error("Booking not found")
-        const booking: any = bookingSnap.data() || {}
-        const lpr: any = booking.lpr || {}
-
-        const wasInside = lpr.isInside === true
-        const occupancyIncremented = booking.occupancyIncremented === true
-        const occupancyDecremented = booking.occupancyDecremented === true
-
-        const audit = {
-          "lpr.manualOverride": true,
-          "lpr.manualOverrideAt": serverTimestamp(),
-          "lpr.manualOverrideByUid": user?.uid ?? null,
-          "lpr.manualOverrideByEmail": user?.email ?? null,
-          lastUpdated: serverTimestamp(),
-        } as const
-
-        const lastChangeBase = {
-          bookingId: row.id,
-          plateNumber: plate,
-          at: isoZ,
-          byUid: user?.uid ?? null,
-          byEmail: user?.email ?? null,
-        }
-
-        if (kind === "entry") {
-          const shouldIncrement = !wasInside && !occupancyIncremented
-          tx.update(bookingRef, {
-            "lpr.arrivedAt": isoZ,
-            "lpr.isInside": true,
-            "lpr.lastEventType": "entry",
-            ...(shouldIncrement
-              ? {
-                  occupancyIncremented: true,
-                  occupancyIncrementedAt: serverTimestamp(),
-                }
-              : {}),
-            ...audit,
-          })
-
-          if (shouldIncrement) {
-            tx.set(
-              occupancyRef,
-              {
-                occupiedCount: increment(1),
-                lastUpdated: serverTimestamp(),
-                lastChange: { type: "entry_manual_override", ...lastChangeBase },
-              },
-              { merge: true },
-            )
-          } else {
-            tx.set(occupancyRef, { lastUpdated: serverTimestamp() }, { merge: true })
-          }
-        } else {
-          const shouldDecrement = wasInside && occupancyIncremented && !occupancyDecremented
-          tx.update(bookingRef, {
-            "lpr.departedAt": isoZ,
-            "lpr.isInside": false,
-            "lpr.lastEventType": "exit",
-            ...(shouldDecrement
-              ? {
-                  occupancyDecremented: true,
-                  occupancyDecrementedAt: serverTimestamp(),
-                }
-              : {}),
-            ...audit,
-          })
-
-          if (shouldDecrement) {
-            tx.set(
-              occupancyRef,
-              {
-                occupiedCount: increment(-1),
-                lastUpdated: serverTimestamp(),
-                lastChange: { type: "exit_manual_override", ...lastChangeBase },
-              },
-              { merge: true },
-            )
-          } else {
-            tx.set(occupancyRef, { lastUpdated: serverTimestamp() }, { merge: true })
-          }
-        }
+      await writeManualLprEvent({
+        bookingId: row.id,
+        plateNumber: row.licensePlate || "",
+        eventType: kind,
+        eventTimeIsoZ: isoZ,
+        adminUid: user?.uid ?? null,
+        adminEmail: user?.email ?? null,
       })
 
       toast({
