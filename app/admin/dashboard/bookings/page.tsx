@@ -152,6 +152,9 @@ function parseDateTime(date?: string, time?: string) {
 function BookingsPageContent() {
   const { toast } = useToast()
   const { user, loading: authLoading, isAdmin } = useAuth()
+
+  const formatInputDate = (d?: Date) => (d ? formatDateFn(d, "yyyy-MM-dd") : "")
+
   const [bookings, setBookings] = useState<Booking[]>([])
   const [filteredBookings, setFilteredBookings] = useState<Booking[]>([])
   const [searchTerm, setSearchTerm] = useState("")
@@ -183,7 +186,6 @@ function BookingsPageContent() {
   const [manualLprConfirmOverwrite, setManualLprConfirmOverwrite] = useState(false)
   const [savingManualLpr, setSavingManualLpr] = useState(false)
 
-  const formatInputDate = (d?: Date) => (d ? formatDateFn(d, "yyyy-MM-dd") : "")
   const handleDateInputChange = (key: "from" | "to") => (value: string) => {
     const parsed = value ? new Date(`${value}T00:00:00`) : undefined
     setDateRange((prev) => ({ ...prev, [key]: parsed }))
