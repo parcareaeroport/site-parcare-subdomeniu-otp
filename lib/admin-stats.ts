@@ -631,9 +631,7 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
     const bookingsRef = collection(db, 'bookings')
     
     // Query pentru rezervările care încep în data selectată sau viitoare (dacă includeFuture=true)
-    const constraints: any[] = [
-      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site'])
-    ]
+    const constraints: any[] = []
     if (includeFuture) {
       constraints.push(where('startDate', '>=', selectedDate))
       constraints.push(orderBy('startDate', 'asc'))
@@ -710,9 +708,7 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
     const bookingsRef = collection(db, 'bookings')
     
     // Query pentru rezervările care se termină în data selectată sau viitoare (dacă includeFuture=true)
-    const constraints: any[] = [
-      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site'])
-    ]
+    const constraints: any[] = []
     if (includeFuture) {
       constraints.push(where('endDate', '>=', selectedDate))
       constraints.push(orderBy('endDate', 'asc'))
