@@ -47,6 +47,14 @@ class OblioInvoiceService {
     this.config = config;
   }
 
+  private invalidateCachedToken(reason?: string) {
+    try {
+      console.warn("⚠️ Oblio token cache invalidated", { reason: reason || "unknown" })
+    } catch {}
+    this.accessToken = null
+    this.tokenExpires = 0
+  }
+
   // 1. Autentificare și obținere token
   private async authenticate(): Promise<string> {
     if (this.accessToken && Date.now() < this.tokenExpires) {
@@ -95,10 +103,20 @@ class OblioInvoiceService {
     } catch (error) {
       console.error('❌ Oblio authentication error:', error);
       // Resetează cache-ul în caz de eroare
-      this.accessToken = null;
-      this.tokenExpires = 0;
+      this.invalidateCachedToken("authenticate_error")
       throw error;
     }
+  }
+
+  private async postInvoice(token: string, oblioInvoiceData: any) {
+    return await fetch('https://www.oblio.eu/api/docs/invoice', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(oblioInvoiceData),
+    })
   }
 
   // 2. Generare factură în Oblio
@@ -107,23 +125,31 @@ class OblioInvoiceService {
       console.log('🧾 Generând factură Oblio pentru rezervarea:', invoiceData.bookingId);
       console.log('📧 Oblio va trimite automat factura pe email:', invoiceData.clientEmail);
 
-      const token = await this.authenticate();
-
       // Pregătire date pentru Oblio API
       const oblioInvoiceData = this.prepareInvoiceData(invoiceData);
 
-      const response = await fetch('https://www.oblio.eu/api/docs/invoice', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(oblioInvoiceData),
-      });
+      // First attempt (may use cached token)
+      let token = await this.authenticate();
+      let response = await this.postInvoice(token, oblioInvoiceData)
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(`Oblio API error: ${response.status} - ${errorText}`);
+
+        // Minimal fix: if token expired, invalidate cache, re-auth, and retry ONCE.
+        if (response.status === 401 && /expired/i.test(errorText)) {
+          console.warn("🔁 Oblio invoice request got 401 expired token. Retrying once after re-auth...", {
+            bookingId: invoiceData.bookingId,
+          })
+          this.invalidateCachedToken("401_expired")
+          token = await this.authenticate()
+          response = await this.postInvoice(token, oblioInvoiceData)
+          if (!response.ok) {
+            const retryText = await response.text()
+            throw new Error(`Oblio API error (after retry): ${response.status} - ${retryText}`);
+          }
+        } else {
+          throw new Error(`Oblio API error: ${response.status} - ${errorText}`);
+        }
       }
 
       const result: OblioAPIResponse = await response.json();
