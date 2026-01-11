@@ -17,14 +17,38 @@ setGlobalOptions({
  * - now > startDate + startTime + 3h
  */
 exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
-  const PAY_ON_SITE_TIMEOUT_MIN = 180;
   const db = admin.firestore();
   const now = new Date();
   const today = now.toISOString().split("T")[0];
   const bookingsRef = db.collection("bookings");
 
+  // Read single source of truth from Firestore config/reservationSettings
+  let payOnSiteAutoCancelEnabled = true;
+  let payOnSiteAutoCancelMinutes = 180;
+  try {
+    const settingsSnap = await db.doc("config/reservationSettings").get();
+    const data = settingsSnap.exists ? (settingsSnap.data() || {}) : {};
+    payOnSiteAutoCancelEnabled = data.payOnSiteAutoCancelEnabled !== false;
+    const rawMin = Number(data.payOnSiteAutoCancelMinutes ?? 180);
+    payOnSiteAutoCancelMinutes = Number.isFinite(rawMin) && rawMin > 0 ? rawMin : 180;
+  } catch (e) {
+    console.error("autoExitPayOnSite: failed reading reservationSettings, using defaults", e);
+  }
+
+  if (!payOnSiteAutoCancelEnabled) {
+    console.log("autoExitPayOnSite: disabled by config (payOnSiteAutoCancelEnabled=false)");
+    return null;
+  }
+
   const snap = await bookingsRef
-      .where("status", "==", "confirmed_pay_on_site")
+      .where("source", "==", "pay_on_site")
+      .where("status", "in", [
+        "confirmed_pay_on_site",
+        "confirmed",
+        "paid",
+        "confirmed_test",
+        "confirmed_paid",
+      ])
       .where("startDate", "<=", today)
       .limit(300)
       .get();
@@ -38,7 +62,15 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
   for (const docSnap of snap.docs) {
     const b = docSnap.data();
     if (!b.startDate || !b.startTime) continue;
-    if (b.lpr && b.lpr.isInside === true) continue;
+    // Idempotency / already cancelled
+    if (b.status === "cancelled_pay_on_site_timeout") continue;
+    if (b.payOnSiteAutoCancelled === true) continue;
+    if (b.payOnSiteStatus === "cancelled") continue;
+
+    const lpr = b.lpr || {};
+    // IMPORTANT: auto-cancel only for no-show (Intrări), never for cars that arrived.
+    const hasArrived = Boolean(lpr.arrivedAt) || lpr.isInside === true;
+    if (hasArrived) continue;
 
     const startDt = new Date(`${b.startDate}T${b.startTime}:00`);
     if (Number.isNaN(startDt.getTime())) continue;
@@ -46,12 +78,14 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
     const diffMin = Math.round(
         (now.getTime() - startDt.getTime()) / (1000 * 60),
     );
-    if (diffMin <= PAY_ON_SITE_TIMEOUT_MIN) continue;
+    if (diffMin <= payOnSiteAutoCancelMinutes) continue;
 
     const updates = {
       "status": "cancelled_pay_on_site_timeout",
-      "cancelReason": "Auto-exit: peste 3h fără LPR (pay on site)",
-      "autoExitedAt": admin.firestore.FieldValue.serverTimestamp(),
+      "cancelReason": `Auto-cancel pay_on_site: no-show după ${payOnSiteAutoCancelMinutes} minute de la intrare`,
+      "payOnSiteStatus": "cancelled",
+      "payOnSiteAutoCancelled": true,
+      "payOnSiteAutoCancelledAt": admin.firestore.FieldValue.serverTimestamp(),
       "lastUpdated": admin.firestore.FieldValue.serverTimestamp(),
       "lpr.isInside": false,
     };
@@ -95,6 +129,7 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
         id: docSnap.id,
         plate: b.licensePlate,
         diffMin,
+        thresholdMin: payOnSiteAutoCancelMinutes,
       });
     } catch (e) {
       console.error(

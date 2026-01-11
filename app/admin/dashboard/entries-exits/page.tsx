@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
@@ -8,7 +8,7 @@ import { RefreshCw, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
-import { collection, doc, getDocs, orderBy, query, serverTimestamp, updateDoc } from "firebase/firestore"
+import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, updateDoc, where, limit } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -29,7 +29,6 @@ type EnrichedRow = DailyEntryExit & {
   isOnlinePaid?: boolean
 }
 
-const PAY_ON_SITE_CANCEL_AFTER_MIN = 180 // 3h
 const LATE_FEE_PER_DAY = 30 // lei / zi întârziere (online)
 const ONLINE_GRACE_MINUTES = 60 // 1h bonus la ultima zi (online)
 
@@ -114,18 +113,6 @@ function getScheduledSortKey(row: Partial<EnrichedRow>, kind: "entry" | "exit", 
   return Number.MAX_SAFE_INTEGER - Math.min(999_999, t.length)
 }
 
-async function autoCancelPayOnSite(id: string) {
-  try {
-    await updateDoc(doc(db, "bookings", id), {
-      status: "cancelled_pay_on_site_timeout",
-      lastUpdated: serverTimestamp(),
-      cancelReason: "Depășire 3h la plată la parcare (auto)"
-    })
-  } catch (e) {
-    console.error("Failed to auto-cancel pay_on_site booking", e)
-  }
-}
-
 export default function EntriesExitsPage() {
   const { toast } = useToast()
   const { user, isAdmin } = useAuth()
@@ -139,6 +126,7 @@ export default function EntriesExitsPage() {
   const [entries, setEntries] = useState<DailyEntryExit[]>([])
   const [exits, setExits] = useState<DailyEntryExit[]>([])
   const [loading, setLoading] = useState(false)
+  const loadingRef = useRef(false)
   const [currentTime, setCurrentTime] = useState("")
   const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
   const [entriesView, setEntriesView] = useState<"both" | "main" | "late">("both")
@@ -192,6 +180,17 @@ export default function EntriesExitsPage() {
     return () => clearInterval(id)
   }, [])
 
+  // Auto-refresh data every minute (skip when tab is hidden; avoid overlapping requests)
+  useEffect(() => {
+    if (!isClient) return
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return
+      loadData()
+    }, 60000)
+    return () => clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isClient, selectedDate, includeFuture])
+
   const openManualLprDialog = (row: EnrichedRow, kind: ManualLprKind) => {
     const fallbackDate =
       kind === "entry" ? (row.startDate ?? selectedDate) : (row.endDate ?? selectedDate)
@@ -221,6 +220,108 @@ export default function EntriesExitsPage() {
     const iso = `${d}T${t.length === 5 ? `${t}:00` : t}Z`
     const parsed = new Date(iso)
     return Number.isNaN(parsed.getTime()) ? null : iso
+  }
+
+  const isOnlinePaidBooking = (raw: any): boolean => {
+    if (!raw) return false
+    const status = String(raw.status || "")
+    const paymentStatus = String(raw.paymentStatus || "")
+    const source = String(raw.source || "")
+
+    const paid =
+      paymentStatus === "paid" ||
+      status === "confirmed_paid" ||
+      status === "paid" ||
+      status === "confirmed"
+
+    // Exclude non-online sources explicitly
+    if (source === "pay_on_site" || source === "manual" || source === "lpr" || source === "test_mode") return false
+    // Also exclude the pay-on-site status that can appear on non-online flows
+    if (status === "confirmed_pay_on_site") return false
+
+    return paid
+  }
+
+  const fetchCarryOverLateEntries = async (date: string): Promise<DailyEntryExit[]> => {
+    try {
+      const bookingsRef = collection(db, "bookings")
+      const q = query(
+        bookingsRef,
+        where("startDate", "<", date),
+        where("status", "in", ["confirmed_paid", "paid", "confirmed"]),
+        where("lpr.arrivedAt", "==", null),
+        orderBy("startDate", "asc"),
+        orderBy("startTime", "asc"),
+      )
+      const snap = await getDocs(q)
+      const out: DailyEntryExit[] = []
+      snap.forEach((d) => {
+        const b: any = d.data()
+        if (!isOnlinePaidBooking(b)) return
+        const lpr = b.lpr || {}
+        if (lpr?.arrivedAt) return
+        out.push({
+          id: d.id,
+          startDate: b.startDate || undefined,
+          endDate: b.endDate || undefined,
+          time: b.startTime || "N/A",
+          licensePlate: b.licensePlate || "N/A",
+          phone: b.clientPhone || "N/A",
+          numberOfPersons: b.numberOfPersons ? b.numberOfPersons : "N/A",
+          source: b.source || "webhook",
+          bookingStatus: b.status,
+          actualTime: undefined,
+          delayMinutes: undefined,
+          amount: typeof b.amount === "number" ? b.amount : undefined,
+        })
+      })
+      return out
+    } catch (e) {
+      console.error("Error fetching carry-over late entries", e)
+      return []
+    }
+  }
+
+  const fetchCarryOverLateExits = async (date: string): Promise<DailyEntryExit[]> => {
+    try {
+      const bookingsRef = collection(db, "bookings")
+      const q = query(
+        bookingsRef,
+        where("endDate", "<", date),
+        where("status", "in", ["confirmed_paid", "paid", "confirmed"]),
+        where("lpr.isInside", "==", true),
+        orderBy("endDate", "asc"),
+        orderBy("endTime", "asc"),
+      )
+      const snap = await getDocs(q)
+      const out: DailyEntryExit[] = []
+      snap.forEach((d) => {
+        const b: any = d.data()
+        if (!isOnlinePaidBooking(b)) return
+        const lpr = b.lpr || {}
+        if (lpr?.departedAt) return
+        if (lpr?.isInside !== true) return
+        out.push({
+          id: d.id,
+          startDate: b.startDate || undefined,
+          endDate: b.endDate || undefined,
+          time: b.endTime || "N/A",
+          licensePlate: b.licensePlate || "N/A",
+          phone: b.clientPhone || "N/A",
+          numberOfPersons: b.numberOfPersons ? b.numberOfPersons : "N/A",
+          source: b.source || "webhook",
+          bookingStatus: b.status,
+          hasArrived: true,
+          actualTime: undefined,
+          delayMinutes: undefined,
+          amount: typeof b.amount === "number" ? b.amount : undefined,
+        })
+      })
+      return out
+    } catch (e) {
+      console.error("Error fetching carry-over late exits", e)
+      return []
+    }
   }
 
   const saveManualLpr = async () => {
@@ -289,19 +390,38 @@ export default function EntriesExitsPage() {
 
   const loadData = async () => {
     try {
+      if (loadingRef.current) return
+      loadingRef.current = true
       setLoading(true)
-      const [e1, e2] = await Promise.all([
+      const [e1, e2, carryEntries, carryExits] = await Promise.all([
         getDailyEntries(selectedDate, includeFuture),
         getDailyExits(selectedDate, includeFuture)
+        ,
+        fetchCarryOverLateEntries(selectedDate),
+        fetchCarryOverLateExits(selectedDate),
       ])
-      setEntries(e1)
-      setExits(e2)
+
+      const dedupeById = <T extends { id: string }>(rows: T[]): T[] => {
+        const seen = new Set<string>()
+        const out: T[] = []
+        for (const r of rows) {
+          if (!r?.id) continue
+          if (seen.has(r.id)) continue
+          seen.add(r.id)
+          out.push(r)
+        }
+        return out
+      }
+
+      setEntries(dedupeById([...e1, ...carryEntries]))
+      setExits(dedupeById([...e2, ...carryExits]))
     } catch (e) {
       console.error("Error loading entries/exits", e)
       setEntries([])
       setExits([])
     } finally {
       setLoading(false)
+      loadingRef.current = false
     }
   }
 
@@ -335,6 +455,12 @@ export default function EntriesExitsPage() {
       console.error("Error loading prices", e)
       setPriceTable([])
     }
+  }
+
+  const isCancelledOrExpiredStatus = (status?: string) => {
+    const s = String(status || "").toLowerCase()
+    if (!s) return false
+    return s === "expired" || s.includes("cancelled")
   }
 
   const enrichRow = (row: DailyEntryExit, kind: "entry" | "exit"): EnrichedRow => {
@@ -391,6 +517,11 @@ export default function EntriesExitsPage() {
             ? Math.max(0, delay)
             : Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
 
+        // If there is no overdue time, there is no additional amount due right now.
+        // Per UI rules: show only "Achitat" (green) and no sum.
+        if (overdueMin <= 0) {
+          amountDueText = "Achitat"
+        } else {
         // booked days (from booking start/end). Prefer time diff; fallback calendar days.
         const startDate = withDates.startDate
         const startTime = raw.startTime || row.time
@@ -425,11 +556,8 @@ export default function EntriesExitsPage() {
         } else {
           amountDueText = "Calcul conform tarifelor MULTIPARK/WP"
         }
-
-        if (isPayOnSite && overdueMin > PAY_ON_SITE_CANCEL_AFTER_MIN) {
-          autoCancelled = true
-          autoCancelPayOnSite(row.id).catch(() => {})
   }
+
       } else {
         // ONLINE: allowed exit = start + days*24h + grace (60 min)
         const startDateVal = withDates.startDate
@@ -475,40 +603,49 @@ export default function EntriesExitsPage() {
   const enrichedEntries = useMemo(() => entries.map((e) => enrichRow(e, "entry")), [entries])
   const enrichedExits = useMemo(() => exits.map((e) => enrichRow(e, "exit")), [exits])
 
+  const visibleEnrichedEntries = useMemo(
+    () => enrichedEntries.filter((e) => !isCancelledOrExpiredStatus((e as any).bookingStatus)),
+    [enrichedEntries],
+  )
+  const visibleEnrichedExits = useMemo(
+    () => enrichedExits.filter((e) => !isCancelledOrExpiredStatus((e as any).bookingStatus)),
+    [enrichedExits],
+  )
+
   // "Intrări" (main) should list only upcoming entries (not yet arrived via LPR).
   // Entries that already happened (have LPR actualTime) should not appear here.
   const mainEntries = useMemo(() => {
-    const rows = enrichedEntries.filter((e) => !e.isLate && !e.actualTime)
+    const rows = visibleEnrichedEntries.filter((e) => !e.isLate && !e.actualTime)
     return [...rows].sort(
       (a, b) =>
         getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
     )
-  }, [enrichedEntries, selectedDate])
+  }, [visibleEnrichedEntries, selectedDate])
   // "Ieșiri" (main) should list only upcoming exits (not yet departed via LPR).
   // Exits that already happened (have LPR actualTime) should not appear here.
   const mainExits = useMemo(() => {
-    const rows = enrichedExits.filter((e) => !e.isLate && !e.actualTime)
+    const rows = visibleEnrichedExits.filter((e) => e.hasArrived === true && !e.isLate && !e.actualTime)
     return [...rows].sort(
       (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
     )
-  }, [enrichedExits, selectedDate])
+  }, [visibleEnrichedExits, selectedDate])
   // "Intrări întârziate" should list only bookings that are late AND still not arrived (no LPR actualTime yet).
   // Once LPR confirms arrival, it should disappear from this list.
   const lateEntries = useMemo(() => {
-    const rows = enrichedEntries.filter((e) => e.isLate && !e.actualTime)
+    const rows = visibleEnrichedEntries.filter((e) => e.isLate && !e.actualTime)
     return [...rows].sort(
       (a, b) =>
         getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
     )
-  }, [enrichedEntries, selectedDate])
+  }, [visibleEnrichedEntries, selectedDate])
   // "Ieșiri întârziate" should list only bookings that are late AND still not departed (no LPR actualTime yet).
   // Once LPR confirms departure, it should disappear from this list.
   const lateExits = useMemo(() => {
-    const rows = enrichedExits.filter((e) => e.isLate && !e.actualTime)
+    const rows = visibleEnrichedExits.filter((e) => e.hasArrived === true && e.isLate && !e.actualTime)
     return [...rows].sort(
       (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
     )
-  }, [enrichedExits, selectedDate])
+  }, [visibleEnrichedExits, selectedDate])
 
   if (!isClient) return null
 
@@ -603,14 +740,13 @@ export default function EntriesExitsPage() {
                 )}
               {kind === "exit" && (
                 <td className="py-3 px-2">
-                  {row.amountDueText ? (
-                    row.amountDueText.toLowerCase().includes("achitat") ? (
+                  {typeof row.amountDueValue === "number" && row.amountDueValue > 0 ? (
+                    <span className="text-red-700 font-semibold">{row.amountDueText ?? `${row.amountDueValue.toFixed(2)} LEI`}</span>
+                  ) : row.amountDueText?.toLowerCase().includes("achitat") ? (
                       <span className="text-green-700 font-semibold">Achitat</span>
-                    ) : (
-                      <span className="text-red-700 font-semibold">{row.amountDueText}</span>
-                    )
-                  ) : typeof row.amount === "number" ? (
-                    <span className="text-red-700 font-semibold">{row.amount.toFixed(2)} LEI</span>
+                  ) : row.amountDueText ? (
+                    // Non-numeric info (e.g. "Calcul conform...") should not be highlighted as debt
+                    <span className="text-gray-900">{row.amountDueText}</span>
                   ) : row.isOnlinePaid ? (
                     <span className="text-green-700 font-semibold">Achitat</span>
                   ) : (
@@ -692,12 +828,12 @@ export default function EntriesExitsPage() {
                 <>
                   <div className="text-muted-foreground">De plată</div>
                   <div className="text-right text-gray-900">
-                    {row.amountDueText
-                      ? row.amountDueText.toLowerCase().includes("achitat")
+                    {typeof row.amountDueValue === "number" && row.amountDueValue > 0
+                      ? <span className="text-red-700 font-semibold">{row.amountDueText ?? `${row.amountDueValue.toFixed(2)} LEI`}</span>
+                      : row.amountDueText?.toLowerCase().includes("achitat")
                         ? <span className="text-green-700 font-semibold">Achitat</span>
-                        : <span className="text-red-700 font-semibold">{row.amountDueText}</span>
-                      : typeof row.amount === "number"
-                        ? <span className="text-red-700 font-semibold">{row.amount.toFixed(2)} LEI</span>
+                        : row.amountDueText
+                          ? <span className="text-gray-900">{row.amountDueText}</span>
                         : row.isOnlinePaid
                           ? <span className="text-green-700 font-semibold">Achitat</span>
                           : "-"

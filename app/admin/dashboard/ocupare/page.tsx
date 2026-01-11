@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -73,6 +73,7 @@ export default function OccupancyPage() {
   } | null>(null)
   const initialTab = searchParams.get("tab") === "forecast" ? "forecast" : "live"
   const [activeTab, setActiveTab] = useState<"live" | "forecast">(initialTab as "live" | "forecast")
+  const [plateSearch, setPlateSearch] = useState("")
 
   const fetchData = async () => {
     setLoading(true)
@@ -192,6 +193,14 @@ export default function OccupancyPage() {
 
   const lprCount = data?.plates?.length ?? 0 // strict: count from lpr.isInside==true
   const maxLimit = data?.maxLimit ?? 0
+
+  const normalizePlate = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "")
+  const filteredPlates = useMemo(() => {
+    const plates = data?.plates ?? []
+    const q = normalizePlate(plateSearch.trim())
+    if (!q) return plates
+    return plates.filter((p) => normalizePlate(p.licensePlate || "").includes(q))
+  }, [data?.plates, plateSearch])
 
   const performSetAllOutside = async () => {
     setResetting(true)
@@ -416,6 +425,20 @@ export default function OccupancyPage() {
               <CardTitle>Numarul total al masinilor prezente in parecare/grad ocupare</CardTitle>
             </CardHeader>
             <CardContent className="overflow-x-auto">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
+                <div className="w-full md:max-w-sm">
+                  <Input
+                    value={plateSearch}
+                    onChange={(e) => setPlateSearch(e.target.value)}
+                    placeholder="Caută număr de înmatriculare..."
+                  />
+                </div>
+                {!loading && (
+                  <div className="text-xs text-muted-foreground">
+                    Afișate: <span className="font-semibold">{filteredPlates.length}</span> / {lprCount}
+                  </div>
+                )}
+              </div>
               {loading ? (
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -423,6 +446,8 @@ export default function OccupancyPage() {
                 </div>
               ) : (data?.plates?.length ?? 0) === 0 ? (
                 <p className="text-sm text-muted-foreground">Nicio mașină prezentă.</p>
+              ) : filteredPlates.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Niciun rezultat pentru căutarea curentă.</p>
               ) : (
                 <table className="w-full text-sm">
                   <thead>
@@ -434,7 +459,7 @@ export default function OccupancyPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {data?.plates?.map((p) => {
+                    {filteredPlates.map((p) => {
                       const pay = paymentInfo(p.paymentStatus)
                       const startLabel = `${p.startDate || "-"}${p.startTime ? ` ${p.startTime}` : ""}`
                       const endLabel = `${p.endDate || "-"}${p.endTime ? ` ${p.endTime}` : ""}`

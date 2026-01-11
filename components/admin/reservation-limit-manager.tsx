@@ -32,11 +32,13 @@ export function ReservationLimitManager() {
   const [lprInsideCount, setLprInsideCount] = useState<number | null>(null)
   const [payOnSiteCancelMinutes, setPayOnSiteCancelMinutes] = useState<number | null>(null)
   const [payOnSiteCancelMinutesInput, setPayOnSiteCancelMinutesInput] = useState("")
+  const [payOnSiteAutoCancelEnabled, setPayOnSiteAutoCancelEnabled] = useState<boolean | null>(null)
 
   // flags
   const [loadingSettings, setLoadingSettings] = useState(true)
   const [savingLimit, setSavingLimit] = useState(false)
   const [savingToggle, setSavingToggle] = useState(false)
+  const [savingPayOnSiteAutoCancelToggle, setSavingPayOnSiteAutoCancelToggle] = useState(false)
 
   // refs pentru focus‑handling
   const hasLoadedOnce = useRef(false)
@@ -53,10 +55,12 @@ export function ReservationLimitManager() {
         const dbLimit = data.maxTotalReservations ?? 0
         const dbEnabled = data.reservationsEnabled ?? true
         const dbPayOnSiteMinutes = data.payOnSiteAutoCancelMinutes ?? 180
+        const dbPayOnSiteAutoCancelEnabled = data.payOnSiteAutoCancelEnabled ?? true
 
         setCurrentLimit(dbLimit)
         setReservationsEnabled(dbEnabled)
         setPayOnSiteCancelMinutes(dbPayOnSiteMinutes)
+        setPayOnSiteAutoCancelEnabled(dbPayOnSiteAutoCancelEnabled)
 
         if (!hasLoadedOnce.current && !userTyped.current) {
           setMaxInput(dbLimit.toString())
@@ -218,6 +222,30 @@ export function ReservationLimitManager() {
     }
   }
 
+  const togglePayOnSiteAutoCancelEnabled = async (enabled: boolean) => {
+    const prev = payOnSiteAutoCancelEnabled
+    setPayOnSiteAutoCancelEnabled(enabled)
+    setSavingPayOnSiteAutoCancelToggle(true)
+
+    try {
+      await setDoc(
+        doc(db, "config", "reservationSettings"),
+        { payOnSiteAutoCancelEnabled: enabled },
+        { merge: true },
+      )
+      toast({
+        title: "Succes",
+        description: `Anularea automată pentru Plată la Parcare a fost ${enabled ? "activată" : "dezactivată"}.`,
+      })
+    } catch (err) {
+      console.error(err)
+      setPayOnSiteAutoCancelEnabled(prev)
+      toast({ title: "Eroare", description: "Nu s-a putut actualiza statusul.", variant: "destructive" })
+    } finally {
+      setSavingPayOnSiteAutoCancelToggle(false)
+    }
+  }
+
   /**
    * Cleanup manual pentru rezervările expirate
    */
@@ -329,6 +357,22 @@ export function ReservationLimitManager() {
           />
         </div>
 
+        {/* PayOnSite auto-cancel Toggle */}
+        <div className="flex items-center justify-between">
+          <div className="space-y-1">
+            <Label htmlFor="payonsite-autocancel-enabled">Auto-anulare „Plată la Parcare”</Label>
+            <p className="text-sm text-muted-foreground">
+              Dezactivează complet sistemul de anulare automată pentru rezervările cu Plată la Parcare.
+            </p>
+          </div>
+          <Switch
+            id="payonsite-autocancel-enabled"
+            checked={payOnSiteAutoCancelEnabled ?? true}
+            onCheckedChange={togglePayOnSiteAutoCancelEnabled}
+            disabled={loadingSettings || savingPayOnSiteAutoCancelToggle}
+          />
+        </div>
+
         {/* Current Status */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <OccupancyCounter 
@@ -388,7 +432,7 @@ export function ReservationLimitManager() {
           </div>
           <p className="text-sm text-muted-foreground">
             După acest număr de minute peste ora de ieșire, rezervările cu <strong>Plată la Parcare</strong> vor fi
-            anulate automat de endpoint-ul de cron.
+            anulate automat de funcția Firebase (dacă anularea automată este activată).
           </p>
         </div>
 

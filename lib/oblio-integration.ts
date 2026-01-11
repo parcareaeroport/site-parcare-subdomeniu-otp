@@ -148,7 +148,7 @@ class OblioInvoiceService {
             throw new Error(`Oblio API error (after retry): ${response.status} - ${retryText}`);
           }
         } else {
-          throw new Error(`Oblio API error: ${response.status} - ${errorText}`);
+        throw new Error(`Oblio API error: ${response.status} - ${errorText}`);
         }
       }
 

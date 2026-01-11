@@ -46,6 +46,8 @@ export interface DailyEntryExit {
   startDate?: string
   endDate?: string
   bookingStatus?: string
+  // For exits list: whether the car actually entered the parking (LPR arrivedAt or isInside)
+  hasArrived?: boolean
 }
 
 // Noi interfețe pentru statisticile suplimentare
@@ -758,6 +760,7 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
         source,
         bookingStatus: booking.status,
+        hasArrived: Boolean(lpr.arrivedAt) || lpr.isInside === true,
         actualTime,
         delayMinutes,
         amount: typeof booking.amount === 'number' ? booking.amount : undefined,

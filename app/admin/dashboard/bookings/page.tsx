@@ -6,7 +6,7 @@ import { AlertTitle } from "@/components/ui/alert"
 
 import { Alert } from "@/components/ui/alert"
 
-import { useState, useEffect, Suspense, useCallback } from "react"
+import { useState, useEffect, Suspense, useCallback, useRef } from "react"
 import {
   collection,
   getDocs,
@@ -29,7 +29,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -44,7 +44,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import type { DateRange } from "react-day-picker"
 import { format as formatDateFn, parseISO, subDays, startOfDay, endOfDay, differenceInCalendarDays } from "date-fns" // Renamed to avoid conflict
 import { ro } from "date-fns/locale"
-import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail, Info, Trash2 } from "lucide-react"
+import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, RefreshCw, Mail, Info, Trash2, Pencil } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/context/auth-context"
@@ -71,6 +71,9 @@ import {
 interface Booking {
   id: string // Firestore document ID
   licensePlate: string
+  originalLicensePlate?: string
+  licensePlateUpdatedAt?: Timestamp
+  licensePlateUpdatedByEmail?: string | null
   clientName?: string
   clientEmail?: string
   clientPhone?: string
@@ -133,6 +136,7 @@ interface Booking {
   manualEmailCount?: number
   lastEmailError?: string
   payOnSiteStatus?: "pending" | "paid" | "cancelled" // Adaugă status special pentru pay-on-site
+  payOnSiteAutoCancelled?: boolean
 }
 
 type PriceEntry = {
@@ -176,6 +180,15 @@ function BookingsPageContent() {
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [bookingToDelete, setBookingToDelete] = useState<Booking | null>(null)
+  const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false)
+  const [isCancellingLocalBooking, setIsCancellingLocalBooking] = useState(false)
+  const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null)
+  const [cancelReasonInput, setCancelReasonInput] = useState("")
+
+  const [isEditPlateDialogOpen, setIsEditPlateDialogOpen] = useState(false)
+  const [bookingToEditPlate, setBookingToEditPlate] = useState<Booking | null>(null)
+  const [newPlateInput, setNewPlateInput] = useState("")
+  const [savingPlate, setSavingPlate] = useState(false)
 
   // Manual LPR event (admin fallback): write as if it came from LPR API (lpr_events + gateEvents + booking lpr.*)
   const [isManualLprDialogOpen, setIsManualLprDialogOpen] = useState(false)
@@ -499,12 +512,24 @@ function BookingsPageContent() {
               const d = typeof val?.toDate === "function" ? val.toDate() : new Date(val)
               return isNaN(d.getTime()) ? undefined : formatDateFn(d, "yyyy-MM-dd")
             }
+            const normalizeTimeKey = (val: any) => {
+              if (!val) return undefined
+              const d = typeof val?.toDate === "function" ? val.toDate() : new Date(val)
+              if (isNaN(d.getTime())) return undefined
+              // IMPORTANT: keep consistent with how admin UI treats LPR clock (UTC clock)
+              return d.toISOString().slice(11, 16)
+            }
             const arrivedKey = normalizeDateKey(lpr.arrivedAt)
             const departedKey = normalizeDateKey(lpr.departedAt)
+            const arrivedTimeKey = normalizeTimeKey(lpr.arrivedAt)
+            const departedTimeKey = normalizeTimeKey(lpr.departedAt)
             if (!raw.startDate && arrivedKey) raw.startDate = arrivedKey
             if (!raw.endDate && departedKey) raw.endDate = departedKey
             if (!raw.startDate && raw.endDate) raw.startDate = raw.endDate
             if (!raw.endDate && raw.startDate) raw.endDate = raw.startDate
+            // Also complete start/end time from LPR if missing (needed for correct day/value calculations)
+            if (!raw.startTime && arrivedTimeKey) raw.startTime = arrivedTimeKey
+            if (!raw.endTime && departedTimeKey) raw.endTime = departedTimeKey
 
             // Calculează și marchează depășirea pragului pentru pay_on_site (minute după START, dacă nu a intrat prin LPR)
             try {
@@ -558,8 +583,10 @@ function BookingsPageContent() {
 
   useEffect(() => {
     if (!authLoading && user) {
-      fetchBookings(dateRange)
-      loadPrices()
+      ;(async () => {
+        await fetchBookings(dateRange)
+        await loadPrices()
+      })()
     } else if (!authLoading && !user) {
       setIsLoading(false)
     }
@@ -714,12 +741,13 @@ function BookingsPageContent() {
   // filteredBookings is exactly what the table uses (before pagination).
   const statsBookings = filteredBookings
 
-  const totalCount = statsBookings.length
-
   const isLostBooking = (b: Booking) => {
     const s = String(b.status || "").toLowerCase()
     return s === "expired" || s.includes("cancelled") || s.includes("anulat") || s.includes("api_error_cancel")
   }
+
+  const activeBookingsForCards = statsBookings.filter((b) => !isLostBooking(b))
+  const totalCount = activeBookingsForCards.length
 
   const isPayOnSiteBooking = (b: Booking) =>
     b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
@@ -752,12 +780,18 @@ function BookingsPageContent() {
   // "LPR fără rezervare" refers strictly to unmatched placeholder rows (created when a car enters without any booking).
   // LPR-completed bookings can keep source="lpr" but must NOT be treated as "fără rezervare".
   const isLprWithoutReservation = (b: Booking) => b.status === "unmatched_lpr"
+  const isLprNoReservationCompleted = (b: Booking) => {
+    if (!isLprWithoutReservation(b)) return false
+    const lpr: any = (b as any)?.lpr || {}
+    return Boolean(lpr?.departedAt)
+  }
+  const isLprNoReservationOpen = (b: Booking) => isLprWithoutReservation(b) && !isLprNoReservationCompleted(b)
 
   // Split (based on the filtered table = createdAt interval + other filters)
   const onlineTotalCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlineBooking(b)).length
   const onlineReceivedCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b)).length
   const onlineTotalValue = statsBookings
-    .filter((b) => isOnlineBooking(b))
+    .filter((b) => !isLostBooking(b) && isOnlineBooking(b))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
   const onlineReceivedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b))
@@ -766,27 +800,31 @@ function BookingsPageContent() {
 
   // Pay-on-site: show all in-table pay_on_site count (even those over threshold),
   // and also how many are over threshold / auto-cancelled. Value remains computed for non-lost ones only.
-  const payOnSiteTotalCount = statsBookings.filter((b) => isPayOnSiteBooking(b)).length
-  const payOnSiteOverThresholdCount = statsBookings.filter((b) => isPayOnSiteOverThreshold(b)).length
+  const payOnSiteTotalCount = statsBookings.filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b)).length
+  const payOnSiteOverThresholdCount = statsBookings.filter((b) => !isLostBooking(b) && isPayOnSiteOverThreshold(b)).length
 
   const payOnSiteEstimatedCount = statsBookings.filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b)).length
   const payOnSiteEstimatedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
   const payOnSiteTotalValue = statsBookings
-    .filter((b) => isPayOnSiteBooking(b))
+    .filter((b) => !isLostBooking(b) && isPayOnSiteBooking(b))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   const manualPaidCount = statsBookings.filter((b) => !isLostBooking(b) && isManualPaidBooking(b)).length
   const manualPaidValue = statsBookings
     .filter((b) => !isLostBooking(b) && isManualPaidBooking(b))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
-  const manualTotalCount = statsBookings.filter((b) => b.source === "manual").length
+  const manualTotalCount = statsBookings.filter((b) => !isLostBooking(b) && b.source === "manual").length
   const manualTotalValue = statsBookings
-    .filter((b) => b.source === "manual")
+    .filter((b) => !isLostBooking(b) && b.source === "manual")
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
-  const lprNoReservationCount = statsBookings.filter((b) => isLprWithoutReservation(b)).length
+  const lprNoReservationCount = statsBookings.filter((b) => !isLostBooking(b) && isLprWithoutReservation(b)).length
+  const lprNoReservationCompletedCount = statsBookings.filter((b) => !isLostBooking(b) && isLprNoReservationCompleted(b)).length
+  const lprNoReservationCompletedValue = statsBookings
+    .filter((b) => !isLostBooking(b) && isLprNoReservationCompleted(b))
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
   const lostCount = statsBookings.filter((b) => isLostBooking(b)).length
   const billableCount = statsBookings.filter(
     (b) =>
@@ -800,7 +838,7 @@ function BookingsPageContent() {
   // "Valoare totală (potențială)" pentru toate rezervările din tabel (except LPR fără rezervare),
   // inclusiv Plată la parcare auto-anulată, ca să fie "calculat pentru toate 36".
   const totalPotentialValue = statsBookings
-    .filter((b) => !isLprWithoutReservation(b))
+    .filter((b) => !isLostBooking(b) && (!isLprWithoutReservation(b) || isLprNoReservationCompleted(b)))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   const handleViewBooking = (booking: Booking) => {
@@ -977,6 +1015,154 @@ function BookingsPageContent() {
       })
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  const handleCancelLocalBooking = async () => {
+    if (!isAdmin) {
+      toast({
+        title: "Acces restricționat",
+        description: "Doar administratorii pot anula rezervări din admin (local).",
+        variant: "destructive",
+      })
+      return
+    }
+    if (!bookingToCancel?.id) return
+    setIsCancellingLocalBooking(true)
+    try {
+      const bookingRef = doc(db, "bookings", bookingToCancel.id)
+      const updates: Record<string, any> = {
+        status: "cancelled_by_admin",
+        cancelledAt: serverTimestamp(),
+        cancelReason: cancelReasonInput.trim() || "Anulat local din admin",
+        lastUpdated: serverTimestamp(),
+      }
+      if (bookingToCancel.source === "pay_on_site") {
+        updates.payOnSiteStatus = "cancelled"
+      }
+      await updateDoc(bookingRef, updates)
+
+      // Send cancellation confirmation email to client (if available)
+      if (bookingToCancel.clientEmail) {
+        try {
+          const res = await fetch("/api/admin/bookings/send-cancel-confirmation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              bookingId: bookingToCancel.id,
+              reason: cancelReasonInput.trim() || undefined,
+            }),
+          })
+          const json = await res.json().catch(() => null)
+          if (!res.ok) {
+            throw new Error(json?.error || `HTTP ${res.status}`)
+          }
+          toast({
+            title: "Anulată",
+            description: "Rezervarea a fost anulată, iar emailul de confirmare a fost trimis clientului.",
+          })
+        } catch (e) {
+          console.error("Cancel confirmation email failed", e)
+          toast({
+            title: "Anulată (email eșuat)",
+            description: "Rezervarea a fost anulată, dar emailul către client nu a putut fi trimis.",
+            variant: "destructive",
+          })
+        }
+      } else {
+        toast({
+          title: "Anulată",
+          description: "Rezervarea a fost anulată. (Clientul nu are email în rezervare.)",
+        })
+      }
+
+      // Refresh UI
+      await fetchBookings()
+      if (selectedBooking?.id === bookingToCancel.id) {
+        setSelectedBooking((prev) => (prev ? { ...prev, status: "cancelled_by_admin" } : prev))
+      }
+      setIsCancelDialogOpen(false)
+      setBookingToCancel(null)
+      setCancelReasonInput("")
+    } catch (e) {
+      console.error("Local cancel failed", e)
+      toast({
+        title: "Eroare",
+        description: "Nu am putut anula rezervarea.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsCancellingLocalBooking(false)
+    }
+  }
+
+  const handleSaveNewLicensePlate = async () => {
+    if (!bookingToEditPlate?.id) return
+    if (!user) return
+    const normalized = normalizeLicensePlate(newPlateInput || "").toUpperCase().trim()
+    if (!normalized) {
+      toast({
+        title: "Număr invalid",
+        description: "Completează un număr de înmatriculare valid.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const current = String(bookingToEditPlate.licensePlate || "").trim()
+    if (normalizeLicensePlate(current).toUpperCase().trim() === normalized) {
+      toast({
+        title: "Nicio schimbare",
+        description: "Numărul nou este identic cu cel curent.",
+      })
+      return
+    }
+
+    setSavingPlate(true)
+    try {
+      const updates: Record<string, any> = {
+        licensePlate: normalized,
+        licensePlateUpdatedAt: serverTimestamp(),
+        licensePlateUpdatedByEmail: user.email || null,
+        lastUpdated: serverTimestamp(),
+      }
+      if (!bookingToEditPlate.originalLicensePlate) {
+        updates.originalLicensePlate = bookingToEditPlate.licensePlate || ""
+      }
+      // Firebase-only update
+      await updateDoc(doc(db, "bookings", bookingToEditPlate.id), updates)
+
+      toast({
+        title: "Salvat",
+        description: `Nr. înmatriculare a fost schimbat în ${normalized}.`,
+      })
+
+      // Update local UI state
+      if (selectedBooking?.id === bookingToEditPlate.id) {
+        setSelectedBooking((prev) =>
+          prev
+            ? ({
+                ...prev,
+                licensePlate: normalized,
+                originalLicensePlate: prev.originalLicensePlate || bookingToEditPlate.licensePlate,
+              } as any)
+            : prev,
+        )
+      }
+
+      await fetchBookings()
+      setIsEditPlateDialogOpen(false)
+      setBookingToEditPlate(null)
+      setNewPlateInput("")
+    } catch (e) {
+      console.error("License plate update failed", e)
+      toast({
+        title: "Eroare",
+        description: "Nu am putut salva numărul de înmatriculare.",
+        variant: "destructive",
+      })
+    } finally {
+      setSavingPlate(false)
     }
   }
 
@@ -1550,9 +1736,11 @@ function BookingsPageContent() {
       case "confirmed_pay_on_site":
         return <Badge className="bg-orange-100 text-orange-800">Plată la parcare</Badge>
       case "cancelled_by_admin":
-        return <Badge className="bg-red-100 text-red-800">Anulat (Admin)</Badge>
+        return <Badge className="bg-red-100 text-red-800">ANULATĂ</Badge>
       case "cancelled_by_api":
         return <Badge className="bg-red-100 text-red-800">Anulat (API)</Badge>
+      case "cancelled_pay_on_site_timeout":
+        return <Badge className="bg-red-100 text-red-800">Anulat auto (Plată la parcare)</Badge>
       case "api_error":
         return <Badge className="bg-orange-100 text-orange-800">Eroare API</Badge>
       case "expired":
@@ -1584,7 +1772,7 @@ function BookingsPageContent() {
 
   const getPayOnSiteStatusBadge = (booking: Booking) => {
     // Verifică dacă rezervarea a fost anulată
-    if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin") {
+    if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin" || booking.status === "cancelled_pay_on_site_timeout") {
       return <Badge className="bg-red-500 text-white">Neplatit</Badge>
     }
     const isPaid = booking.paymentStatus === "paid"
@@ -1604,7 +1792,7 @@ function BookingsPageContent() {
     // Pentru rezervările cu plată la parcare, afișăm dropdown-ul editabil
     if (isPayOnSiteBooking(booking)) {
       // Dacă rezervarea este anulată, afișăm doar badge-ul fără dropdown
-      if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin") {
+      if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin" || booking.status === "cancelled_pay_on_site_timeout") {
         return getPayOnSiteStatusBadge(booking)
       }
       
@@ -1724,7 +1912,7 @@ function BookingsPageContent() {
      
         </div>
         <div className="flex gap-2">
-          {user && (
+          {user && isAdmin && (
             <Button 
               onClick={() => setIsManualDialogOpen(true)}
               variant="default"
@@ -1747,6 +1935,7 @@ function BookingsPageContent() {
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
               Total
+              {isAdmin && (
               <TooltipProvider delayDuration={150}>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1784,17 +1973,19 @@ function BookingsPageContent() {
 
                       <div className="mt-2 text-muted-foreground">
                         În tabel: {totalCount} rânduri (LPR fără rezervare: {lprNoReservationCount}, anulate/expirate: {lostCount}).
-                        LPR fără rezervare nu intră în valoare (doar număr).
+                        LPR fără rezervare intră în valoare doar după ieșire.
                       </div>
                     </div>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
+              )}
             </CardTitle>
             <CardDescription className="text-xs">Total rezervări în interval</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{totalCount}</div>
+            {isAdmin && (
             <p className="text-xs text-muted-foreground">
               Valoare totală:{" "}
               <span className="font-semibold">
@@ -1804,6 +1995,7 @@ function BookingsPageContent() {
                 <span className="ml-2 text-[10px] text-gray-500">(se calculează tarifele…)</span>
               )}
             </p>
+            )}
             
           </CardContent>
         </Card>
@@ -1813,12 +2005,14 @@ function BookingsPageContent() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-700">{onlineTotalCount}</div>
+            {isAdmin && (
             <p className="text-xs text-muted-foreground">
               Încasat:{" "}
               <span className="font-semibold text-green-700">
                 {onlineReceivedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
             </p>
+            )}
             <p className="text-[11px] text-muted-foreground">
               Achitate: <span className="font-semibold">{onlineReceivedCount}</span> · Neplătite:{" "}
               <span className="font-semibold">{onlineUnpaidCount}</span>
@@ -1833,12 +2027,14 @@ function BookingsPageContent() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-orange-700">{payOnSiteTotalCount}</div>
+            {isAdmin && (
             <p className="text-xs text-muted-foreground">
               Valoare totală:{" "}
               <span className="font-semibold text-orange-700">
                 {payOnSiteTotalValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
             </p>
+            )}
             
            
           </CardContent>
@@ -1850,28 +2046,39 @@ function BookingsPageContent() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-700">{manualPaidCount}</div>
+            {isAdmin && (
             <p className="text-xs text-muted-foreground">
               Valoare totală:{" "}
               <span className="font-semibold text-blue-700">
                 {manualPaidValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
               </span>
             </p>
+            )}
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">LPR fără rezervare</CardTitle>
-            <CardDescription className="text-xs">Doar număr</CardDescription>
+            <CardDescription className="text-xs">Număr + valoare doar după ieșire</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-purple-700">{lprNoReservationCount}</div>
-            <p className="text-xs text-muted-foreground">
-              Valoare totală: <span className="font-semibold">—</span>
+            <p className="text-[11px] text-muted-foreground">
+              Ieșite (cu valoare): <span className="font-semibold">{lprNoReservationCompletedCount}</span>
             </p>
+            {isAdmin && (
+            <p className="text-xs text-muted-foreground">
+                Valoare totală (doar ieșite):{" "}
+                <span className="font-semibold text-purple-700">
+                  {lprNoReservationCompletedValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+                </span>
+            </p>
+            )}
           </CardContent>
         </Card>
       </div>
 
+      {isAdmin && (
       <div className="flex items-center justify-end">
         <Button
           type="button"
@@ -1882,8 +2089,9 @@ function BookingsPageContent() {
           {showCalcExplanation ? "Ascunde explicație calcule" : "Vezi explicație calcule"}
         </Button>
       </div>
+      )}
 
-      {showCalcExplanation && (
+      {isAdmin && showCalcExplanation && (
         <Card className="bg-slate-50 border-slate-200">
           <CardContent className="py-4 text-sm text-slate-700">
             Pentru intervalul selectat, sistemul ia toate rezervările care se suprapun cu perioada aleasă și calculează
@@ -2020,6 +2228,7 @@ function BookingsPageContent() {
                   <TableHead>Perioada</TableHead>
                   <TableHead className="w-64">LPR Intrare / Ieșire</TableHead>
                   <TableHead>Plată</TableHead>
+                <TableHead>Status</TableHead>
                   <TableHead>T&C</TableHead>
                   <TableHead>Creată la</TableHead>
                   <TableHead className="text-right">Acțiuni</TableHead>
@@ -2028,7 +2237,7 @@ function BookingsPageContent() {
               <TableBody>
                 {filteredBookings.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-gray-500">
+                  <TableCell colSpan={10} className="text-center py-8 text-gray-500">
                       Nu s-au găsit rezervări.
                     </TableCell>
                   </TableRow>
@@ -2130,6 +2339,7 @@ function BookingsPageContent() {
                           </div>
                         </TableCell>
                         <TableCell>{renderPaymentStatusCell(booking)}</TableCell>
+                        <TableCell>{getStatusBadge(String(booking.status || ""))}</TableCell>
                         <TableCell className="text-center">
                           {booking.termsAccepted ? (
                             <span className="text-green-600" title="Termeni acceptați">
@@ -2243,6 +2453,43 @@ function BookingsPageContent() {
                                   </DropdownMenuItem>
                                 </>
                               )}
+
+                              {isAdmin && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      setBookingToCancel(booking)
+                                      setCancelReasonInput("")
+                                      setIsCancelDialogOpen(true)
+                                    }}
+                                    disabled={
+                                      String(booking.status || "").toLowerCase().includes("cancelled") ||
+                                      String(booking.status || "").toLowerCase() === "expired"
+                                    }
+                                    className="text-red-700 hover:text-white hover:bg-red-700 focus:text-white focus:bg-red-700"
+                                  >
+                                    <XCircle className="mr-2 h-4 w-4" />
+                                    Anulează rezervarea (Local)
+                                  </DropdownMenuItem>
+                                </>
+                              )}
+
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setBookingToEditPlate(booking)
+                                  setNewPlateInput(booking.licensePlate || "")
+                                  setIsEditPlateDialogOpen(true)
+                                }}
+                                disabled={
+                                  !user ||
+                                  String(booking.status || "").toLowerCase().includes("cancelled") ||
+                                  String(booking.status || "").toLowerCase() === "expired"
+                                }
+                              >
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Modifică nr. înmatriculare
+                              </DropdownMenuItem>
                               
                               {/* NOTA PENTRU AI : urmatoarea sectiune se lasa comentata pentru viitor si ramane asa in caz ca analizezi aceasta sectiune (butonul anulare) */}
 
@@ -2265,26 +2512,6 @@ function BookingsPageContent() {
                                     </DropdownMenuItem>
                                   </>
                                 )} */}
-
-                              {/* Buton anulare pentru rezervările pay-on-site */}
-                              {isAdmin &&
-                                booking.source === "pay_on_site" &&
-                                booking.status !== "cancelled_by_admin" &&
-                                booking.status !== "cancelled_by_api" && (
-                                  <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                      onClick={() => handleCancelPayOnSiteBooking(booking)}
-                                      disabled={isCancellingPayOnSite}
-                                      className="text-red-600 hover:text-white hover:bg-red-600 focus:text-white focus:bg-red-600"
-                                    >
-                                      {isCancellingPayOnSite && cancellingPayOnSiteBookingId === booking.id ? (
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                      ) : null}
-                                      Anulează (Local)
-                                    </DropdownMenuItem>
-                                  </>
-                                )}
 
                               {isAdmin && (
                                 <>
@@ -2388,6 +2615,117 @@ function BookingsPageContent() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog
+        open={isCancelDialogOpen}
+        onOpenChange={(open) => {
+          setIsCancelDialogOpen(open)
+          if (!open) {
+            setBookingToCancel(null)
+            setCancelReasonInput("")
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Anulezi rezervarea?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Această acțiune anulează rezervarea doar în sistemul local (Firebase). După anulare, rezervarea nu va mai
+              apărea în Intrări/Ieșiri și statusul va fi marcat ca ANULATĂ.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-3">
+            <div className="text-sm text-gray-700">
+              <div>
+                <strong>Nr. API / ID:</strong> {bookingToCancel?.apiBookingNumber || bookingToCancel?.id || "-"}
+              </div>
+              <div>
+                <strong>Nr. înmatriculare:</strong> {bookingToCancel?.licensePlate || "-"}
+              </div>
+              <div>
+                <strong>Email client:</strong> {bookingToCancel?.clientEmail || "-"}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cancel-reason">Motiv anulare (opțional)</Label>
+              <Input
+                id="cancel-reason"
+                value={cancelReasonInput}
+                onChange={(e) => setCancelReasonInput(e.target.value)}
+                placeholder="Ex: Client a solicitat anularea"
+                disabled={isCancellingLocalBooking}
+              />
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCancellingLocalBooking}>Renunță</AlertDialogCancel>
+            <AlertDialogAction onClick={handleCancelLocalBooking} disabled={!bookingToCancel || isCancellingLocalBooking}>
+              {isCancellingLocalBooking ? "Se anulează..." : "Anulează"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
+        open={isEditPlateDialogOpen}
+        onOpenChange={(open) => {
+          setIsEditPlateDialogOpen(open)
+          if (!open) {
+            setBookingToEditPlate(null)
+            setNewPlateInput("")
+            setSavingPlate(false)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Modifică număr înmatriculare</DialogTitle>
+            <DialogDescription>
+           În vizualizare detalii se va păstra și numărul original.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="text-sm text-gray-700">
+              <div>
+                <strong>Rezervare:</strong> {bookingToEditPlate?.apiBookingNumber || bookingToEditPlate?.id || "-"}
+              </div>
+              <div>
+                <strong>Nr. curent:</strong> {bookingToEditPlate?.licensePlate || "-"}
+              </div>
+              {bookingToEditPlate?.originalLicensePlate &&
+                bookingToEditPlate.originalLicensePlate !== bookingToEditPlate.licensePlate && (
+                  <div>
+                    <strong>Nr. original:</strong> {bookingToEditPlate.originalLicensePlate}
+                  </div>
+                )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="plate-new">Nr. înmatriculare nou</Label>
+              <Input
+                id="plate-new"
+                value={newPlateInput}
+                onChange={(e) => setNewPlateInput(e.target.value)}
+                placeholder="Ex: B123ABC"
+                disabled={savingPlate}
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsEditPlateDialogOpen(false)}
+              disabled={savingPlate}
+            >
+              Renunță
+            </Button>
+            <Button type="button" onClick={handleSaveNewLicensePlate} disabled={savingPlate || !bookingToEditPlate?.id}>
+              {savingPlate ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Salvează
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={isManualLprDialogOpen}
@@ -2550,8 +2888,14 @@ function BookingsPageContent() {
                     <strong>Status Intern:</strong> {getStatusBadge(selectedBooking.status)}
                   </p>
                   <p>
-                    <strong>Nr. Înmatriculare:</strong> {selectedBooking.licensePlate}
+                    <strong>Nr. Înmatriculare (curent):</strong> {selectedBooking.licensePlate}
                   </p>
+                  {selectedBooking.originalLicensePlate &&
+                    selectedBooking.originalLicensePlate !== selectedBooking.licensePlate && (
+                      <p className="text-xs text-gray-600">
+                        <strong>Nr. Înmatriculare (original):</strong> {selectedBooking.originalLicensePlate}
+                      </p>
+                    )}
                   <p>
                     <strong>Data Intrare:</strong>{" "}
                     {selectedBooking.startDate
@@ -2858,17 +3202,40 @@ function BookingsPageContent() {
             
             {isAdmin &&
               selectedBooking &&
-              selectedBooking.status !== "cancelled_by_admin" &&
-              selectedBooking.status !== "cancelled_by_api" &&
-              selectedBooking.apiBookingNumber &&
-              selectedBooking.source !== "pay_on_site" && (
+              !String(selectedBooking.status || "").toLowerCase().includes("cancelled") &&
+              String(selectedBooking.status || "").toLowerCase() !== "expired" && (
                 <Button
                   variant="destructive"
-                  onClick={() => handleCancelBooking(selectedBooking!)}
-                  disabled={isCancelling}
+                  onClick={() => {
+                    setBookingToCancel(selectedBooking)
+                    setCancelReasonInput("")
+                    setIsCancelDialogOpen(true)
+                  }}
+                  disabled={isCancellingLocalBooking}
                 >
-                  {isCancelling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Anulează Rezervarea (API)
+                  {isCancellingLocalBooking ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <XCircle className="mr-2 h-4 w-4" />
+                  )}
+                  Anulează (Local)
+                </Button>
+              )}
+
+            {selectedBooking &&
+              !String(selectedBooking.status || "").toLowerCase().includes("cancelled") &&
+              String(selectedBooking.status || "").toLowerCase() !== "expired" && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setBookingToEditPlate(selectedBooking)
+                    setNewPlateInput(selectedBooking.licensePlate || "")
+                    setIsEditPlateDialogOpen(true)
+                  }}
+                  disabled={savingPlate}
+                >
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Modifică nr.
                 </Button>
               )}
             <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>
