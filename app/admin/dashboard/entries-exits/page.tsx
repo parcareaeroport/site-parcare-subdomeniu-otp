@@ -495,6 +495,7 @@ export default function EntriesExitsPage() {
     let autoCancelled = false
     const raw: any = row as any
     const isPayOnSite = row.source === "pay_on_site"
+    const isLprUnpaid = row.source === "lpr" || row.bookingStatus === "unmatched_lpr" || raw.status === "unmatched_lpr"
     const isOnlinePaid =
       raw.paymentStatus === "paid" ||
       raw.status === "confirmed_paid" ||
@@ -534,9 +535,9 @@ export default function EntriesExitsPage() {
           }
         }
 
-        // PAY-ON-SITE must always show the payable amount (base price + any extra days) in red.
-        // For other unpaid sources (manual/LPR), keep the existing "Achitat" UI when not overdue.
-        if (!isPayOnSite && overdueMin <= 0) {
+        // PAY-ON-SITE and LPR must always show the payable amount (base price + any extra days) in red.
+        // Only non-LPR unpaid sources (e.g. some manual flows) keep the old "Achitat" UI when not overdue.
+        if (!isPayOnSite && !isLprUnpaid && overdueMin <= 0) {
           amountDueText = "Achitat"
         } else {
           // Extra days billing policy (pay-on-site / unpaid):
