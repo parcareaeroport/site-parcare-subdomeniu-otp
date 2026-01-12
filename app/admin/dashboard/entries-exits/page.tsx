@@ -325,10 +325,10 @@ export default function EntriesExitsPage() {
     const row = manualLpr.row
     if (!row?.id) return
 
-    if (!isAdmin) {
+    if (!user) {
       toast({
         title: "Acces restricționat",
-        description: "Doar administratorii pot seta manual intrarea/ieșirea LPR.",
+        description: "Trebuie să fii autentificat pentru a seta manual intrarea/ieșirea LPR.",
         variant: "destructive",
       })
       return
@@ -979,9 +979,9 @@ export default function EntriesExitsPage() {
             </DialogDescription>
           </DialogHeader>
 
-          {!isAdmin && (
+          {!user && (
             <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-              Doar administratorii pot salva modificări manuale LPR.
+              Trebuie să fii autentificat pentru a salva modificări manuale LPR.
             </div>
           )}
 
@@ -1041,7 +1041,7 @@ export default function EntriesExitsPage() {
               disabled={
                 manualLpr.saving ||
                 !manualLpr.row?.id ||
-                !isAdmin ||
+                !user ||
                 (Boolean(manualLpr.row?.actualTime) && !manualLpr.confirmOverwrite)
               }
             >

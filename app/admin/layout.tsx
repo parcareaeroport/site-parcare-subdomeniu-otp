@@ -28,7 +28,14 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
     }
     
     // Redirect non-admin users trying to access admin-only pages
-    if (user && !isAdmin && pathname !== "/admin/dashboard/bookings" && pathname !== "/admin/dashboard/entries-exits") {
+    // Allow employees to access: Bookings, Entries/Exits, Ocupare.
+    if (
+      user &&
+      !isAdmin &&
+      pathname !== "/admin/dashboard/bookings" &&
+      pathname !== "/admin/dashboard/entries-exits" &&
+      pathname !== "/admin/dashboard/ocupare"
+    ) {
       console.log("[AdminLayoutContent] useEffect: Non-admin user trying to access admin page, redirecting to bookings.")
       router.push("/admin/dashboard/bookings")
     }
@@ -75,6 +82,7 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
     ] : [
       { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
       { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
+      { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
     ]
 
     const SidebarContent = () => (
