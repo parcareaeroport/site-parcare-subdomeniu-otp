@@ -1692,43 +1692,6 @@ function BookingsPageContent() {
     }
   }
 
-  const handleUpdatePayOnSiteStatus = async (booking: Booking, newStatus: string) => {
-    setIsUpdatingPayment(true)
-    setUpdatingPaymentBookingId(booking.id)
-    
-    try {
-      const bookingRef = doc(db, 'bookings', booking.id)
-      await updateDoc(bookingRef, {
-        paymentStatus: newStatus,
-        lastUpdated: serverTimestamp()
-      })
-      
-      const statusLabels = {
-        'pending': 'În așteptare',
-        'paid': 'Plătit la parcare'
-      }
-      
-      toast({
-        title: "Status actualizat",
-        description: `Statusul plății a fost schimbat în "${statusLabels[newStatus as keyof typeof statusLabels]}"`,
-        variant: "default",
-      })
-      
-      // Refresh lista pentru a vedea statusul actualizat
-      await fetchBookings()
-    } catch (error) {
-      console.error("Update payment status error:", error)
-      toast({ 
-        title: "Eroare", 
-        description: "Eroare la actualizarea statusului plății. Încercați din nou.", 
-        variant: "destructive" 
-      })
-    } finally {
-      setIsUpdatingPayment(false)
-      setUpdatingPaymentBookingId(null)
-    }
-  }
-
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "confirmed_paid":
@@ -1791,48 +1754,9 @@ function BookingsPageContent() {
       return getManualPaymentStatusBadge(booking)
     }
     
-    // Pentru rezervările cu plată la parcare, afișăm dropdown-ul editabil
+    // Pentru rezervările cu plată la parcare, afișăm DOAR badge (read-only).
     if (isPayOnSiteBooking(booking)) {
-      // Dacă rezervarea este anulată, afișăm doar badge-ul fără dropdown
-      if (booking.payOnSiteStatus === "cancelled" || booking.status === "cancelled_by_admin" || booking.status === "cancelled_pay_on_site_timeout") {
-        return getPayOnSiteStatusBadge(booking)
-      }
-      
-      return (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="h-auto p-1 hover:bg-transparent"
-              disabled={isUpdatingPayment && updatingPaymentBookingId === booking.id}
-            >
-              {isUpdatingPayment && updatingPaymentBookingId === booking.id ? (
-                <div className="flex items-center">
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                  <span className="text-xs">Actualizare...</span>
-                </div>
-              ) : (
-                getPayOnSiteStatusBadge(booking)
-              )}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem 
-              onClick={() => handleUpdatePayOnSiteStatus(booking, "pending")}
-              disabled={isUpdatingPayment}
-            >
-              <Badge className="bg-red-500 text-white mr-2 w-24 justify-center">Neplatit</Badge>
-            </DropdownMenuItem>
-            <DropdownMenuItem 
-              onClick={() => handleUpdatePayOnSiteStatus(booking, "paid")}
-              disabled={isUpdatingPayment}
-            >
-              <Badge className="bg-green-500 text-white mr-2 w-24 justify-center">Achitat</Badge>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )
+      return getPayOnSiteStatusBadge(booking)
     }
     
     // Pentru rezervările normale (webhook/test), afișăm badge-ul simplu.
