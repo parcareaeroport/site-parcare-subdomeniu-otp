@@ -222,24 +222,21 @@ export default function EntriesExitsPage() {
     return Number.isNaN(parsed.getTime()) ? null : iso
   }
 
-  const isOnlinePaidBooking = (raw: any): boolean => {
-    if (!raw) return false
-    const status = String(raw.status || "")
-    const paymentStatus = String(raw.paymentStatus || "")
-    const source = String(raw.source || "")
-
-    const paid =
-      paymentStatus === "paid" ||
-      status === "confirmed_paid" ||
-      status === "paid" ||
-      status === "confirmed"
-
-    // Exclude non-online sources explicitly
-    if (source === "pay_on_site" || source === "manual" || source === "lpr" || source === "test_mode") return false
-    // Also exclude the pay-on-site status that can appear on non-online flows
-    if (status === "confirmed_pay_on_site") return false
-
-    return paid
+  const isCarryOverEligibleStatus = (raw: any): boolean => {
+    // We only carry over "real" bookings (not cancelled/expired) that operations care about,
+    // regardless of payment method (card/online or pay-on-site).
+    const s = String(raw?.status || "").toLowerCase()
+    if (!s) return false
+    if (s === "expired" || s.includes("cancelled")) return false
+    if (s === "unmatched_lpr") return false
+    // Keep this aligned with Firestore "in" query sets below.
+    return (
+      s === "confirmed_paid" ||
+      s === "paid" ||
+      s === "confirmed" ||
+      s === "confirmed_test" ||
+      s === "confirmed_pay_on_site"
+    )
   }
 
   const fetchCarryOverLateEntries = async (date: string): Promise<DailyEntryExit[]> => {
@@ -248,7 +245,7 @@ export default function EntriesExitsPage() {
       const q = query(
         bookingsRef,
         where("startDate", "<", date),
-        where("status", "in", ["confirmed_paid", "paid", "confirmed"]),
+        where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site"]),
         where("lpr.arrivedAt", "==", null),
         orderBy("startDate", "asc"),
         orderBy("startTime", "asc"),
@@ -257,7 +254,7 @@ export default function EntriesExitsPage() {
       const out: DailyEntryExit[] = []
       snap.forEach((d) => {
         const b: any = d.data()
-        if (!isOnlinePaidBooking(b)) return
+        if (!isCarryOverEligibleStatus(b)) return
         const lpr = b.lpr || {}
         if (lpr?.arrivedAt) return
         out.push({
@@ -288,7 +285,7 @@ export default function EntriesExitsPage() {
       const q = query(
         bookingsRef,
         where("endDate", "<", date),
-        where("status", "in", ["confirmed_paid", "paid", "confirmed"]),
+        where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site"]),
         where("lpr.isInside", "==", true),
         orderBy("endDate", "asc"),
         orderBy("endTime", "asc"),
@@ -297,7 +294,7 @@ export default function EntriesExitsPage() {
       const out: DailyEntryExit[] = []
       snap.forEach((d) => {
         const b: any = d.data()
-        if (!isOnlinePaidBooking(b)) return
+        if (!isCarryOverEligibleStatus(b)) return
         const lpr = b.lpr || {}
         if (lpr?.departedAt) return
         if (lpr?.isInside !== true) return
@@ -517,11 +514,6 @@ export default function EntriesExitsPage() {
             ? Math.max(0, delay)
             : Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
 
-        // If there is no overdue time, there is no additional amount due right now.
-        // Per UI rules: show only "Achitat" (green) and no sum.
-        if (overdueMin <= 0) {
-          amountDueText = "Achitat"
-        } else {
         // booked days (from booking start/end). Prefer time diff; fallback calendar days.
         const startDate = withDates.startDate
         const startTime = raw.startTime || row.time
@@ -542,21 +534,26 @@ export default function EntriesExitsPage() {
           }
         }
 
-        // Extra days billing policy (pay-on-site / unpaid):
-        // The payment terminal charges an additional full day for ANY overdue time past the scheduled end,
-        // so we must round up (ceil) instead of counting only full 24h blocks.
-        // (Example: 3h delay => 1 extra day; 25h delay => 2 extra days.)
-        const extraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
-        const totalDays = Math.max(1, bookedDays + extraDays)
-
-        const totalPrice = getExactPriceForDays(priceTable, totalDays)
-        if (totalPrice !== null && totalPrice > 0) {
-          amountDueValue = totalPrice
-          amountDueText = `${totalPrice.toFixed(2)} LEI`
+        // PAY-ON-SITE must always show the payable amount (base price + any extra days) in red.
+        // For other unpaid sources (manual/LPR), keep the existing "Achitat" UI when not overdue.
+        if (!isPayOnSite && overdueMin <= 0) {
+          amountDueText = "Achitat"
         } else {
-          amountDueText = "Calcul conform tarifelor MULTIPARK/WP"
+          // Extra days billing policy (pay-on-site / unpaid):
+          // The payment terminal charges an additional full day for ANY overdue time past the scheduled end,
+          // so we must round up (ceil) instead of counting only full 24h blocks.
+          // (Example: 3h delay => 1 extra day; 25h delay => 2 extra days.)
+          const extraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
+          const totalDays = Math.max(1, bookedDays + extraDays)
+
+          const totalPrice = getExactPriceForDays(priceTable, totalDays)
+          if (totalPrice !== null && totalPrice > 0) {
+            amountDueValue = totalPrice
+            amountDueText = `${totalPrice.toFixed(2)} LEI`
+          } else {
+            amountDueText = "Calcul conform tarifelor MULTIPARK/WP"
+          }
         }
-  }
 
       } else {
         // ONLINE: allowed exit = start + days*24h + grace (60 min)
@@ -615,7 +612,8 @@ export default function EntriesExitsPage() {
   // "Intrări" (main) should list only upcoming entries (not yet arrived via LPR).
   // Entries that already happened (have LPR actualTime) should not appear here.
   const mainEntries = useMemo(() => {
-    const rows = visibleEnrichedEntries.filter((e) => !e.isLate && !e.actualTime)
+    // Main "Intrări" must show ONLY the selected day.
+    const rows = visibleEnrichedEntries.filter((e) => (e.startDate ?? selectedDate) === selectedDate && !e.isLate && !e.actualTime)
     return [...rows].sort(
       (a, b) =>
         getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
@@ -624,7 +622,8 @@ export default function EntriesExitsPage() {
   // "Ieșiri" (main) should list only upcoming exits (not yet departed via LPR).
   // Exits that already happened (have LPR actualTime) should not appear here.
   const mainExits = useMemo(() => {
-    const rows = visibleEnrichedExits.filter((e) => e.hasArrived === true && !e.isLate && !e.actualTime)
+    // Main "Ieșiri" must show ONLY the selected day.
+    const rows = visibleEnrichedExits.filter((e) => (e.endDate ?? selectedDate) === selectedDate && e.hasArrived === true && !e.isLate && !e.actualTime)
     return [...rows].sort(
       (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
     )

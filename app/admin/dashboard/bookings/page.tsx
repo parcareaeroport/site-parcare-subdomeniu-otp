@@ -173,6 +173,8 @@ function BookingsPageContent() {
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
   const [markingExitId, setMarkingExitId] = useState<string | null>(null)
+  const [isMarkExitDialogOpen, setIsMarkExitDialogOpen] = useState(false)
+  const [bookingToMarkExit, setBookingToMarkExit] = useState<Booking | null>(null)
   const [recalculatingOcc, setRecalculatingOcc] = useState(false)
   const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
   const [pricesLoading, setPricesLoading] = useState(false)
@@ -2442,7 +2444,10 @@ function BookingsPageContent() {
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
-                                    onClick={() => handleMarkOutside(booking)}
+                                    onClick={() => {
+                                      setBookingToMarkExit(booking)
+                                      setIsMarkExitDialogOpen(true)
+                                    }}
                                     className="text-red-600 focus:text-white focus:bg-red-600 hover:text-white hover:bg-red-600"
                                     disabled={markingExitId === booking.id}
                                   >
@@ -2617,6 +2622,50 @@ function BookingsPageContent() {
       </AlertDialog>
 
       <AlertDialog
+        open={isMarkExitDialogOpen}
+        onOpenChange={(open) => {
+          setIsMarkExitDialogOpen(open)
+          if (!open) setBookingToMarkExit(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Marchezi ieșirea manual?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Această acțiune setează <strong>lpr.isInside=false</strong> și <strong>lpr.departedAt=acum</strong>. Dacă
+              rezervarea a incrementat contorul de ocupare și nu a fost încă decrementată, sistemul va face și{" "}
+              <strong>-1</strong> la ocupare (idempotent).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="text-sm text-gray-700">
+            <div>
+              <strong>Nr. API / ID:</strong>{" "}
+              {bookingToMarkExit?.apiBookingNumber || bookingToMarkExit?.id || "-"}
+            </div>
+            <div>
+              <strong>Nr. înmatriculare:</strong> {bookingToMarkExit?.licensePlate || "-"}
+            </div>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(bookingToMarkExit?.id && markingExitId === bookingToMarkExit.id)}>
+              Renunță
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (!bookingToMarkExit) return
+                const b = bookingToMarkExit
+                setIsMarkExitDialogOpen(false)
+                await handleMarkOutside(b)
+              }}
+              disabled={!bookingToMarkExit || Boolean(bookingToMarkExit?.id && markingExitId === bookingToMarkExit.id)}
+            >
+              {bookingToMarkExit?.id && markingExitId === bookingToMarkExit.id ? "Se marchează..." : "Marchează ieșire"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
         open={isCancelDialogOpen}
         onOpenChange={(open) => {
           setIsCancelDialogOpen(open)
@@ -2630,7 +2679,7 @@ function BookingsPageContent() {
           <AlertDialogHeader>
             <AlertDialogTitle>Anulezi rezervarea?</AlertDialogTitle>
             <AlertDialogDescription>
-              Această acțiune anulează rezervarea doar în sistemul local (Firebase). După anulare, rezervarea nu va mai
+              După anulare, rezervarea nu va mai
               apărea în Intrări/Ieșiri și statusul va fi marcat ca ANULATĂ.
             </AlertDialogDescription>
           </AlertDialogHeader>
