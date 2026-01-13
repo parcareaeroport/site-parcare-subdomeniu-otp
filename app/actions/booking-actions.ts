@@ -1219,10 +1219,17 @@ export async function cleanupExpiredBookings(): Promise<{ cleanedCount: number, 
     // Pay-on-site auto-exit după 3h fără LPR
     try {
       const PAY_ON_SITE_TIMEOUT_MIN = 180
-      const posQuery = query(bookingsRef, where('status', '==', 'confirmed_pay_on_site'))
+      // IMPORTANT: auto-exit applies ONLY to true pay-on-site bookings (source=pay_on_site),
+      // not to LPR-origin bookings that may also carry status=confirmed_pay_on_site.
+      const posQuery = query(
+        bookingsRef,
+        where('source', '==', 'pay_on_site'),
+        where('status', '==', 'confirmed_pay_on_site'),
+      )
       const posSnap = await getDocs(posQuery)
       for (const docSnap of posSnap.docs) {
         const b = docSnap.data() as any
+        if (b?.source === 'lpr') continue
         const startDate = b.startDate
         const startTime = b.startTime
         if (!startDate || !startTime) continue

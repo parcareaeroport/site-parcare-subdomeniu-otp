@@ -612,7 +612,7 @@ function BookingsPageContent() {
         filtered = filtered.filter((b) => b.source === "manual")
       } else if (statusFilter === "pay_on_site") {
         // Filtrare specială pentru rezervările cu plată la parcare
-        filtered = filtered.filter((b) => b.source === "pay_on_site")
+        filtered = filtered.filter((b) => isPayOnSiteBooking(b))
       } else if (statusFilter === "occupied") {
         // Ocupate = prezente (conform aceleiași reguli ca și contorul de Ocupare din tabel)
         filtered = filtered.filter((b) => {
@@ -635,10 +635,13 @@ function BookingsPageContent() {
       } else if (statusFilter === "online") {
         // Online = badge ONLINE (non-manual, non-pay_on_site, non-LPR fără rezervare)
         filtered = filtered.filter((b) => {
-          const isPayOnSite = b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
-          const isLprNoReservation = b.status === "unmatched_lpr"
-          return b.source !== "manual" && !isPayOnSite && !isLprNoReservation
+          const isPayOnSite = isPayOnSiteBooking(b)
+          const isLprNoRes = isLprNoReservation(b)
+          return b.source !== "manual" && b.source !== "lpr" && !isPayOnSite && !isLprNoRes
         })
+      } else if (statusFilter === "unmatched_lpr") {
+        // Match the LPR card definition: both unmatched placeholders and completed LPR-no-reservation rows.
+        filtered = filtered.filter((b) => isLprNoReservation(b))
       } else {
         filtered = filtered.filter((b) => b.status === statusFilter)
       }
@@ -696,11 +699,14 @@ function BookingsPageContent() {
   const computePriceForDays = (days: number): number => {
     if (!days || days <= 0) return 0
     if (priceTable.length === 0) return 0
+    // IMPORTANT: for operational totals (and pay-on-site/LPR billing), we must use the exact tier price,
+    // not a prorated per-day value from a larger tier.
     const sorted = [...priceTable].sort((a, b) => a.days - b.days)
-    const match = sorted.find((p) => p.days >= days) || sorted[sorted.length - 1]
+    const exact = sorted.find((p) => p.days === days)
+    const match = exact || sorted.find((p) => p.days >= days) || sorted[sorted.length - 1]
     if (!match) return 0
-    const perDay = (match.discountedPrice ?? match.standardPrice) / match.days
-    return perDay * days
+    const val = match.discountedPrice ?? match.standardPrice
+    return typeof val === "number" && Number.isFinite(val) ? val : 0
   }
 
   const computePerDayFromPrices = (days: number): number => {
@@ -751,8 +757,11 @@ function BookingsPageContent() {
   const activeBookingsForCards = statsBookings.filter((b) => !isLostBooking(b))
   const totalCount = activeBookingsForCards.length
 
+  // IMPORTANT:
+  // - "Plată la parcare" is the payment channel (source=pay_on_site), not the origin.
+  // - LPR-originated bookings (source=lpr) must remain LPR everywhere, even if status is "confirmed_pay_on_site".
   const isPayOnSiteBooking = (b: Booking) =>
-    b.source === "pay_on_site" || String(b.status || "") === "confirmed_pay_on_site"
+    b.source === "pay_on_site" || (String(b.status || "") === "confirmed_pay_on_site" && b.source !== "lpr")
 
   const isPayOnSiteOverThreshold = (b: Booking) => {
     if (!isPayOnSiteBooking(b)) return false
@@ -763,8 +772,9 @@ function BookingsPageContent() {
   const isOnlineBooking = (b: Booking) => {
     // Match the table "ONLINE" badge meaning: non-manual, non-pay_on_site, non-LPR-without-reservation
     if (b.source === "manual") return false
+    if (b.source === "lpr") return false
     if (isPayOnSiteBooking(b)) return false
-    if (isLprWithoutReservation(b)) return false
+    if (isLprNoReservation(b)) return false
     return true
   }
 
@@ -779,15 +789,17 @@ function BookingsPageContent() {
     return m === "paid" || b.paymentStatus === "paid"
   }
 
-  // "LPR fără rezervare" refers strictly to unmatched placeholder rows (created when a car enters without any booking).
-  // LPR-completed bookings can keep source="lpr" but must NOT be treated as "fără rezervare".
-  const isLprWithoutReservation = (b: Booking) => b.status === "unmatched_lpr"
+  // "LPR fără rezervare" (for reporting/cards) must match what the table shows as LPR-only rows:
+  // - status="unmatched_lpr" placeholders
+  // - OR source="lpr" rows that don't have a Multipark API booking number (came from street/LPR).
+  const isLprNoReservation = (b: Booking) => b.status === "unmatched_lpr" || (b.source === "lpr" && !b.apiBookingNumber)
   const isLprNoReservationCompleted = (b: Booking) => {
-    if (!isLprWithoutReservation(b)) return false
+    if (!isLprNoReservation(b)) return false
     const lpr: any = (b as any)?.lpr || {}
-    return Boolean(lpr?.departedAt)
+    // Some flows set endDate/endTime without setting lpr.departedAt; treat that as "completed" too.
+    return Boolean(lpr?.departedAt) || Boolean(b.endDate && b.endTime)
   }
-  const isLprNoReservationOpen = (b: Booking) => isLprWithoutReservation(b) && !isLprNoReservationCompleted(b)
+  const isLprNoReservationOpen = (b: Booking) => isLprNoReservation(b) && !isLprNoReservationCompleted(b)
 
   // Split (based on the filtered table = createdAt interval + other filters)
   const onlineTotalCount = statsBookings.filter((b) => !isLostBooking(b) && isOnlineBooking(b)).length
@@ -822,7 +834,7 @@ function BookingsPageContent() {
     .filter((b) => !isLostBooking(b) && b.source === "manual")
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
-  const lprNoReservationCount = statsBookings.filter((b) => !isLostBooking(b) && isLprWithoutReservation(b)).length
+  const lprNoReservationCount = statsBookings.filter((b) => !isLostBooking(b) && isLprNoReservation(b)).length
   const lprNoReservationCompletedCount = statsBookings.filter((b) => !isLostBooking(b) && isLprNoReservationCompleted(b)).length
   const lprNoReservationCompletedValue = statsBookings
     .filter((b) => !isLostBooking(b) && isLprNoReservationCompleted(b))
@@ -831,7 +843,7 @@ function BookingsPageContent() {
   const billableCount = statsBookings.filter(
     (b) =>
       !isLostBooking(b) &&
-      !isLprWithoutReservation(b) &&
+      !isLprNoReservation(b) &&
       (isOnlinePaidBooking(b) || isPayOnSiteBooking(b) || isManualPaidBooking(b)),
   ).length
 
@@ -840,7 +852,7 @@ function BookingsPageContent() {
   // "Valoare totală (potențială)" pentru toate rezervările din tabel (except LPR fără rezervare),
   // inclusiv Plată la parcare auto-anulată, ca să fie "calculat pentru toate 36".
   const totalPotentialValue = statsBookings
-    .filter((b) => !isLostBooking(b) && (!isLprWithoutReservation(b) || isLprNoReservationCompleted(b)))
+    .filter((b) => !isLostBooking(b) && (!isLprNoReservation(b) || isLprNoReservationCompleted(b)))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   const handleViewBooking = (booking: Booking) => {
@@ -1039,7 +1051,7 @@ function BookingsPageContent() {
         cancelReason: cancelReasonInput.trim() || "Anulat local din admin",
         lastUpdated: serverTimestamp(),
       }
-      if (bookingToCancel.source === "pay_on_site") {
+      if (isPayOnSiteBooking(bookingToCancel)) {
         updates.payOnSiteStatus = "cancelled"
       }
       await updateDoc(bookingRef, updates)
@@ -1169,7 +1181,7 @@ function BookingsPageContent() {
   }
 
   const handleCancelPayOnSiteBooking = async (booking: Booking) => {
-    if (booking.source !== "pay_on_site") {
+    if (!isPayOnSiteBooking(booking)) {
       toast({
         title: "Eroare",
         description: "Această funcție este doar pentru rezervările cu plată la parcare.",
@@ -1692,13 +1704,17 @@ function BookingsPageContent() {
     }
   }
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, booking?: Booking) => {
     switch (status) {
       case "confirmed_paid":
         return <Badge className="bg-green-100 text-green-800">Confirmat</Badge>
       case "confirmed_test":
         return <Badge className="bg-blue-100 text-blue-800">Confirmat (Test)</Badge>
       case "confirmed_pay_on_site":
+        // If it came through LPR, keep it LPR (not "pay on site") everywhere.
+        if (booking?.source === "lpr") {
+          return <Badge className="bg-purple-100 text-purple-800">LPR</Badge>
+        }
         return <Badge className="bg-orange-100 text-orange-800">Plată la parcare</Badge>
       case "cancelled_by_admin":
         return <Badge className="bg-red-100 text-red-800">ANULATĂ</Badge>
@@ -1752,6 +1768,12 @@ function BookingsPageContent() {
     // Pentru rezervările manuale, în tabel afișăm DOAR badge (fără modificări din tabel).
     if (booking.source === "manual") {
       return getManualPaymentStatusBadge(booking)
+    }
+
+    // LPR-origin bookings must stay LPR in UI & logic.
+    if (booking.source === "lpr" || booking.status === "unmatched_lpr") {
+      const isPaid = booking.paymentStatus === "paid"
+      return getPaymentStatusBadge(isPaid ? "paid" : "not_paid")
     }
     
     // Pentru rezervările cu plată la parcare, afișăm DOAR badge (read-only).
@@ -2179,7 +2201,7 @@ function BookingsPageContent() {
                       className={
                         booking.source === "manual"
                           ? "bg-orange-50 hover:bg-orange-100 border-l-4 border-l-orange-400"
-                          : booking.source === "pay_on_site"
+                          : isPayOnSiteBooking(booking)
                           ? "bg-orange-100 hover:bg-orange-200 border-l-4 border-l-orange-500"
                           : ""
                       }
@@ -2213,14 +2235,14 @@ function BookingsPageContent() {
                             </Badge>
                           )}
                           {booking.source !== "manual" &&
-                            booking.source !== "pay_on_site" &&
+                            !isPayOnSiteBooking(booking) &&
                             booking.source !== "lpr" &&
                             booking.status !== "unmatched_lpr" && (
                               <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 mr-2 text-xs">
                                 ONLINE
                               </Badge>
                             )}
-                          {booking.source === "pay_on_site" && (
+                          {isPayOnSiteBooking(booking) && (
                             <Badge
                               variant="outline"
                               className={`mr-2 text-xs ${
@@ -2235,7 +2257,7 @@ function BookingsPageContent() {
                             </Badge>
                           )}
                           {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}
-                          {booking.source !== "pay_on_site" && (booking.apiBookingNumber || booking.id.substring(0, 6))}
+                          {!isPayOnSiteBooking(booking) && (booking.apiBookingNumber || booking.id.substring(0, 6))}
                         </TableCell>
                         <TableCell>{booking.licensePlate}</TableCell>
                         <TableCell>{booking.clientName || "N/A"}</TableCell>
@@ -2265,7 +2287,7 @@ function BookingsPageContent() {
                           </div>
                         </TableCell>
                         <TableCell>{renderPaymentStatusCell(booking)}</TableCell>
-                        <TableCell>{getStatusBadge(String(booking.status || ""))}</TableCell>
+                        <TableCell>{getStatusBadge(String(booking.status || ""), booking)}</TableCell>
                         <TableCell className="text-center">
                           {booking.termsAccepted ? (
                             <span className="text-green-600" title="Termeni acceptați">
@@ -2298,7 +2320,7 @@ function BookingsPageContent() {
                               </DropdownMenuItem>
 
                               {/* Buton pentru trimiterea email-ului cu QR code */}
-                              {booking.clientEmail && (booking.apiBookingNumber || booking.source === "pay_on_site") && (
+                              {booking.clientEmail && (booking.apiBookingNumber || isPayOnSiteBooking(booking)) && (
                                 <DropdownMenuItem
                                   onClick={() => handleSendEmail(booking)}
                                   disabled={isSendingEmail}
@@ -2309,7 +2331,7 @@ function BookingsPageContent() {
                                   ) : (
                                     <Mail className="mr-2 h-4 w-4" />
                                   )}
-                                  {booking.source === "pay_on_site" ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
+                                  {isPayOnSiteBooking(booking) ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
                                 </DropdownMenuItem>
                               )}
 
@@ -2721,7 +2743,7 @@ function BookingsPageContent() {
               <div className="text-sm text-gray-700">
                 <div>
                   <strong>Nr. API / ID:</strong>{" "}
-                  {manualLprBooking.source !== "pay_on_site"
+                  {!isPayOnSiteBooking(manualLprBooking)
                     ? manualLprBooking.apiBookingNumber || manualLprBooking.id
                     : manualLprBooking.id}
                 </div>
@@ -2852,13 +2874,13 @@ function BookingsPageContent() {
                     <strong>ID Firestore:</strong> {selectedBooking.id}
                   </p>
                   {/* Pentru pay-on-site nu afișăm numărul de rezervare API (nu există în Multipark) */}
-                  {selectedBooking.source !== "pay_on_site" && (
+                  {!isPayOnSiteBooking(selectedBooking) && (
                     <p>
                       <strong>Nr. Rez. API Parcare:</strong> {selectedBooking.apiBookingNumber || "N/A"}
                     </p>
                   )}
                   <p>
-                    <strong>Status Intern:</strong> {getStatusBadge(selectedBooking.status)}
+                    <strong>Status Intern:</strong> {getStatusBadge(selectedBooking.status, selectedBooking)}
                   </p>
                   <p>
                     <strong>Nr. Înmatriculare (curent):</strong> {selectedBooking.licensePlate}
@@ -2967,7 +2989,7 @@ function BookingsPageContent() {
                     <strong>Durata reală:</strong> {selectedBooking.durationMinutes} minute ({(selectedBooking.durationMinutes / 60).toFixed(1)} ore)
                   </p>
                   {/* Pentru pay-on-site nu afișăm minutele API (nu se trimit la Multipark) */}
-                  {selectedBooking.source !== "pay_on_site" && selectedBooking.multiparkDurationMinutes && (
+                  {!isPayOnSiteBooking(selectedBooking) && selectedBooking.multiparkDurationMinutes && (
                     <p>
                       <strong>Minute în API:</strong> {selectedBooking.multiparkDurationMinutes} minute ({(selectedBooking.multiparkDurationMinutes / 60)} ore)
                     </p>
@@ -3046,7 +3068,23 @@ function BookingsPageContent() {
                         * Pentru rezervările manuale, statusul plății se actualizează manual prin tab-ul principal.
                       </p>
                     </>
-                  ) : selectedBooking.source === "pay_on_site" ? (
+                  ) : (selectedBooking.source === "lpr" || selectedBooking.status === "unmatched_lpr") ? (
+                    <>
+                      <p>
+                        <strong>Tip Rezervare:</strong>{" "}
+                        <Badge className="bg-purple-100 text-purple-700 border-purple-400">LPR</Badge>
+                      </p>
+                      <p>
+                        <strong>Status Plată:</strong> {getPaymentStatusBadge(selectedBooking.paymentStatus)}
+                      </p>
+                      <p>
+                        <strong>Sumă:</strong> {selectedBooking.amount ? `${selectedBooking.amount.toFixed(2)} RON` : "0.00 RON"}
+                      </p>
+                      <p className="text-gray-600 text-xs italic">
+                        * Rezervare provenită din LPR (nu se consideră „Plată la parcare” în rapoarte).
+                      </p>
+                    </>
+                  ) : isPayOnSiteBooking(selectedBooking) ? (
                     <>
                       {/* <p>
                         <strong>Tip Rezervare:</strong> <Badge className="bg-orange-100 text-orange-700 border-orange-400">Plată la Parcare</Badge>
@@ -3087,7 +3125,7 @@ function BookingsPageContent() {
                     <strong>Email Client:</strong> {selectedBooking.clientEmail || "N/A"}
                   </p>
                   {/* Pentru pay-on-site nu afișăm informații despre QR (nu există în Multipark) */}
-                  {selectedBooking.source !== "pay_on_site" && (
+                  {!isPayOnSiteBooking(selectedBooking) && (
                     <>
                       <p>
                         <strong>QR Code Disponibil:</strong> {selectedBooking.apiBookingNumber ? "✅ Da" : "❌ Nu (lipsește nr. rezervare API)"}
@@ -3099,7 +3137,7 @@ function BookingsPageContent() {
                       )}
                     </>
                   )}
-                  {selectedBooking.source === "pay_on_site" && (
+                  {isPayOnSiteBooking(selectedBooking) && (
                     <p>
                       <strong>QR Code:</strong> <span className="text-gray-500">Nu este disponibil (plată la parcare)</span>
                     </p>
@@ -3154,7 +3192,7 @@ function BookingsPageContent() {
           )}
           <DialogFooter>
             {/* Buton pentru trimiterea email-ului din dialog */}
-            {selectedBooking && selectedBooking.clientEmail && (selectedBooking.apiBookingNumber || selectedBooking.source === "pay_on_site") && (
+            {selectedBooking && selectedBooking.clientEmail && (selectedBooking.apiBookingNumber || isPayOnSiteBooking(selectedBooking)) && (
               <Button
                 variant="outline"
                 onClick={() => {
@@ -3169,7 +3207,7 @@ function BookingsPageContent() {
                 ) : (
                   <Mail className="mr-2 h-4 w-4" />
                 )}
-                {selectedBooking.source === "pay_on_site" ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
+                {isPayOnSiteBooking(selectedBooking) ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
               </Button>
             )}
             

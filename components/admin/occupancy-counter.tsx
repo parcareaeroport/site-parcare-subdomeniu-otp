@@ -186,7 +186,8 @@ export function OccupancyCounter({
   const displayOccupiedCount = useMemo(() => {
     if (typeof countOverride === "number") return Math.max(0, countOverride)
     if (mode === "active") return activeRangeCount
-    return occupiedCount > 0 ? occupiedCount : fallbackOccupiedCount
+    // parkingLive can lag behind the real LPR state; prefer the safer (higher) of the two.
+    return Math.max(occupiedCount, fallbackOccupiedCount)
   }, [activeRangeCount, countOverride, fallbackOccupiedCount, mode, occupiedCount])
   const percentage = maxLimit > 0 ? Math.min(100, Math.round((displayOccupiedCount / maxLimit) * 100)) : 0
   const isWarning = percentage >= 80 && percentage < 100
