@@ -80,6 +80,15 @@ function parseDateTimeUTC(date?: string, time?: string) {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
+function formatShortDateDM(date?: string) {
+  if (!date) return ""
+  // Expect "YYYY-MM-DD"; if not, just return as-is.
+  const m = String(date).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return String(date)
+  const [, , mm, dd] = m
+  return `${dd}/${mm}`
+}
+
 function getExactPriceForDays(priceTable: PriceEntry[], days: number): number | null {
   if (!days || days <= 0) return null
   if (!priceTable || priceTable.length === 0) return null
@@ -105,7 +114,9 @@ function formatDelay(minutes?: number) {
 
 function getScheduledSortKey(row: Partial<EnrichedRow>, kind: "entry" | "exit", fallbackDate: string): number {
   const date = kind === "entry" ? row.startDate ?? fallbackDate : row.endDate ?? fallbackDate
-  const time = row.time
+  // Some sources store start/end times separately; prefer the kind-specific field when present.
+  const anyRow: any = row as any
+  const time = kind === "entry" ? (anyRow.startTime ?? row.time) : (anyRow.endTime ?? row.time)
   const dt = parseDateTime(date, time)
   if (dt) return dt.getTime()
   // Fallback: sort unknown/invalid times last, but keep deterministic ordering by string
@@ -663,10 +674,12 @@ export default function EntriesExitsPage() {
     opts?: {
       showDelay?: boolean
       showLprTime?: boolean
+      showScheduledDateTime?: boolean
     },
   ) => {
     const showDelay = opts?.showDelay ?? kind === "exit"
     const showLprTime = opts?.showLprTime ?? kind === "entry"
+    const showScheduledDateTime = opts?.showScheduledDateTime ?? false
     const cardBg = kind === "entry" ? "bg-blue-50 border-blue-200" : "bg-amber-50 border-amber-200"
     return (
     <>
@@ -688,7 +701,16 @@ export default function EntriesExitsPage() {
             {rows.map((row) => (
               <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
                 <td className="py-3 px-2 font-medium">
-                  <span className="font-semibold">{row.time}</span>
+                  {(() => {
+                    const scheduledDate = kind === "entry" ? row.startDate : row.endDate
+                    const showDate = showScheduledDateTime && Boolean(scheduledDate)
+                    return (
+                      <div className="flex flex-col leading-tight">
+                        {showDate && <span className="text-xs text-gray-600">{formatShortDateDM(scheduledDate)}</span>}
+                        <span className="font-semibold">{row.time}</span>
+                      </div>
+                    )
+                  })()}
                 </td>
                 <td className="py-3 px-2">
                   <div className="flex flex-col items-start gap-1">
@@ -806,7 +828,16 @@ export default function EntriesExitsPage() {
                   {row.licensePlate}
                 </Button>
               </div>
-              <span className="text-sm font-semibold">{row.time}</span>
+              {(() => {
+                const scheduledDate = kind === "entry" ? row.startDate : row.endDate
+                const showDate = showScheduledDateTime && Boolean(scheduledDate)
+                return (
+                  <div className="flex flex-col items-end leading-tight">
+                    {showDate && <span className="text-[11px] text-gray-600">{formatShortDateDM(scheduledDate)}</span>}
+                    <span className="text-sm font-semibold">{row.time}</span>
+                  </div>
+                )
+              })()}
             </div>
 
             <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
@@ -930,7 +961,7 @@ export default function EntriesExitsPage() {
              
             </CardHeader>
             <CardContent>
-                {lateEntries.length === 0 ? <p className="text-gray-500">Nu există intrări întârziate.</p> : renderTable(lateEntries, "entry", { showDelay: true, showLprTime: true })}
+                {lateEntries.length === 0 ? <p className="text-gray-500">Nu există intrări întârziate.</p> : renderTable(lateEntries, "entry", { showDelay: true, showLprTime: true, showScheduledDateTime: true })}
             </CardContent>
           </Card>
             )}
@@ -957,7 +988,7 @@ export default function EntriesExitsPage() {
                 <CardTitle>Ieșiri întârziate</CardTitle>
                 </CardHeader>
                 <CardContent>
-                {lateExits.length === 0 ? <p className="text-gray-500">Nu există ieșiri întârziate.</p> : renderTable(lateExits, "exit")}
+                {lateExits.length === 0 ? <p className="text-gray-500">Nu există ieșiri întârziate.</p> : renderTable(lateExits, "exit", { showScheduledDateTime: true })}
                 </CardContent>
               </Card>
             )}
