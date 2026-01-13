@@ -642,9 +642,17 @@ export default function EntriesExitsPage() {
   // Once LPR confirms departure, it should disappear from this list.
   const lateExits = useMemo(() => {
     const rows = visibleEnrichedExits.filter((e) => e.hasArrived === true && e.isLate && !e.actualTime)
-    return [...rows].sort(
-      (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
-    )
+    return [...rows].sort((a, b) => {
+      // Most recent scheduled exit first (so newest late is on top, oldest at the bottom).
+      const ka = getScheduledSortKey(a, "exit", selectedDate)
+      const kb = getScheduledSortKey(b, "exit", selectedDate)
+      if (kb !== ka) return kb - ka
+      // Deterministic tie-breaker to avoid "random" ordering when times are equal/missing.
+      const plateA = String(a.licensePlate ?? "").toLowerCase()
+      const plateB = String(b.licensePlate ?? "").toLowerCase()
+      if (plateA !== plateB) return plateA.localeCompare(plateB)
+      return String(a.id ?? "").localeCompare(String(b.id ?? ""))
+    })
   }, [visibleEnrichedExits, selectedDate])
 
   if (!isClient) return null
