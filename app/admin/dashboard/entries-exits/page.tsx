@@ -8,7 +8,7 @@ import { RefreshCw, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
-import { collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, updateDoc, where, limit } from "firebase/firestore"
+import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, serverTimestamp, updateDoc, where, limit } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -31,6 +31,8 @@ type EnrichedRow = DailyEntryExit & {
 
 const LATE_FEE_PER_DAY = 30 // lei / zi întârziere (online)
 const ONLINE_GRACE_MINUTES = 60 // 1h bonus la ultima zi (online)
+
+const DEBUG_ROW_DETAILS = process.env.NEXT_PUBLIC_ADMIN_ROW_DEBUG === "true"
 
 type PriceEntry = {
   days: number
@@ -87,6 +89,36 @@ function formatShortDateDM(date?: string) {
   if (!m) return String(date)
   const [, , mm, dd] = m
   return `${dd}/${mm}`
+}
+
+function shiftIsoDate(isoYmd: string, deltaDays: number): string {
+  // isoYmd: "YYYY-MM-DD"
+  const d = new Date(`${isoYmd}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return isoYmd
+  d.setDate(d.getDate() + deltaDays)
+  return d.toISOString().slice(0, 10)
+}
+
+function safeJsonStringify(value: any): string {
+  try {
+    return JSON.stringify(
+      value,
+      (_k, v) => {
+        // Firestore Timestamp
+        if (v && typeof v === "object" && typeof v.toDate === "function") {
+          try {
+            return v.toDate().toISOString()
+          } catch {
+            return v
+          }
+        }
+        return v
+      },
+      2,
+    )
+  } catch (e) {
+    return `<<json stringify failed: ${String((e as any)?.message || e)}>>`
+  }
 }
 
 function getExactPriceForDays(priceTable: PriceEntry[], days: number): number | null {
@@ -150,6 +182,31 @@ export default function EntriesExitsPage() {
     time: "",
     confirmOverwrite: false,
     saving: false,
+  })
+
+  // Debug helper: enable by adding `?debugCarry=1` to the URL.
+  const debugCarry =
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debugCarry") === "1"
+
+  const [debugDialog, setDebugDialog] = useState<{
+    open: boolean
+    kind: "entry" | "exit"
+    row: EnrichedRow | null
+    loading: boolean
+    docData: any | null
+    computed: any | null
+    deleting?: boolean
+    deleteConfirm?: string
+    error?: string
+  }>({
+    open: false,
+    kind: "entry",
+    row: null,
+    loading: false,
+    docData: null,
+    computed: null,
+    deleting: false,
+    deleteConfirm: "",
   })
   const jumpToTab = (tab: "entries" | "exits") => {
     setActiveTab(tab)
@@ -234,55 +291,133 @@ export default function EntriesExitsPage() {
   }
 
   const isCarryOverEligibleStatus = (raw: any): boolean => {
-    // We only carry over "real" bookings (not cancelled/expired) that operations care about,
-    // regardless of payment method (card/online or pay-on-site).
+    // Carry-over should keep showing anything that operations still care about:
+    // exclude only cancelled/expired/unmatched_lpr. (Some legacy rows can have missing/odd statuses.)
     const s = String(raw?.status || "").toLowerCase()
-    if (!s) return false
     if (s === "expired" || s.includes("cancelled")) return false
     if (s === "unmatched_lpr") return false
-    // Keep this aligned with Firestore "in" query sets below.
-    return (
-      s === "confirmed_paid" ||
-      s === "paid" ||
-      s === "confirmed" ||
-      s === "confirmed_test" ||
-      s === "confirmed_pay_on_site"
-    )
+    return true
   }
 
   const fetchCarryOverLateEntries = async (date: string): Promise<DailyEntryExit[]> => {
     try {
       const bookingsRef = collection(db, "bookings")
+      // IMPORTANT: carry-over entries should include "no-show" bookings that operations still cares about.
+      // We include `api_error` too (common for legacy/no-show rows), but still exclude cancels/expired elsewhere.
+      // NOTE: we do NOT filter by `lpr.arrivedAt == null` in Firestore because that DOES NOT match missing fields.
+      // Many legacy bookings have no `lpr.arrivedAt` field at all, and would not be carried over to the next day.
+      // We'll filter (arrivedAt missing/true) client-side instead.
       const q = query(
         bookingsRef,
+        where("startDate", ">=", shiftIsoDate(date, -7)),
         where("startDate", "<", date),
-        where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site"]),
-        where("lpr.arrivedAt", "==", null),
+        where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site", "api_error"]),
         orderBy("startDate", "asc"),
         orderBy("startTime", "asc"),
+        limit(500),
       )
       const snap = await getDocs(q)
-      const out: DailyEntryExit[] = []
-      snap.forEach((d) => {
-        const b: any = d.data()
-        if (!isCarryOverEligibleStatus(b)) return
-        const lpr = b.lpr || {}
-        if (lpr?.arrivedAt) return
-        out.push({
-          id: d.id,
-          startDate: b.startDate || undefined,
-          endDate: b.endDate || undefined,
-          time: b.startTime || "N/A",
-          licensePlate: b.licensePlate || "N/A",
-          phone: b.clientPhone || "N/A",
-          numberOfPersons: b.numberOfPersons ? b.numberOfPersons : "N/A",
-          source: b.source || "webhook",
-          bookingStatus: b.status,
+      if (debugCarry) {
+        console.log("[entries-exits][debugCarry] carryEntries(query) fetched", {
+          selectedDate: date,
+          count: snap.size,
+        })
+      }
+      const rows = snap.docs
+        .map((d) => ({ id: d.id, data: d.data() as any }))
+        .filter(({ data }) => {
+          if (!isCarryOverEligibleStatus(data)) return false
+          const lpr = data?.lpr || {}
+          const hasArrived = Boolean(lpr?.arrivedAt) || lpr?.isInside === true
+          if (hasArrived) return false
+          // Avoid flooding with very old no-shows:
+          // keep carry-over even if endDate is in the past, but only up to 7 days behind selectedDate.
+          const endDate = String(data?.endDate || "")
+          const cutoffDate = shiftIsoDate(date, -7)
+          if (endDate && endDate < cutoffDate) return false
+          // If startTime is missing, still include (sorted last by fallback).
+          return true
+        })
+        .map(({ id, data }) => ({
+          id,
+          startDate: data.startDate || undefined,
+          endDate: data.endDate || undefined,
+          time: data.startTime || "N/A",
+          licensePlate: data.licensePlate || "N/A",
+          phone: data.clientPhone || "N/A",
+          numberOfPersons: data.numberOfPersons ? data.numberOfPersons : "N/A",
+          source: data.source || "webhook",
+          bookingStatus: data.status,
           actualTime: undefined,
           delayMinutes: undefined,
-          amount: typeof b.amount === "number" ? b.amount : undefined,
-        })
-      })
+          amount: typeof data.amount === "number" ? data.amount : undefined,
+        }))
+
+      const out: DailyEntryExit[] = rows
+
+      // Extra debug: compare against a broader query without `status in (...)` to see what we are missing.
+      if (debugCarry) {
+        try {
+          // NOTE: do NOT query on `lpr.arrivedAt == null` here because it requires a composite index.
+          // We'll fetch candidates by startDate only and filter client-side.
+          const qAll = query(
+            bookingsRef,
+            where("startDate", "<", date),
+            orderBy("startDate", "asc"),
+            orderBy("startTime", "asc"),
+            limit(200),
+          )
+          const snapAll = await getDocs(qAll)
+          const idsWithStatus = new Set(snap.docs.map((d) => d.id))
+          const eligible = snapAll.docs
+            .map((d) => {
+              const b: any = d.data()
+              const status = b?.status
+              const lpr = b?.lpr || {}
+              const hasArrivedAt = Boolean(lpr?.arrivedAt)
+              const isCancelledOrExpired =
+                String(status || "").toLowerCase() === "expired" || String(status || "").toLowerCase().includes("cancelled")
+              const isUnmatched = String(status || "").toLowerCase() === "unmatched_lpr"
+              const endDate = String(b?.endDate || "")
+              const cutoffDate = shiftIsoDate(date, -7)
+              const alreadyEnded = Boolean(endDate && endDate < cutoffDate)
+              return {
+                id: d.id,
+                startDate: b.startDate,
+                startTime: b.startTime,
+                status,
+                source: b.source,
+                hasArrivedAt,
+                isCancelledOrExpired,
+                isUnmatched,
+                alreadyEnded,
+              }
+            })
+            .filter((x) => !x.isCancelledOrExpired && !x.isUnmatched && !x.hasArrivedAt && !x.alreadyEnded)
+
+          const missing = eligible
+            .filter((x) => !idsWithStatus.has(x.id))
+            .slice(0, 25)
+
+          const statusCounts = eligible.reduce((acc: Record<string, number>, x) => {
+            const k = x.status === undefined || x.status === null || String(x.status).trim() === "" ? "(missing/empty)" : String(x.status)
+            acc[k] = (acc[k] || 0) + 1
+            return acc
+          }, {})
+
+          console.log("[entries-exits][debugCarry] carryEntries(query-no-status) compare", {
+            selectedDate: date,
+            countNoStatusRaw: snapAll.size,
+            eligibleNoStatus: eligible.length,
+            countWithStatus: snap.size,
+            eligibleStatusBreakdown: statusCounts,
+            missingPreview: missing,
+          })
+        } catch (e) {
+          console.warn("[entries-exits][debugCarry] carryEntries compare failed", e)
+        }
+      }
+
       return out
     } catch (e) {
       console.error("Error fetching carry-over late entries", e)
@@ -296,7 +431,7 @@ export default function EntriesExitsPage() {
       const q = query(
         bookingsRef,
         where("endDate", "<", date),
-        where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site"]),
+        where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site", "api_error"]),
         where("lpr.isInside", "==", true),
         orderBy("endDate", "asc"),
         orderBy("endTime", "asc"),
@@ -408,6 +543,16 @@ export default function EntriesExitsPage() {
         fetchCarryOverLateEntries(selectedDate),
         fetchCarryOverLateExits(selectedDate),
       ])
+      if (debugCarry) {
+        console.log("[entries-exits][debugCarry] loadData counts", {
+          selectedDate,
+          includeFuture,
+          dailyEntries: e1.length,
+          dailyExits: e2.length,
+          carryEntries: carryEntries.length,
+          carryExits: carryExits.length,
+        })
+      }
 
       const dedupeById = <T extends { id: string }>(rows: T[]): T[] => {
         const seen = new Set<string>()
@@ -609,6 +754,190 @@ export default function EntriesExitsPage() {
     }
   }
 
+  const buildDebugComputed = (row: EnrichedRow, kind: "entry" | "exit", rawDoc: any | null) => {
+    const now = new Date()
+    const scheduledDate = kind === "entry" ? (row.startDate ?? selectedDate) : (row.endDate ?? selectedDate)
+    const scheduledTime = row.time
+    const scheduledUtc = parseDateTimeUTC(scheduledDate, scheduledTime)
+    const anyRow: any = row as any
+    const startDateVal = row.startDate ?? scheduledDate
+    const endDateVal = row.endDate ?? scheduledDate
+    const startTimeVal = anyRow.startTime ?? (kind === "entry" ? row.time : anyRow.startTime ?? row.time)
+    const endTimeVal = anyRow.endTime ?? (kind === "exit" ? row.time : anyRow.endTime ?? row.time)
+
+    const actualUtc = row.actualTime ? parseDateTimeUTC(scheduledDate, row.actualTime) : null
+    const delayFromState = row.delayMinutesComputed
+
+    const out: any = {
+      kind,
+      selectedDate,
+      nowIso: now.toISOString(),
+      docMeta: {
+        createdAtIso:
+          rawDoc?.createdAt && typeof rawDoc.createdAt?.toDate === "function"
+            ? rawDoc.createdAt.toDate().toISOString()
+            : null,
+        createdAtLocal:
+          rawDoc?.createdAt && typeof rawDoc.createdAt?.toDate === "function"
+            ? rawDoc.createdAt
+                .toDate()
+                .toLocaleString("ro-RO", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+            : null,
+      },
+      scheduled: { scheduledDate, scheduledTime, scheduledUtc: scheduledUtc?.toISOString() ?? null },
+      actual: { actualTime: row.actualTime ?? null, actualUtc: actualUtc?.toISOString() ?? null },
+      delayMinutesComputed: delayFromState ?? null,
+      isLate: Boolean(row.isLate),
+      paymentFlags: {
+        source: anyRow.source ?? null,
+        status: anyRow.bookingStatus ?? anyRow.status ?? null,
+        paymentStatus: rawDoc?.paymentStatus ?? anyRow.paymentStatus ?? null,
+        isPayOnSite: Boolean(row.isPayOnSite),
+        isOnlinePaid: Boolean(row.isOnlinePaid),
+      },
+    }
+
+    if (kind !== "exit") return out
+
+    // Mirror the page logic, but keep intermediate values.
+    const endBase = scheduledUtc?.getTime() ?? null
+    const isPayOnSite = Boolean(row.isPayOnSite)
+    const isOnlinePaid = Boolean(row.isOnlinePaid)
+
+    const startDt = startDateVal && startTimeVal ? parseDateTime(startDateVal, startTimeVal) : null
+    const endDt = endDateVal && endTimeVal ? parseDateTime(endDateVal, endTimeVal) : null
+
+    // bookedDays (same approach as enrichRow)
+    let bookedDays = 1
+    if (startDt && endDt && endDt.getTime() > startDt.getTime()) {
+      bookedDays = Math.max(1, Math.ceil((endDt.getTime() - startDt.getTime()) / (24 * 60 * 60 * 1000)))
+    } else if (startDateVal && endDateVal && startDateVal !== endDateVal) {
+      const s0 = new Date(`${startDateVal}T00:00:00`)
+      const e0 = new Date(`${endDateVal}T00:00:00`)
+      const diffMs = e0.getTime() - s0.getTime()
+      if (diffMs >= 0) bookedDays = Math.max(1, Math.ceil(diffMs / (24 * 60 * 60 * 1000)) + 1)
+    }
+
+    if (isPayOnSite || !isOnlinePaid) {
+      const overdueMin =
+        typeof delayFromState === "number"
+          ? Math.max(0, delayFromState)
+          : endBase
+            ? Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
+            : null
+
+      const extraDays = typeof overdueMin === "number" && overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
+      const totalDays = Math.max(1, bookedDays + extraDays)
+      const totalPrice = getExactPriceForDays(priceTable, totalDays)
+
+      out.exitBilling = {
+        mode: "pay_on_site_or_unpaid",
+        start: { startDateVal, startTimeVal, startDt: startDt?.toISOString() ?? null },
+        end: { endDateVal, endTimeVal, endDt: endDt?.toISOString() ?? null, endBase },
+        overdueMin,
+        bookedDays,
+        extraDays,
+        totalDays,
+        priceFromTable: totalPrice,
+        displayed: { amountDueValue: row.amountDueValue ?? null, amountDueText: row.amountDueText ?? null },
+      }
+      return out
+    }
+
+    // ONLINE paid
+    let days = 1
+    if (startDt && endDt && endDt.getTime() > startDt.getTime()) {
+      const diffMs = endDt.getTime() - startDt.getTime()
+      days = Math.ceil(diffMs / (24 * 60 * 60 * 1000))
+    }
+    const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
+    const allowedExitMs = startDt ? startDt.getTime() + days * 24 * 60 * 60 * 1000 + graceMs : (endBase ?? 0) + graceMs
+    const overMs = now.getTime() - allowedExitMs
+    const daysLate = overMs > 0 ? Math.ceil(overMs / (24 * 60 * 60 * 1000)) : 0
+    const fee = daysLate > 0 ? daysLate * LATE_FEE_PER_DAY : 0
+
+    out.exitBilling = {
+      mode: "online_paid",
+      start: { startDateVal, startTimeVal, startDt: startDt?.toISOString() ?? null },
+      end: { endDateVal, endTimeVal, endDt: endDt?.toISOString() ?? null, endBase },
+      days,
+      graceMs,
+      allowedExitMs,
+      overMs,
+      daysLate,
+      lateFeePerDay: LATE_FEE_PER_DAY,
+      fee,
+      displayed: { amountDueValue: row.amountDueValue ?? null, amountDueText: row.amountDueText ?? null },
+    }
+    return out
+  }
+
+  const openDebugDialog = async (row: EnrichedRow, kind: "entry" | "exit") => {
+    if (!DEBUG_ROW_DETAILS) return
+    if (!row?.id) return
+    try {
+      setDebugDialog({ open: true, kind, row, loading: true, docData: null, computed: null, deleting: false, deleteConfirm: "" })
+      const snap = await getDoc(doc(db, "bookings", row.id))
+      const docData = snap.exists() ? snap.data() : null
+      const computed = buildDebugComputed(row, kind, docData)
+      setDebugDialog({ open: true, kind, row, loading: false, docData, computed, deleting: false, deleteConfirm: "" })
+    } catch (e: any) {
+      setDebugDialog({
+        open: true,
+        kind,
+        row,
+        loading: false,
+        docData: null,
+        computed: null,
+        deleting: false,
+        deleteConfirm: "",
+        error: e?.message ? String(e.message) : String(e),
+      })
+    }
+  }
+
+  const closeDebugDialog = () => {
+    setDebugDialog({ open: false, kind: "entry", row: null, loading: false, docData: null, computed: null, deleting: false, deleteConfirm: "" })
+  }
+
+  const deleteDebugBooking = async () => {
+    if (!DEBUG_ROW_DETAILS) return
+    if (!isAdmin) return
+    const id = debugDialog.row?.id
+    if (!id) return
+
+    const docData = debugDialog.docData || {}
+    const plate = String(docData?.licensePlate || (debugDialog.row as any)?.licensePlate || "").trim().toUpperCase()
+    const confirmRaw = String(debugDialog.deleteConfirm || "").trim().toUpperCase()
+    const ok = confirmRaw === id.toUpperCase() || (plate && confirmRaw === plate)
+    if (!ok) {
+      toast({
+        title: "Confirmare invalidă",
+        description: `Tastează exact ID-ul rezervării sau numărul (${plate || "N/A"}) ca să permiți ștergerea.`,
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setDebugDialog((s) => ({ ...s, deleting: true }))
+      await deleteDoc(doc(db, "bookings", id))
+      toast({
+        title: "Șters",
+        description: `Documentul bookings/${id} a fost șters din Firestore.`,
+      })
+      closeDebugDialog()
+      await loadData()
+    } catch (e: any) {
+      toast({
+        title: "Eroare la ștergere",
+        description: e?.message ? String(e.message) : "Nu am putut șterge documentul.",
+        variant: "destructive",
+      })
+      setDebugDialog((s) => ({ ...s, deleting: false }))
+    }
+  }
+
   const enrichedEntries = useMemo(() => entries.map((e) => enrichRow(e, "entry")), [entries])
   const enrichedExits = useMemo(() => exits.map((e) => enrichRow(e, "exit")), [exits])
 
@@ -643,12 +972,7 @@ export default function EntriesExitsPage() {
   // "Intrări întârziate" should list only bookings that are late AND still not arrived (no LPR actualTime yet).
   // Once LPR confirms arrival, it should disappear from this list.
   const lateEntries = useMemo(() => {
-    // IMPORTANT: late entries are cumulative (carry-over) from previous days,
-    // but we should NOT include future days when includeFuture=true.
-    const rows = visibleEnrichedEntries.filter((e) => {
-      const d = (e.startDate ?? selectedDate)
-      return d <= selectedDate && e.isLate && !e.actualTime
-    })
+    const rows = visibleEnrichedEntries.filter((e) => e.isLate && !e.actualTime)
     return [...rows].sort(
       (a, b) =>
         getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
@@ -657,11 +981,7 @@ export default function EntriesExitsPage() {
   // "Ieșiri întârziate" should list only bookings that are late AND still not departed (no LPR actualTime yet).
   // Once LPR confirms departure, it should disappear from this list.
   const lateExits = useMemo(() => {
-    // Keep consistent with late entries: allow carry-over from previous days, exclude future.
-    const rows = visibleEnrichedExits.filter((e) => {
-      const d = (e.endDate ?? selectedDate)
-      return d <= selectedDate && e.hasArrived === true && e.isLate && !e.actualTime
-    })
+    const rows = visibleEnrichedExits.filter((e) => e.hasArrived === true && e.isLate && !e.actualTime)
     return [...rows].sort((a, b) => {
       // Most recent scheduled exit first (so newest late is on top, oldest at the bottom).
       const ka = getScheduledSortKey(a, "exit", selectedDate)
@@ -674,6 +994,53 @@ export default function EntriesExitsPage() {
       return String(a.id ?? "").localeCompare(String(b.id ?? ""))
     })
   }, [visibleEnrichedExits, selectedDate])
+
+  // Debug: dump what we show in the UI (late entries/exits).
+  useEffect(() => {
+    if (!debugCarry) return
+    try {
+      const w = window as any
+      w.__entriesExitsDebug = {
+        selectedDate,
+        includeFuture,
+        lateEntries,
+        lateExits,
+      }
+
+      const toRow = (r: EnrichedRow) => ({
+        id: r.id,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        timeScheduled: r.time,
+        actualTime: (r as any).actualTime,
+        delayMinutes: r.delayMinutesComputed,
+        isLate: r.isLate,
+        licensePlate: r.licensePlate,
+        phone: r.phone,
+        source: (r as any).source,
+        bookingStatus: (r as any).bookingStatus,
+        paymentStatus: (r as any).paymentStatus,
+        isOnlinePaid: r.isOnlinePaid,
+        isPayOnSite: r.isPayOnSite,
+      })
+
+      console.log("[entries-exits][debugCarry] lateEntries dump", {
+        selectedDate,
+        count: lateEntries.length,
+        note: "Rows are also available at window.__entriesExitsDebug.lateEntries",
+      })
+      console.table(lateEntries.map(toRow))
+
+      console.log("[entries-exits][debugCarry] lateExits dump", {
+        selectedDate,
+        count: lateExits.length,
+        note: "Rows are also available at window.__entriesExitsDebug.lateExits",
+      })
+      console.table(lateExits.map(toRow))
+    } catch (e) {
+      console.warn("[entries-exits][debugCarry] dump failed", e)
+    }
+  }, [debugCarry, includeFuture, lateEntries, lateExits, selectedDate])
 
   if (!isClient) return null
 
@@ -708,7 +1075,13 @@ export default function EntriesExitsPage() {
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
+              <tr
+                key={row.id}
+                className={`border-b border-gray-100 hover:bg-gray-50 ${DEBUG_ROW_DETAILS ? "cursor-pointer" : ""}`}
+                onClick={() => {
+                  if (DEBUG_ROW_DETAILS) openDebugDialog(row, kind)
+                }}
+              >
                 <td className="py-3 px-2 font-medium">
                   {(() => {
                     const scheduledDate = kind === "entry" ? row.startDate : row.endDate
@@ -805,7 +1178,13 @@ export default function EntriesExitsPage() {
       {/* Mobile cards */}
       <div className="space-y-3 md:hidden">
         {rows.map((row) => (
-          <div key={row.id} className={`rounded-lg border p-3 shadow-sm ${cardBg}`}>
+          <div
+            key={row.id}
+            className={`rounded-lg border p-3 shadow-sm ${cardBg} ${DEBUG_ROW_DETAILS ? "cursor-pointer" : ""}`}
+            onClick={() => {
+              if (DEBUG_ROW_DETAILS) openDebugDialog(row, kind)
+            }}
+          >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {row.source === "manual" && (
@@ -1095,6 +1474,145 @@ export default function EntriesExitsPage() {
             >
               {manualLpr.saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Salvează
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Debug dialog (enabled by NEXT_PUBLIC_ADMIN_ROW_DEBUG=true) */}
+      <Dialog
+        open={debugDialog.open}
+        onOpenChange={(open) => {
+          if (!open) closeDebugDialog()
+        }}
+      >
+        <DialogContent className="sm:max-w-[920px] max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Debug rezervare (click row)</DialogTitle>
+            <DialogDescription>
+              ID: <span className="font-semibold">{debugDialog.row?.id ?? "-"}</span> · Tip:{" "}
+              <span className="font-semibold">{debugDialog.kind}</span>
+            </DialogDescription>
+          </DialogHeader>
+
+          {debugDialog.loading ? (
+            <div className="text-sm text-gray-600">Se încarcă detaliile din Firestore…</div>
+          ) : debugDialog.error ? (
+            <div className="text-sm text-red-700">Eroare: {debugDialog.error}</div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-md border bg-amber-50 border-amber-200 p-3 text-sm text-amber-900">
+                <div className="font-semibold">Notă</div>
+                <div>
+                  Acest dialog este pentru debugging. Ștergerea elimină doar documentul din `bookings/`.
+                  Nu șterge automat date din alte colecții (ex: `lpr_events`, `gateEvents`).
+                </div>
+              </div>
+
+              <div className="rounded-md border bg-white p-3 text-sm">
+                <div className="font-semibold mb-2">Rezumat (textual)</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div>
+                    <div><span className="font-semibold">Creată la:</span>{" "}
+                      {debugDialog.docData?.createdAt && typeof debugDialog.docData.createdAt?.toDate === "function"
+                        ? debugDialog.docData.createdAt.toDate().toLocaleString("ro-RO", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+                        : "N/A"}
+                    </div>
+                    <div className="text-xs text-gray-600">
+                      ISO:{" "}
+                      {debugDialog.docData?.createdAt && typeof debugDialog.docData.createdAt?.toDate === "function"
+                        ? debugDialog.docData.createdAt.toDate().toISOString()
+                        : "N/A"}
+                    </div>
+                  </div>
+                  <div>
+                    <div>
+                      <span className="font-semibold">Nr. înmatriculare:</span>{" "}
+                      {String(debugDialog.docData?.licensePlate || debugDialog.row?.licensePlate || "N/A")}
+                    </div>
+                    <div>
+                      <span className="font-semibold">Status:</span>{" "}
+                      {String(debugDialog.docData?.status || (debugDialog.row as any)?.bookingStatus || "N/A")}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <div className="font-semibold">Cum s-a calculat (pe scurt)</div>
+                  <div className="text-xs text-gray-700 mt-1 space-y-1">
+                    <div>
+                      - <span className="font-semibold">Întârziere:</span>{" "}
+                      se compară ora programată cu ora LPR (dacă există). Dacă nu există LPR, se compară cu timpul curent.
+                      Rezultatul este `delayMinutesComputed`; dacă e &gt; 0 ⇒ `isLate=true`.
+                    </div>
+                    {debugDialog.kind === "exit" ? (
+                      <>
+                        <div>
+                          - <span className="font-semibold">Dacă e Plată la parcare / neplătit:</span>{" "}
+                          total zile = zile rezervate + zile extra (rotunjire în sus la orice întârziere). Prețul se ia din tabela de prețuri pentru totalul de zile.
+                        </div>
+                        <div>
+                          - <span className="font-semibold">Dacă e Online achitat:</span>{" "}
+                          se acordă 60 min grație; după aceea se taxează 30 lei/zi (rotunjit în sus).
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        - <span className="font-semibold">Intrări întârziate:</span>{" "}
+                        apar dacă sunt întârziate și nu avem încă LPR intrare (se cumulează pe zilele următoare).
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+              <div className="space-y-2">
+                <div className="font-semibold">Calcule (în UI)</div>
+                <pre className="text-xs whitespace-pre-wrap break-words rounded-md border bg-gray-50 p-3 max-h-[420px] overflow-auto">
+{safeJsonStringify(debugDialog.computed)}
+                </pre>
+              </div>
+              <div className="space-y-2">
+                <div className="font-semibold">Document Firestore `bookings/{debugDialog.row?.id ?? ""}`</div>
+                <pre className="text-xs whitespace-pre-wrap break-words rounded-md border bg-gray-50 p-3 max-h-[420px] overflow-auto">
+{safeJsonStringify(debugDialog.docData)}
+                </pre>
+              </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            {DEBUG_ROW_DETAILS && isAdmin && debugDialog.row?.id && !debugDialog.loading && (
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:justify-between sm:items-center">
+                <div className="flex-1">
+                  <Input
+                    placeholder="Scrie ID-ul sau nr. înmatriculare pentru confirmare ștergere"
+                    value={debugDialog.deleteConfirm || ""}
+                    onChange={(e) => setDebugDialog((s) => ({ ...s, deleteConfirm: e.target.value }))}
+                    disabled={debugDialog.deleting}
+                  />
+                  <div className="text-[11px] text-gray-600 mt-1">
+                    Pentru a șterge: tastează ID-ul sau numărul{" "}
+                    <span className="font-semibold">
+                      {String(debugDialog.docData?.licensePlate || debugDialog.row?.licensePlate || "")}
+                    </span>
+                    .
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={deleteDebugBooking}
+                  disabled={debugDialog.deleting || !String(debugDialog.deleteConfirm || "").trim()}
+                >
+                  {debugDialog.deleting ? "Se șterge..." : "Șterge din Firestore"}
+                </Button>
+              </div>
+            )}
+            <Button type="button" variant="outline" onClick={closeDebugDialog}>
+              Închide
             </Button>
           </DialogFooter>
         </DialogContent>
