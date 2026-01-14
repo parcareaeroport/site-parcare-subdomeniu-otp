@@ -643,7 +643,12 @@ export default function EntriesExitsPage() {
   // "Intrări întârziate" should list only bookings that are late AND still not arrived (no LPR actualTime yet).
   // Once LPR confirms arrival, it should disappear from this list.
   const lateEntries = useMemo(() => {
-    const rows = visibleEnrichedEntries.filter((e) => e.isLate && !e.actualTime)
+    // IMPORTANT: late entries are cumulative (carry-over) from previous days,
+    // but we should NOT include future days when includeFuture=true.
+    const rows = visibleEnrichedEntries.filter((e) => {
+      const d = (e.startDate ?? selectedDate)
+      return d <= selectedDate && e.isLate && !e.actualTime
+    })
     return [...rows].sort(
       (a, b) =>
         getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
@@ -652,7 +657,11 @@ export default function EntriesExitsPage() {
   // "Ieșiri întârziate" should list only bookings that are late AND still not departed (no LPR actualTime yet).
   // Once LPR confirms departure, it should disappear from this list.
   const lateExits = useMemo(() => {
-    const rows = visibleEnrichedExits.filter((e) => e.hasArrived === true && e.isLate && !e.actualTime)
+    // Keep consistent with late entries: allow carry-over from previous days, exclude future.
+    const rows = visibleEnrichedExits.filter((e) => {
+      const d = (e.endDate ?? selectedDate)
+      return d <= selectedDate && e.hasArrived === true && e.isLate && !e.actualTime
+    })
     return [...rows].sort((a, b) => {
       // Most recent scheduled exit first (so newest late is on top, oldest at the bottom).
       const ka = getScheduledSortKey(a, "exit", selectedDate)
