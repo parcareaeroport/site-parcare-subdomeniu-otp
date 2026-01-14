@@ -3078,7 +3078,17 @@ function BookingsPageContent() {
                         <strong>Status Plată:</strong> {getPaymentStatusBadge(selectedBooking.paymentStatus)}
                       </p>
                       <p>
-                        <strong>Sumă:</strong> {selectedBooking.amount ? `${selectedBooking.amount.toFixed(2)} RON` : "0.00 RON"}
+                        <strong>Sumă:</strong>{" "}
+                        {(() => {
+                          const amount = Number(selectedBooking.amount || 0) || 0
+                          if (amount > 0) return `${amount.toFixed(2)} RON`
+                          // For LPR fără rezervare, show value only after exit is known.
+                          if (isLprNoReservation(selectedBooking) && !isLprNoReservationCompleted(selectedBooking)) {
+                            return "0.00 RON (după ieșire)"
+                          }
+                          const computed = computeBookingRowValue(selectedBooking)
+                          return computed > 0 ? `${computed.toFixed(2)} RON` : "0.00 RON"
+                        })()}
                       </p>
                       <p className="text-gray-600 text-xs italic">
                         * Rezervare provenită din LPR (nu se consideră „Plată la parcare” în rapoarte).
