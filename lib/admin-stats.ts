@@ -40,6 +40,9 @@ export interface DailyEntryExit {
   phone: string
   numberOfPersons: number | string // Poate fi număr sau "N/A" pentru rezervări mai vechi
   source?: string // Pentru a identifica rezervările manuale
+  // Optional raw booking fields used by admin calculations
+  status?: string
+  paymentStatus?: string
   actualTime?: string // Ora efectivă din LPR (HH:mm)
   delayMinutes?: number // Diferența (efectiv - programat) în minute
   amount?: number // Valoarea de plată (acolo unde este disponibilă)
@@ -687,6 +690,8 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
         source,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
         bookingStatus: booking.status,
         actualTime,
         delayMinutes,
@@ -759,6 +764,8 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
         source,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
         bookingStatus: booking.status,
         hasArrived: Boolean(lpr.arrivedAt) || lpr.isInside === true,
         actualTime,

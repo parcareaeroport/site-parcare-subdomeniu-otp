@@ -8,7 +8,7 @@ import { RefreshCw, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
-import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, serverTimestamp, updateDoc, where, limit } from "firebase/firestore"
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, serverTimestamp, updateDoc, where, limit } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/context/auth-context"
 import { writeManualLprEvent } from "@/lib/manual-lpr-event"
+import { normalizeLicensePlate } from "@/lib/utils"
 
 type EnrichedRow = DailyEntryExit & {
   startDate?: string
@@ -33,6 +34,8 @@ const LATE_FEE_PER_DAY = 30 // lei / zi întârziere (online)
 const ONLINE_GRACE_MINUTES = 60 // 1h bonus la ultima zi (online)
 
 const DEBUG_ROW_DETAILS = process.env.NEXT_PUBLIC_ADMIN_ROW_DEBUG === "true"
+const DEBUG_EXIT_SIM = process.env.NEXT_PUBLIC_ADMIN_EXIT_SIM === "true" || DEBUG_ROW_DETAILS
+const DEBUG_EXIT_SIM_WRITE = process.env.NEXT_PUBLIC_ADMIN_EXIT_SIM_WRITE === "true"
 
 type PriceEntry = {
   days: number
@@ -97,6 +100,15 @@ function shiftIsoDate(isoYmd: string, deltaDays: number): string {
   if (Number.isNaN(d.getTime())) return isoYmd
   d.setDate(d.getDate() + deltaDays)
   return d.toISOString().slice(0, 10)
+}
+
+function diffCalendarDays(startDate?: string, endDate?: string): number {
+  if (!startDate || !endDate) return 0
+  const s = new Date(`${startDate}T00:00:00`)
+  const e = new Date(`${endDate}T00:00:00`)
+  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return 0
+  const diffMs = e.getTime() - s.getTime()
+  return Math.max(0, Math.floor(diffMs / (24 * 60 * 60 * 1000)))
 }
 
 function safeJsonStringify(value: any): string {
@@ -183,6 +195,31 @@ export default function EntriesExitsPage() {
     confirmOverwrite: false,
     saving: false,
   })
+  const [simulatedExits, setSimulatedExits] = useState<DailyEntryExit[]>([])
+  const [simDialogOpen, setSimDialogOpen] = useState(false)
+  const [simType, setSimType] = useState<"pay_on_site" | "online">("pay_on_site")
+  const [simStartDate, setSimStartDate] = useState(() => new Date().toISOString().split("T")[0])
+  const [simStartTime, setSimStartTime] = useState("10:00")
+  const [simEndDate, setSimEndDate] = useState(() => new Date().toISOString().split("T")[0])
+  const [simEndTime, setSimEndTime] = useState("10:00")
+  const [simNowDate, setSimNowDate] = useState<string>("")
+  const [simNowTime, setSimNowTime] = useState<string>("")
+  const [simPlate, setSimPlate] = useState("SIM123")
+  const [simPhone, setSimPhone] = useState("07")
+  const [simPersons, setSimPersons] = useState("1")
+  const [simWriting, setSimWriting] = useState(false)
+
+  const simPreview = useMemo(() => {
+    try {
+      const row = buildSimulatedExit()
+      const enriched = enrichRow(row, "exit")
+      const computed = buildDebugComputed(enriched, "exit", null)
+      return { row: enriched, computed, error: null as string | null }
+    } catch (e: any) {
+      return { row: null as any, computed: null as any, error: e?.message ? String(e.message) : String(e) }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simType, simStartDate, simStartTime, simEndDate, simEndTime, simNowDate, simNowTime, simPlate, simPhone, simPersons, priceTable])
 
   // Debug helper: enable by adding `?debugCarry=1` to the URL.
   const debugCarry =
@@ -453,6 +490,8 @@ export default function EntriesExitsPage() {
           phone: b.clientPhone || "N/A",
           numberOfPersons: b.numberOfPersons ? b.numberOfPersons : "N/A",
           source: b.source || "webhook",
+          status: b.status,
+          paymentStatus: b.paymentStatus,
           bookingStatus: b.status,
           hasArrived: true,
           actualTime: undefined,
@@ -616,13 +655,14 @@ export default function EntriesExitsPage() {
     return s === "expired" || s.includes("cancelled")
   }
 
-  const enrichRow = (row: DailyEntryExit, kind: "entry" | "exit"): EnrichedRow => {
+  function enrichRow(row: DailyEntryExit, kind: "entry" | "exit"): EnrichedRow {
     const withDates = row as Partial<EnrichedRow>
     const scheduledDate = kind === "entry" ? withDates.startDate ?? selectedDate : withDates.endDate ?? selectedDate
     const scheduledTime = row.time
     // IMPORTANT: keep LPR comparisons consistent with how LPR times are stored (UTC clock for camera-local time)
     const scheduled = parseDateTimeUTC(scheduledDate, scheduledTime)
-    const now = new Date()
+    const raw: any = row as any
+    const now = raw?.__nowOverride ? new Date(raw.__nowOverride) : new Date()
     let delay = row.delayMinutes
 
     // Prefer actual LPR time (if available) for delay calculation.
@@ -649,7 +689,6 @@ export default function EntriesExitsPage() {
     let amountDueText: string | undefined
     let amountDueValue: number | undefined
     let autoCancelled = false
-    const raw: any = row as any
     const isPayOnSite = row.source === "pay_on_site"
     const isLprUnpaid = row.source === "lpr" || row.bookingStatus === "unmatched_lpr" || raw.status === "unmatched_lpr"
     const isOnlinePaid =
@@ -717,14 +756,9 @@ export default function EntriesExitsPage() {
         const startDateVal = withDates.startDate
         const startTimeVal = raw.startTime || row.time
         const endDateVal = withDates.endDate
-        const endTimeVal = (withDates as any).endTime || raw.endTime || row.time
-        const startDt = startDateVal && startTimeVal ? parseDateTime(startDateVal, startTimeVal) : null
-        const endDt = endDateVal && endTimeVal ? parseDateTime(endDateVal, endTimeVal) : null
-        let days = 1
-        if (startDt && endDt && endDt.getTime() > startDt.getTime()) {
-          const diffMs = endDt.getTime() - startDt.getTime()
-          days = Math.ceil(diffMs / (24 * 60 * 60 * 1000))
-        }
+      const startDt = startDateVal && startTimeVal ? parseDateTime(startDateVal, startTimeVal) : null
+      // IMPORTANT: for online, use calendar days difference (ignore end time) to keep grace aligned to start hour.
+      const days = Math.max(1, diffCalendarDays(startDateVal, endDateVal) || 1)
         const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
         const allowedExitMs = startDt
           ? startDt.getTime() + days * 24 * 60 * 60 * 1000 + graceMs
@@ -754,8 +788,9 @@ export default function EntriesExitsPage() {
     }
   }
 
-  const buildDebugComputed = (row: EnrichedRow, kind: "entry" | "exit", rawDoc: any | null) => {
-    const now = new Date()
+  function buildDebugComputed(row: EnrichedRow, kind: "entry" | "exit", rawDoc: any | null) {
+    const rawRow: any = row as any
+    const now = rawRow?.__nowOverride ? new Date(rawRow.__nowOverride) : new Date()
     const scheduledDate = kind === "entry" ? (row.startDate ?? selectedDate) : (row.endDate ?? selectedDate)
     const scheduledTime = row.time
     const scheduledUtc = parseDateTimeUTC(scheduledDate, scheduledTime)
@@ -845,11 +880,7 @@ export default function EntriesExitsPage() {
     }
 
     // ONLINE paid
-    let days = 1
-    if (startDt && endDt && endDt.getTime() > startDt.getTime()) {
-      const diffMs = endDt.getTime() - startDt.getTime()
-      days = Math.ceil(diffMs / (24 * 60 * 60 * 1000))
-    }
+    const days = Math.max(1, diffCalendarDays(startDateVal, endDateVal) || 1)
     const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
     const allowedExitMs = startDt ? startDt.getTime() + days * 24 * 60 * 60 * 1000 + graceMs : (endBase ?? 0) + graceMs
     const overMs = now.getTime() - allowedExitMs
@@ -896,6 +927,179 @@ export default function EntriesExitsPage() {
     }
   }
 
+  function buildSimulatedExit() {
+    const id = `sim-exit-${Date.now()}`
+    const startDate = simStartDate
+    const startTime = simStartTime
+    const endDate = simEndDate || simStartDate
+    const endTime = simEndTime
+
+    const nowOverride =
+      simNowDate && simNowTime
+        ? `${simNowDate}T${normalizeHHmm(simNowTime) ?? simNowTime}:00`
+        : new Date().toISOString()
+
+    const base: DailyEntryExit = {
+      id,
+      startDate,
+      endDate,
+      time: endTime || "N/A",
+      licensePlate: simPlate || "SIM",
+      phone: simPhone || "N/A",
+      numberOfPersons: simPersons || "1",
+      source: simType === "pay_on_site" ? "pay_on_site" : "webhook",
+      bookingStatus: simType === "pay_on_site" ? "confirmed_pay_on_site" : "confirmed_paid",
+      hasArrived: true,
+      // IMPORTANT: keep delay undefined so UI computes lateness consistently (timezone compensation included).
+      delayMinutes: undefined,
+    }
+
+    const anyBase: any = base
+    anyBase.status = base.bookingStatus
+    anyBase.paymentStatus = simType === "online" ? "paid" : "pending"
+    anyBase.__nowOverride = nowOverride
+    anyBase.__simulated = true
+
+    return base
+  }
+
+  function computeDurationMinutesForBooking(startDate: string, startTime: string, endDate: string, endTime: string) {
+    const startDt = parseDateTime(startDate, startTime)
+    const endDt = parseDateTime(endDate, endTime)
+    if (!startDt || !endDt) return null
+    const minutes = Math.round((endDt.getTime() - startDt.getTime()) / (1000 * 60))
+    return minutes > 0 ? minutes : null
+  }
+
+  function computeMultiparkDurationMinutes(durationMinutes: number) {
+    const roundedUpDays = Math.ceil(durationMinutes / (24 * 60))
+    return Math.max(1, roundedUpDays) * 24 * 60
+  }
+
+  const writeSimulatedExitToFirestore = async () => {
+    if (!DEBUG_EXIT_SIM_WRITE) return
+    if (!isAdmin) return
+    if (!user) return
+
+    const startDt = parseDateTime(simStartDate, simStartTime)
+    const endDt = parseDateTime(simEndDate, simEndTime)
+    if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) {
+      toast({
+        title: "Date invalide",
+        description: "Data/ora de ieșire trebuie să fie după data/ora de intrare.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const plateNormalized = normalizeLicensePlate(String(simPlate || "SIM"))
+
+    const endDate = simEndDate || simStartDate
+    const durationMinutes = computeDurationMinutesForBooking(simStartDate, simStartTime, endDate, simEndTime)
+    if (!durationMinutes) {
+      toast({
+        title: "Durată invalidă",
+        description: "Nu pot calcula durata rezervării (minute).",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const days = Math.max(1, Math.ceil(durationMinutes / (24 * 60)))
+    const amountFromTable = getExactPriceForDays(priceTable, days)
+
+    // Firestore document with the same shape as CompleteBookingData (createBookingWithFirestore)
+    // NOTE: This does NOT call Multipark; it is for testing UI behavior.
+    const bookingDoc: any = Object.fromEntries(
+      Object.entries({
+        // Core
+        licensePlate: plateNormalized,
+        startDate: simStartDate,
+        startTime: normalizeHHmm(simStartTime) ?? simStartTime,
+        endDate,
+        endTime: normalizeHHmm(simEndTime) ?? simEndTime,
+        clientName: "",
+        clientTitle: "",
+        clientEmail: undefined,
+        clientPhone: simPhone || undefined,
+        numberOfPersons: parseInt(String(simPersons || "1"), 10) || 1,
+
+        // LPR flags (so the booking is eligible for "Ieșiri" / carry-over late exits)
+        // NOTE: wp-card-booking docs typically don't have LPR yet; we add this only for exit-simulation visibility.
+        lpr: {
+          isInside: true,
+          arrivedAt: serverTimestamp(),
+        },
+
+        // Calculated
+        durationMinutes,
+        multiparkDurationMinutes: simType === "pay_on_site" ? undefined : computeMultiparkDurationMinutes(durationMinutes),
+        days,
+        amount: typeof amountFromTable === "number" ? amountFromTable : undefined,
+
+        // Payment
+        paymentIntentId: undefined,
+        paymentStatus: simType === "online" ? "paid" : "pending",
+
+        // Terms
+        termsAccepted: true,
+        termsAcceptedAt: serverTimestamp(),
+
+        // API (not called here)
+        apiBookingNumber: undefined,
+        apiSuccess: false,
+        apiErrorCode: undefined,
+        apiMessage: "ADMIN_SIM_TEST (no Multipark call)",
+        apiRequestPayload: "ADMIN_SIM_TEST",
+        apiResponseRaw: "ADMIN_SIM_TEST",
+        apiRequestTimestamp: serverTimestamp(),
+
+        // Status/source
+        status: simType === "pay_on_site" ? "confirmed_pay_on_site" : "confirmed_paid",
+        source: simType === "pay_on_site" ? "pay_on_site" : "webhook",
+
+        // Metadata
+        createdAt: serverTimestamp(),
+        lastUpdated: serverTimestamp(),
+      }).filter(([_, v]) => v !== undefined),
+    )
+
+    try {
+      setSimWriting(true)
+      const ref = await addDoc(collection(db, "bookings"), bookingDoc)
+      toast({
+        title: "Salvat în Firestore",
+        description: `Creat bookings/${ref.id}. Dă refresh ca să apară din baza de date.`,
+      })
+      setSimDialogOpen(false)
+      await loadData()
+    } catch (e: any) {
+      toast({
+        title: "Eroare la salvare",
+        description: e?.message ? String(e.message) : "Nu am putut salva rezervarea în Firestore.",
+        variant: "destructive",
+      })
+    } finally {
+      setSimWriting(false)
+    }
+  }
+
+  const addSimulatedExit = () => {
+    const startDt = parseDateTime(simStartDate, simStartTime)
+    const endDt = parseDateTime(simEndDate, simEndTime)
+    if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) {
+      toast({
+        title: "Date invalide",
+        description: "Data/ora de ieșire trebuie să fie după data/ora de intrare.",
+        variant: "destructive",
+      })
+      return
+    }
+    const row = buildSimulatedExit()
+    setSimulatedExits((prev) => [row, ...prev])
+    setSimDialogOpen(false)
+  }
+
   const closeDebugDialog = () => {
     setDebugDialog({ open: false, kind: "entry", row: null, loading: false, docData: null, computed: null, deleting: false, deleteConfirm: "" })
   }
@@ -939,7 +1143,7 @@ export default function EntriesExitsPage() {
   }
 
   const enrichedEntries = useMemo(() => entries.map((e) => enrichRow(e, "entry")), [entries])
-  const enrichedExits = useMemo(() => exits.map((e) => enrichRow(e, "exit")), [exits])
+  const enrichedExits = useMemo(() => [...exits, ...simulatedExits].map((e) => enrichRow(e, "exit")), [exits, simulatedExits])
 
   const visibleEnrichedEntries = useMemo(
     () => enrichedEntries.filter((e) => !isCancelledOrExpiredStatus((e as any).bookingStatus)),
@@ -964,7 +1168,14 @@ export default function EntriesExitsPage() {
   // Exits that already happened (have LPR actualTime) should not appear here.
   const mainExits = useMemo(() => {
     // Main "Ieșiri" must show ONLY the selected day.
-    const rows = visibleEnrichedExits.filter((e) => (e.endDate ?? selectedDate) === selectedDate && e.hasArrived === true && !e.isLate && !e.actualTime)
+    const rows = visibleEnrichedExits.filter((e) => {
+      const isSimulated = Boolean((e as any).__simulated)
+      if (isSimulated) {
+        // For simulations, route based on lateness, regardless of endDate.
+        return e.hasArrived === true && !e.isLate && !e.actualTime
+      }
+      return (e.endDate ?? selectedDate) === selectedDate && e.hasArrived === true && !e.isLate && !e.actualTime
+    })
     return [...rows].sort(
       (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
     )
@@ -1285,10 +1496,24 @@ export default function EntriesExitsPage() {
             Selectează data (ex: 25.10.2025) și vezi intrările/ieșirile pentru acea zi.
           </p>
         </div>
-        <Button onClick={loadData} disabled={loading} variant="outline" size="sm">
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-          {loading ? "Se încarcă..." : "Actualizează"}
-        </Button>
+        <div className="flex items-center gap-2">
+          {DEBUG_EXIT_SIM && (
+            <>
+              <Button type="button" variant="outline" size="sm" onClick={() => setSimDialogOpen(true)}>
+                + Simulează ieșire întârziată
+              </Button>
+              {simulatedExits.length > 0 && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setSimulatedExits([])}>
+                  Șterge simulări
+                </Button>
+              )}
+            </>
+          )}
+          <Button onClick={loadData} disabled={loading} variant="outline" size="sm">
+            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+            {loading ? "Se încarcă..." : "Actualizează"}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col md:flex-row gap-4 md:items-end">
@@ -1613,6 +1838,171 @@ export default function EntriesExitsPage() {
             )}
             <Button type="button" variant="outline" onClick={closeDebugDialog}>
               Închide
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Simulator for late exits (client-only) */}
+      <Dialog open={simDialogOpen} onOpenChange={setSimDialogOpen}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>Simulare ieșire întârziată (front-end only)</DialogTitle>
+            <DialogDescription>
+              Nu se salvează în Firebase. Apare doar în tabelul „Ieșiri întârziate”.
+              {DEBUG_EXIT_SIM_WRITE && isAdmin ? " (Ai și opțiune de salvare test în Firebase.)" : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Tip</Label>
+                <select
+                  className="w-full border rounded px-2 py-1"
+                  value={simType}
+                  onChange={(e) => setSimType(e.target.value as any)}
+                >
+                  <option value="pay_on_site">Plată la parcare</option>
+                  <option value="online">Online (card)</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label>Nr. înmatriculare</Label>
+                <Input value={simPlate} onChange={(e) => setSimPlate(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Start (data)</Label>
+                <Input type="date" value={simStartDate} onChange={(e) => setSimStartDate(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>Start (ora)</Label>
+                <Input type="time" value={simStartTime} onChange={(e) => setSimStartTime(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>End (data)</Label>
+                <Input type="date" value={simEndDate} onChange={(e) => setSimEndDate(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>End (ora)</Label>
+                <Input type="time" value={simEndTime} onChange={(e) => setSimEndTime(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Simulează „acum” (data)</Label>
+                <Input type="date" value={simNowDate} onChange={(e) => setSimNowDate(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>Simulează „acum” (ora)</Label>
+                <Input type="time" value={simNowTime} onChange={(e) => setSimNowTime(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Telefon</Label>
+                <Input value={simPhone} onChange={(e) => setSimPhone(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>Nr persoane</Label>
+                <Input value={simPersons} onChange={(e) => setSimPersons(e.target.value)} />
+              </div>
+            </div>
+          </div>
+          <div className="rounded-md border bg-slate-50 border-slate-200 p-3 text-sm">
+            <div className="font-semibold mb-1">Explicație calcul (preview)</div>
+            {simPreview?.error ? (
+              <div className="text-xs text-red-700">Nu se poate calcula preview: {simPreview.error}</div>
+            ) : !simPreview?.computed?.exitBilling ? (
+              <div className="text-xs text-gray-600">Preview indisponibil (date insuficiente).</div>
+            ) : (
+              <div className="text-xs text-slate-700 space-y-1">
+                {simPreview.computed.exitBilling.mode === "pay_on_site_or_unpaid" ? (
+                  <>
+                    <div>
+                      Tip: <span className="font-semibold">Plată la parcare / neplătit</span>
+                    </div>
+                    <div>
+                      Zile rezervate: <span className="font-semibold">{simPreview.computed.exitBilling.bookedDays}</span>
+                    </div>
+                    <div>
+                      Întârziere: <span className="font-semibold">{simPreview.computed.exitBilling.overdueMin ?? 0} min</span>
+                    </div>
+                    <div>
+                      Zile extra: <span className="font-semibold">{simPreview.computed.exitBilling.extraDays}</span>
+                    </div>
+                    <div>
+                      Total zile: <span className="font-semibold">{simPreview.computed.exitBilling.totalDays}</span>
+                    </div>
+                    <div>
+                      Tarif din tabel:{" "}
+                      <span className="font-semibold">
+                        {simPreview.computed.exitBilling.priceFromTable
+                          ? `${Number(simPreview.computed.exitBilling.priceFromTable).toFixed(2)} LEI`
+                          : "N/A"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      Tip: <span className="font-semibold">Online achitat</span>
+                    </div>
+                    <div>
+                      Zile rezervate: <span className="font-semibold">{simPreview.computed.exitBilling.days}</span>
+                    </div>
+                    <div>
+                      Grație: <span className="font-semibold">60 min</span>
+                    </div>
+                    <div>
+                      Zile întârziere: <span className="font-semibold">{simPreview.computed.exitBilling.daysLate}</span>
+                    </div>
+                    <div>
+                      Penalizare:{" "}
+                      <span className="font-semibold">
+                        {Number(simPreview.computed.exitBilling.fee || 0).toFixed(2)} LEI
+                      </span>
+                    </div>
+                  </>
+                )}
+                <div className="pt-1">
+                  Valoarea afișată în tabel:{" "}
+                  <span className="font-semibold">
+                    {simPreview.row.amountDueValue
+                      ? `${Number(simPreview.row.amountDueValue).toFixed(2)} LEI`
+                      : simPreview.row.amountDueText || "-"}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+       
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSimDialogOpen(false)}>
+              Renunță
+            </Button>
+            {DEBUG_EXIT_SIM_WRITE && isAdmin && user && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={writeSimulatedExitToFirestore}
+                disabled={simWriting}
+              >
+                {simWriting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Se salvează...
+                  </>
+                ) : (
+                  "Salvează în Firebase (test)"
+                )}
+              </Button>
+            )}
+            <Button type="button" onClick={addSimulatedExit}>
+              Adaugă simulare
             </Button>
           </DialogFooter>
         </DialogContent>
