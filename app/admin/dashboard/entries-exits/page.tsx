@@ -133,16 +133,23 @@ function safeJsonStringify(value: any): string {
   }
 }
 
-function getExactPriceForDays(priceTable: PriceEntry[], days: number): number | null {
+function getExactPriceForDays(
+  priceTable: PriceEntry[],
+  days: number,
+  opts?: {
+    useDiscounted?: boolean
+  },
+): number | null {
   if (!days || days <= 0) return null
   if (!priceTable || priceTable.length === 0) return null
+  const useDiscounted = opts?.useDiscounted ?? true
   const exact = priceTable.find((p) => p.days === days)
-  if (exact) return (exact.discountedPrice ?? exact.standardPrice) || null
+  if (exact) return (useDiscounted ? (exact.discountedPrice ?? exact.standardPrice) : exact.standardPrice) || null
   // fallback: nearest greater, otherwise last
   const sorted = [...priceTable].sort((a, b) => a.days - b.days)
   const nearest = sorted.find((p) => p.days >= days) || sorted[sorted.length - 1]
   if (!nearest) return null
-  return (nearest.discountedPrice ?? nearest.standardPrice) || null
+  return (useDiscounted ? (nearest.discountedPrice ?? nearest.standardPrice) : nearest.standardPrice) || null
 }
 
 function formatDelay(minutes?: number) {
@@ -742,12 +749,26 @@ export default function EntriesExitsPage() {
           const extraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
           const totalDays = Math.max(1, bookedDays + extraDays)
 
-          const totalPrice = getExactPriceForDays(priceTable, totalDays)
-          if (totalPrice !== null && totalPrice > 0) {
-            amountDueValue = totalPrice
-            amountDueText = `${totalPrice.toFixed(2)} LEI`
+          const storedAmount = typeof row.amount === "number" && Number.isFinite(row.amount) ? row.amount : null
+
+          // For pay-on-site, keep the UI in sync with the booking detail dialog:
+          // - If there are NO extra days, show the stored booking.amount (it is the authoritative value shown in "Rezervări").
+          // - If there ARE extra days, compute from STANDARD prices (discounts should not apply to pay-on-site).
+          if (isPayOnSite && storedAmount !== null && storedAmount > 0 && extraDays === 0) {
+            amountDueValue = storedAmount
+            amountDueText = `${storedAmount.toFixed(2)} LEI`
           } else {
-            amountDueText = "Calcul conform tarifelor MULTIPARK/WP"
+            const totalPrice = getExactPriceForDays(priceTable, totalDays, { useDiscounted: !isPayOnSite })
+            if (totalPrice !== null && totalPrice > 0) {
+              amountDueValue = totalPrice
+              amountDueText = `${totalPrice.toFixed(2)} LEI`
+            } else if (isPayOnSite && storedAmount !== null && storedAmount > 0 && totalDays === bookedDays) {
+              // Fallback: if price table isn't available, still show stored amount for pay-on-site.
+              amountDueValue = storedAmount
+              amountDueText = `${storedAmount.toFixed(2)} LEI`
+            } else {
+              amountDueText = "Calcul conform tarifelor MULTIPARK/WP"
+            }
           }
         }
 
