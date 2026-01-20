@@ -55,6 +55,18 @@ type ManualLprDialogState = {
   saving: boolean
 }
 
+function coerceMoney(value: any): number | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined
+  if (typeof value === "string") {
+    const s = value.trim()
+    if (!s) return undefined
+    const n = Number(s.replace(",", "."))
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
+}
+
 function normalizeHHmm(time?: string) {
   if (!time) return time
   const t = String(time).trim()
@@ -387,6 +399,8 @@ export default function EntriesExitsPage() {
           startDate: data.startDate || undefined,
           endDate: data.endDate || undefined,
           time: data.startTime || "N/A",
+          startTime: data.startTime || undefined,
+          endTime: data.endTime || undefined,
           licensePlate: data.licensePlate || "N/A",
           phone: data.clientPhone || "N/A",
           numberOfPersons: data.numberOfPersons ? data.numberOfPersons : "N/A",
@@ -394,7 +408,7 @@ export default function EntriesExitsPage() {
           bookingStatus: data.status,
           actualTime: undefined,
           delayMinutes: undefined,
-          amount: typeof data.amount === "number" ? data.amount : undefined,
+          amount: coerceMoney(data.amount),
         }))
 
       const out: DailyEntryExit[] = rows
@@ -493,6 +507,8 @@ export default function EntriesExitsPage() {
           startDate: b.startDate || undefined,
           endDate: b.endDate || undefined,
           time: b.endTime || "N/A",
+          startTime: b.startTime || undefined,
+          endTime: b.endTime || undefined,
           licensePlate: b.licensePlate || "N/A",
           phone: b.clientPhone || "N/A",
           numberOfPersons: b.numberOfPersons ? b.numberOfPersons : "N/A",
@@ -503,7 +519,7 @@ export default function EntriesExitsPage() {
           hasArrived: true,
           actualTime: undefined,
           delayMinutes: undefined,
-          amount: typeof b.amount === "number" ? b.amount : undefined,
+          amount: coerceMoney(b.amount),
         })
       })
       return out
@@ -751,14 +767,16 @@ export default function EntriesExitsPage() {
 
           const storedAmount = typeof row.amount === "number" && Number.isFinite(row.amount) ? row.amount : null
 
-          // For pay-on-site AND LPR-unpaid, keep the UI in sync with the booking detail dialog:
+          // For pay-on-site and LPR, keep the UI in sync with the booking detail dialog:
           // - If there are NO extra days, show the stored booking.amount (it is the authoritative value shown in "Rezervări").
-          // - If there ARE extra days (overdue), compute from STANDARD prices (discounts should not apply).
+          // - If there ARE extra days (overdue), compute from the same price source as the dialog:
+          //   - pay_on_site: STANDARD (no discount)
+          //   - LPR: discounted tier when available (same as Rezervări -> computeBookingRowValue)
           if ((isPayOnSite || isLprUnpaid) && storedAmount !== null && storedAmount > 0 && extraDays === 0) {
             amountDueValue = storedAmount
             amountDueText = `${storedAmount.toFixed(2)} LEI`
           } else {
-            const totalPrice = getExactPriceForDays(priceTable, totalDays, { useDiscounted: !(isPayOnSite || isLprUnpaid) })
+            const totalPrice = getExactPriceForDays(priceTable, totalDays, { useDiscounted: !isPayOnSite })
             if (totalPrice !== null && totalPrice > 0) {
               amountDueValue = totalPrice
               amountDueText = `${totalPrice.toFixed(2)} LEI`
@@ -773,17 +791,14 @@ export default function EntriesExitsPage() {
         }
 
       } else {
-        // ONLINE: allowed exit = start + days*24h + grace (60 min)
-        const startDateVal = withDates.startDate
-        const startTimeVal = raw.startTime || row.time
+        // ONLINE: allowed exit = scheduled END + grace (60 min)
+        // This must match what operations expects in the "Ieșiri întârziate" table:
+        // charge 30 lei/zi for any time past the scheduled end + 60 min.
         const endDateVal = withDates.endDate
-      const startDt = startDateVal && startTimeVal ? parseDateTime(startDateVal, startTimeVal) : null
-      // IMPORTANT: for online, use calendar days difference (ignore end time) to keep grace aligned to start hour.
-      const days = Math.max(1, diffCalendarDays(startDateVal, endDateVal) || 1)
+        const endTimeVal = (withDates as any).endTime || raw.endTime || row.time
+        const endDtLocal = endDateVal && endTimeVal ? parseDateTime(endDateVal, endTimeVal) : null
         const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
-        const allowedExitMs = startDt
-          ? startDt.getTime() + days * 24 * 60 * 60 * 1000 + graceMs
-          : endBase + graceMs
+        const allowedExitMs = endDtLocal ? endDtLocal.getTime() + graceMs : endBase + graceMs
         const overMs = now.getTime() - allowedExitMs
         if (overMs > 0) {
           const daysLate = Math.ceil(overMs / (24 * 60 * 60 * 1000))
@@ -900,10 +915,9 @@ export default function EntriesExitsPage() {
       return out
     }
 
-    // ONLINE paid
-    const days = Math.max(1, diffCalendarDays(startDateVal, endDateVal) || 1)
+    // ONLINE paid: allowed exit = scheduled END + grace (60 min)
     const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
-    const allowedExitMs = startDt ? startDt.getTime() + days * 24 * 60 * 60 * 1000 + graceMs : (endBase ?? 0) + graceMs
+    const allowedExitMs = endDt ? endDt.getTime() + graceMs : (endBase ?? 0) + graceMs
     const overMs = now.getTime() - allowedExitMs
     const daysLate = overMs > 0 ? Math.ceil(overMs / (24 * 60 * 60 * 1000)) : 0
     const fee = daysLate > 0 ? daysLate * LATE_FEE_PER_DAY : 0
@@ -912,7 +926,6 @@ export default function EntriesExitsPage() {
       mode: "online_paid",
       start: { startDateVal, startTimeVal, startDt: startDt?.toISOString() ?? null },
       end: { endDateVal, endTimeVal, endDt: endDt?.toISOString() ?? null, endBase },
-      days,
       graceMs,
       allowedExitMs,
       overMs,

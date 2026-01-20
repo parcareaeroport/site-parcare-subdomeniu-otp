@@ -36,6 +36,9 @@ export interface RecentBooking {
 export interface DailyEntryExit {
   id: string
   time: string // ora programată (startTime/endTime)
+  // Keep raw times available so admin pages can correctly compute durations (e.g. for LPR/pay-on-site billing).
+  startTime?: string
+  endTime?: string
   licensePlate: string
   phone: string
   numberOfPersons: number | string // Poate fi număr sau "N/A" pentru rezervări mai vechi
@@ -111,6 +114,19 @@ export interface PresentVehicle {
   endTime?: string
   isDelayed: boolean
   isUnmatched: boolean
+}
+
+function coerceMoney(value: any): number | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined
+  if (typeof value === "string") {
+    const s = value.trim()
+    if (!s) return undefined
+    // Accept "269", "269.00", "269,00"
+    const n = Number(s.replace(",", "."))
+    return Number.isFinite(n) ? n : undefined
+  }
+  return undefined
 }
 
 /**
@@ -686,6 +702,8 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
         startDate: booking.startDate || selectedDate,
         endDate: booking.endDate || undefined,
         time: scheduledTimeStr,
+        startTime: booking.startTime || undefined,
+        endTime: booking.endTime || undefined,
         licensePlate: booking.licensePlate || 'N/A',
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
@@ -695,7 +713,7 @@ export async function getDailyEntries(selectedDate: string, includeFuture = fals
         bookingStatus: booking.status,
         actualTime,
         delayMinutes,
-        amount: typeof booking.amount === 'number' ? booking.amount : undefined,
+        amount: coerceMoney(booking.amount),
       })
     })
 
@@ -760,6 +778,8 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         startDate: booking.startDate || undefined,
         endDate: booking.endDate || selectedDate,
         time: scheduledTimeStr,
+        startTime: booking.startTime || undefined,
+        endTime: booking.endTime || undefined,
         licensePlate: booking.licensePlate || 'N/A',
         phone: booking.clientPhone || 'N/A',
         numberOfPersons: booking.numberOfPersons ? booking.numberOfPersons : 'N/A',
@@ -770,7 +790,7 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         hasArrived: Boolean(lpr.arrivedAt) || lpr.isInside === true,
         actualTime,
         delayMinutes,
-        amount: typeof booking.amount === 'number' ? booking.amount : undefined,
+        amount: coerceMoney(booking.amount),
       })
     })
 
