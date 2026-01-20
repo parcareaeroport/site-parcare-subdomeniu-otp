@@ -751,19 +751,19 @@ export default function EntriesExitsPage() {
 
           const storedAmount = typeof row.amount === "number" && Number.isFinite(row.amount) ? row.amount : null
 
-          // For pay-on-site, keep the UI in sync with the booking detail dialog:
+          // For pay-on-site AND LPR-unpaid, keep the UI in sync with the booking detail dialog:
           // - If there are NO extra days, show the stored booking.amount (it is the authoritative value shown in "Rezervări").
-          // - If there ARE extra days, compute from STANDARD prices (discounts should not apply to pay-on-site).
-          if (isPayOnSite && storedAmount !== null && storedAmount > 0 && extraDays === 0) {
+          // - If there ARE extra days (overdue), compute from STANDARD prices (discounts should not apply).
+          if ((isPayOnSite || isLprUnpaid) && storedAmount !== null && storedAmount > 0 && extraDays === 0) {
             amountDueValue = storedAmount
             amountDueText = `${storedAmount.toFixed(2)} LEI`
           } else {
-            const totalPrice = getExactPriceForDays(priceTable, totalDays, { useDiscounted: !isPayOnSite })
+            const totalPrice = getExactPriceForDays(priceTable, totalDays, { useDiscounted: !(isPayOnSite || isLprUnpaid) })
             if (totalPrice !== null && totalPrice > 0) {
               amountDueValue = totalPrice
               amountDueText = `${totalPrice.toFixed(2)} LEI`
-            } else if (isPayOnSite && storedAmount !== null && storedAmount > 0 && totalDays === bookedDays) {
-              // Fallback: if price table isn't available, still show stored amount for pay-on-site.
+            } else if ((isPayOnSite || isLprUnpaid) && storedAmount !== null && storedAmount > 0 && totalDays === bookedDays) {
+              // Fallback: if price table isn't available, still show stored amount for pay-on-site/LPR-unpaid.
               amountDueValue = storedAmount
               amountDueText = `${storedAmount.toFixed(2)} LEI`
             } else {
