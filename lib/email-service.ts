@@ -134,7 +134,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
             </div>
             <div class="detail-row">
               <span class="detail-label">Preț Total:</span>
-              <span class="detail-value"><strong>${bookingData.amount.toFixed(2)} RON</strong>${bookingData.source === 'pay_on_site' ? '<br><small style="color: #ee7f1a; font-weight: bold;">Plata se va efectua la parcare</small>' : ''}</span>
+              <span class="detail-value"><strong>${bookingData.amount.toFixed(2)} RON</strong>${bookingData.source === 'pay_on_site' ? '<br><small style="color: #ee7f1a; font-weight: bold;">Plata se va efectua la parcare cu cardul</small>' : ''}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">Status:</span>
@@ -144,7 +144,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
           
           ${isPayOnSite ? `
           <div class="qr-section">
-            <h3>💳 Plată la Parcare</h3>
+            <h3>💳 Plată la Parcare cu cardul</h3>
             <div style="background: #fff3cd; border: 2px solid #ffeaa7; border-radius: 8px; padding: 20px; margin: 20px 0;">
               <div style="text-align: center; font-size: 18px; font-weight: bold; color: #856404; margin-bottom: 10px;">
                 🚗 Achitați direct la parcare!
