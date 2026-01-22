@@ -79,6 +79,16 @@ function normalizeHHmm(time?: string) {
   return ss ? `${hh}:${mm}:${ss}` : `${hh}:${mm}`
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function computeTotalDaysByStartClock(startDt: Date | null, endDt: Date | null): number | null {
+  if (!startDt || !endDt) return null
+  const diffMs = endDt.getTime() - startDt.getTime()
+  if (!Number.isFinite(diffMs)) return null
+  if (diffMs <= 0) return 1
+  return Math.max(1, Math.ceil(diffMs / DAY_MS))
+}
+
 function parseDateTime(date?: string, time?: string) {
   if (!date || !time) return null
   const tt = normalizeHHmm(time)
@@ -759,11 +769,22 @@ export default function EntriesExitsPage() {
           amountDueText = "Achitat"
         } else {
           // Extra days billing policy (pay-on-site / unpaid):
-          // The payment terminal charges an additional full day for ANY overdue time past the scheduled end,
-          // so we must round up (ceil) instead of counting only full 24h blocks.
-          // (Example: 3h delay => 1 extra day; 25h delay => 2 extra days.)
-          const extraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
-          const totalDays = Math.max(1, bookedDays + extraDays)
+          // We bill by "24h blocks from START time", not "any minutes past scheduled END".
+          // That means an extra day is added only after crossing the next 24h boundary counted from startDt.
+          // Example: start=18.02 16:00, end=22.02 19:00 => bookedDays=5.
+          // If now=22.02 22:00, totalDaysByClock is still 5 (no extra day yet).
+          // Only after 23.02 16:00+ do we become 6.
+          const effectiveEndDt =
+            typeof delay === "number" && endDt
+              ? new Date(endDt.getTime() + Math.max(0, delay) * 60 * 1000)
+              : overdueMin > 0
+                ? now
+                : endDt
+
+          const totalDaysByClock = computeTotalDaysByStartClock(startDt, effectiveEndDt)
+          const fallbackExtraDays = overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
+          const totalDays = Math.max(1, totalDaysByClock !== null ? Math.max(bookedDays, totalDaysByClock) : bookedDays + fallbackExtraDays)
+          const extraDays = Math.max(0, totalDays - bookedDays)
 
           const storedAmount = typeof row.amount === "number" && Number.isFinite(row.amount) ? row.amount : null
 
@@ -897,8 +918,17 @@ export default function EntriesExitsPage() {
             ? Math.max(0, Math.round((now.getTime() - endBase) / (1000 * 60)))
             : null
 
-      const extraDays = typeof overdueMin === "number" && overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
-      const totalDays = Math.max(1, bookedDays + extraDays)
+      const effectiveEndDt =
+        typeof delayFromState === "number" && endDt
+          ? new Date(endDt.getTime() + Math.max(0, delayFromState) * 60 * 1000)
+          : typeof overdueMin === "number" && overdueMin > 0
+            ? now
+            : endDt
+
+      const totalDaysByClock = computeTotalDaysByStartClock(startDt, effectiveEndDt)
+      const fallbackExtraDays = typeof overdueMin === "number" && overdueMin > 0 ? Math.ceil(overdueMin / (60 * 24)) : 0
+      const totalDays = Math.max(1, totalDaysByClock !== null ? Math.max(bookedDays, totalDaysByClock) : bookedDays + fallbackExtraDays)
+      const extraDays = Math.max(0, totalDays - bookedDays)
       const totalPrice = getExactPriceForDays(priceTable, totalDays)
 
       out.exitBilling = {
@@ -907,6 +937,8 @@ export default function EntriesExitsPage() {
         end: { endDateVal, endTimeVal, endDt: endDt?.toISOString() ?? null, endBase },
         overdueMin,
         bookedDays,
+        totalDaysByClock,
+        fallbackExtraDays,
         extraDays,
         totalDays,
         priceFromTable: totalPrice,
