@@ -797,7 +797,10 @@ export default function EntriesExitsPage() {
             amountDueValue = storedAmount
             amountDueText = `${storedAmount.toFixed(2)} LEI`
           } else {
-            const totalPrice = getExactPriceForDays(priceTable, totalDays, { useDiscounted: !isPayOnSite })
+            // Pricing source:
+            // - Admin Prices page defines "Preț Final" as `discountedPrice` (standardPrice - reducereAplicata).
+            // - For pay_on_site we also want to use "Preț Final (RON)" tiers (not the standard price column).
+            const totalPrice = getExactPriceForDays(priceTable, totalDays, { useDiscounted: true })
             if (totalPrice !== null && totalPrice > 0) {
               amountDueValue = totalPrice
               amountDueText = `${totalPrice.toFixed(2)} LEI`
