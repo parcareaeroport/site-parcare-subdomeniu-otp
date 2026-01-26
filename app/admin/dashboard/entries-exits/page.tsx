@@ -37,6 +37,11 @@ const DEBUG_ROW_DETAILS = process.env.NEXT_PUBLIC_ADMIN_ROW_DEBUG === "true"
 const DEBUG_EXIT_SIM = process.env.NEXT_PUBLIC_ADMIN_EXIT_SIM === "true" || DEBUG_ROW_DETAILS
 const DEBUG_EXIT_SIM_WRITE = process.env.NEXT_PUBLIC_ADMIN_EXIT_SIM_WRITE === "true"
 
+// Toggle behavior for "Intrări întârziate":
+// - true: keep listed only until booking end date/time (new behavior)
+// - false: keep listed as before (isLate && !actualTime)
+const LATE_ENTRIES_HIDE_AFTER_END = true
+
 type PriceEntry = {
   days: number
   standardPrice: number
@@ -1252,7 +1257,25 @@ export default function EntriesExitsPage() {
   // "Intrări întârziate" should list only bookings that are late AND still not arrived (no LPR actualTime yet).
   // Once LPR confirms arrival, it should disappear from this list.
   const lateEntries = useMemo(() => {
-    const rows = visibleEnrichedEntries.filter((e) => e.isLate && !e.actualTime)
+    if (!LATE_ENTRIES_HIDE_AFTER_END) {
+      const rows = visibleEnrichedEntries.filter((e) => e.isLate && !e.actualTime)
+      return [...rows].sort(
+        (a, b) =>
+          getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
+      )
+    }
+
+    const now = new Date()
+    const rows = visibleEnrichedEntries.filter((e) => {
+      if (!e.isLate || e.actualTime) return false
+      // Keep it listed only until the end date/time of the reservation.
+      const endDate = e.endDate
+      const endTime = (e as any).endTime
+      if (!endDate || !endTime) return true
+      const endDt = parseDateTime(endDate, endTime)
+      if (!endDt) return true
+      return now.getTime() <= endDt.getTime()
+    })
     return [...rows].sort(
       (a, b) =>
         getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
