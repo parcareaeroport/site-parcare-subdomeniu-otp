@@ -42,6 +42,14 @@ const DEBUG_EXIT_SIM_WRITE = process.env.NEXT_PUBLIC_ADMIN_EXIT_SIM_WRITE === "t
 // - false: keep listed as before (isLate && !actualTime)
 const LATE_ENTRIES_HIDE_AFTER_END = true
 
+// Carry-over query strategy for "Intrări întârziate":
+// - true: query by endDate window (handles long reservations that started long ago)
+// - false: legacy query by startDate window (last 7 days)
+const CARRY_LATE_ENTRIES_QUERY_BY_ENDDATE = true
+// How far into the future we look for bookings by endDate (days).
+// Must be >= maximum expected remaining duration you want to keep visible as "late entry".
+const CARRY_LATE_ENTRIES_ENDDATE_LOOKAHEAD_DAYS = 30
+
 type PriceEntry = {
   days: number
   standardPrice: number
@@ -127,6 +135,20 @@ function shiftIsoDate(isoYmd: string, deltaDays: number): string {
   if (Number.isNaN(d.getTime())) return isoYmd
   d.setDate(d.getDate() + deltaDays)
   return d.toISOString().slice(0, 10)
+}
+
+// Timezone-safe date shifting for YYYY-MM-DD strings (always operate in UTC day units).
+function shiftIsoDateUtc(isoYmd: string, deltaDays: number): string {
+  const m = String(isoYmd).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return isoYmd
+  const y = Number(m[1])
+  const mo = Number(m[2])
+  const d = Number(m[3])
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return isoYmd
+  const dt = new Date(Date.UTC(y, mo - 1, d, 0, 0, 0))
+  if (Number.isNaN(dt.getTime())) return isoYmd
+  dt.setUTCDate(dt.getUTCDate() + deltaDays)
+  return dt.toISOString().slice(0, 10)
 }
 
 function diffCalendarDays(startDate?: string, endDate?: string): number {
@@ -373,25 +395,38 @@ export default function EntriesExitsPage() {
   const fetchCarryOverLateEntries = async (date: string): Promise<DailyEntryExit[]> => {
     try {
       const bookingsRef = collection(db, "bookings")
-      // IMPORTANT: carry-over entries should include "no-show" bookings that operations still cares about.
+      // IMPORTANT: carry-over entries should include "no-show" bookings that operations still care about.
       // We include `api_error` too (common for legacy/no-show rows), but still exclude cancels/expired elsewhere.
       // NOTE: we do NOT filter by `lpr.arrivedAt == null` in Firestore because that DOES NOT match missing fields.
       // Many legacy bookings have no `lpr.arrivedAt` field at all, and would not be carried over to the next day.
       // We'll filter (arrivedAt missing/true) client-side instead.
-      const q = query(
-        bookingsRef,
-        where("startDate", ">=", shiftIsoDate(date, -7)),
-        where("startDate", "<", date),
-        where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site", "api_error"]),
-        orderBy("startDate", "asc"),
-        orderBy("startTime", "asc"),
-        limit(500),
-      )
+      const q = CARRY_LATE_ENTRIES_QUERY_BY_ENDDATE
+        ? // Query by endDate window so long reservations (start long ago) still show up until they end.
+          query(
+            bookingsRef,
+            where("endDate", ">=", date),
+            where("endDate", "<=", shiftIsoDateUtc(date, CARRY_LATE_ENTRIES_ENDDATE_LOOKAHEAD_DAYS)),
+            where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site", "api_error"]),
+            orderBy("endDate", "asc"),
+            orderBy("endTime", "asc"),
+            limit(800),
+          )
+        : // Legacy: last 7 days by startDate (can miss long reservations)
+          query(
+            bookingsRef,
+            where("startDate", ">=", shiftIsoDateUtc(date, -7)),
+            where("startDate", "<", date),
+            where("status", "in", ["confirmed_paid", "paid", "confirmed", "confirmed_test", "confirmed_pay_on_site", "api_error"]),
+            orderBy("startDate", "asc"),
+            orderBy("startTime", "asc"),
+            limit(500),
+          )
       const snap = await getDocs(q)
       if (debugCarry) {
         console.log("[entries-exits][debugCarry] carryEntries(query) fetched", {
           selectedDate: date,
           count: snap.size,
+          mode: CARRY_LATE_ENTRIES_QUERY_BY_ENDDATE ? "by_endDate_window" : "by_startDate_window",
         })
       }
       const rows = snap.docs
@@ -401,11 +436,16 @@ export default function EntriesExitsPage() {
           const lpr = data?.lpr || {}
           const hasArrived = Boolean(lpr?.arrivedAt) || lpr?.isInside === true
           if (hasArrived) return false
-          // Avoid flooding with very old no-shows:
-          // keep carry-over even if endDate is in the past, but only up to 7 days behind selectedDate.
-          const endDate = String(data?.endDate || "")
-          const cutoffDate = shiftIsoDate(date, -7)
-          if (endDate && endDate < cutoffDate) return false
+          // Carry-over entries should be "late": startDate must be in the past vs selected date.
+          const startDate = String(data?.startDate || "")
+          if (startDate && startDate >= date) return false
+          // Avoid flooding with very old no-shows (timezone-safe): cap by endDate far in the past.
+          // (When using endDate-window query, this is already enforced by the query itself.)
+          if (!CARRY_LATE_ENTRIES_QUERY_BY_ENDDATE) {
+            const endDate = String(data?.endDate || "")
+            const cutoffDate = shiftIsoDateUtc(date, -7)
+            if (endDate && endDate < cutoffDate) return false
+          }
           // If startTime is missing, still include (sorted last by fallback).
           return true
         })
