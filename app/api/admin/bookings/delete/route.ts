@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/firebase"
+import { cancelBooking as cancelParkingApiBooking } from "@/app/actions/booking-actions"
 import {
   doc,
   increment,
+  getDoc,
   runTransaction,
   serverTimestamp,
 } from "firebase/firestore"
@@ -23,6 +25,29 @@ export async function POST(req: Request) {
     const nowIso = now.toISOString()
     const nowDate = nowIso.split("T")[0]
     const nowTime = now.toTimeString().slice(0, 5)
+
+    const bookingSnap = await getDoc(bookingRef)
+    if (!bookingSnap.exists()) {
+      return NextResponse.json({ error: "Booking not found" }, { status: 404 })
+    }
+
+    const data: any = bookingSnap.data()
+    const shouldCancelInMultipark =
+      Boolean(data?.apiBookingNumber) &&
+      data?.source !== "pay_on_site" &&
+      !String(data?.status || "").toLowerCase().includes("cancelled")
+
+    let multiparkCancelled = false
+    if (shouldCancelInMultipark) {
+      const result = await cancelParkingApiBooking(String(data.apiBookingNumber))
+      if (!result.success) {
+        return NextResponse.json(
+          { error: result.message || "Failed to cancel booking in Multipark" },
+          { status: 502 },
+        )
+      }
+      multiparkCancelled = true
+    }
 
     const result = await runTransaction(db, async (tx) => {
       const bookingSnap = await tx.get(bookingRef)
@@ -98,7 +123,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: result.message }, { status: result.status })
     }
 
-    return NextResponse.json({ success: true, decremented: result.shouldDecrement })
+    return NextResponse.json({
+      success: true,
+      decremented: result.shouldDecrement,
+      multiparkCancelled,
+      multiparkAttempted: shouldCancelInMultipark,
+    })
   } catch (e) {
     console.error("Failed to delete booking", e)
     return NextResponse.json({ error: "Failed to delete booking" }, { status: 500 })

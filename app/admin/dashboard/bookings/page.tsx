@@ -962,9 +962,16 @@ function BookingsPageContent() {
 
       toast({
         title: "Rezervare ștearsă",
-        description: json?.decremented
-          ? "Rezervarea a fost ștearsă și contorul de ocupare a fost ajustat (-1)."
-          : "Rezervarea a fost ștearsă.",
+        description: [
+          json?.multiparkCancelled
+            ? "Rezervarea a fost anulată în Multipark și ștearsă local."
+            : "Rezervarea a fost ștearsă.",
+          json?.decremented
+            ? "Contorul de ocupare a fost ajustat (-1)."
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" "),
       })
       fetchBookings()
       if (isViewDialogOpen && selectedBooking?.id === bookingToDelete.id) {
@@ -2517,6 +2524,11 @@ function BookingsPageContent() {
             </div>
             <div>
               <strong>Nr. înmatriculare:</strong> {bookingToDelete?.licensePlate || "-"}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {shouldCancelInMultipark(bookingToDelete)
+                ? "Se va anula și în Multipark înainte de ștergere."
+                : "Rezervarea nu are număr API; ștergerea este doar locală."}
             </div>
           </div>
           <AlertDialogFooter>
