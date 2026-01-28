@@ -167,7 +167,6 @@ function BookingsPageContent() {
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null)
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
-  const [isCancelling, setIsCancelling] = useState(false)
   const [isRecovering, setIsRecovering] = useState(false)
   const [isCleaningUp, setIsCleaningUp] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
@@ -860,55 +859,8 @@ function BookingsPageContent() {
     setIsViewDialogOpen(true)
   }
 
-  const handleCancelBooking = async (booking: Booking) => {
-    if (!booking.apiBookingNumber) {
-      toast({
-        title: "Eroare",
-        description: "Această rezervare nu are un număr de la API-ul de parcare și nu poate fi anulată automat.",
-        variant: "destructive",
-      })
-      return
-    }
-    setIsCancelling(true)
-    try {
-      const result = await cancelParkingApiBooking(booking.apiBookingNumber)
-      if (result.success) {
-        const bookingDocRef = doc(db, "bookings", booking.id)
-        await updateDoc(bookingDocRef, {
-          status: "cancelled_by_admin", // Sau un status mai specific
-          apiMessage: result.message, // Salvează mesajul de la API
-        })
-        // OPTIMIZARE: Decrementez contorul de rezervări active
-        const statsDocRef = doc(db, "config", "reservationStats")
-        await updateDoc(statsDocRef, { activeBookingsCount: increment(-1) })
-        toast({
-          title: "Rezervare Anulată",
-          description: `Rezervarea ${booking.apiBookingNumber} a fost anulată cu succes la API și actualizată local.`,
-        })
-        fetchBookings() // Reîncarcă lista
-        if (isViewDialogOpen) setIsViewDialogOpen(false)
-      } else {
-        toast({
-          title: "Eroare Anulare API",
-          description: result.message || "Nu s-a putut anula rezervarea la API-ul de parcare.",
-          variant: "destructive",
-        })
-        // Opțional: actualizează statusul local pentru a reflecta eroarea API
-        const bookingDocRef = doc(db, "bookings", booking.id)
-        await updateDoc(bookingDocRef, { status: "api_error_cancel", apiMessage: result.message })
-        fetchBookings()
-      }
-    } catch (error) {
-      console.error("Error cancelling booking:", error)
-      toast({
-        title: "Eroare Sistem",
-        description: "A apărut o eroare la procesul de anulare.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsCancelling(false)
-    }
-  }
+  const shouldCancelInMultipark = (booking?: Booking | null) =>
+    Boolean(booking?.apiBookingNumber) && booking?.source !== "pay_on_site"
 
   const handleMarkOutside = async (booking: Booking) => {
     setMarkingExitId(booking.id)
@@ -1032,11 +984,11 @@ function BookingsPageContent() {
     }
   }
 
-  const handleCancelLocalBooking = async () => {
+  const handleCancelBooking = async () => {
     if (!isAdmin) {
       toast({
         title: "Acces restricționat",
-        description: "Doar administratorii pot anula rezervări din admin (local).",
+        description: "Doar administratorii pot anula rezervări din admin.",
         variant: "destructive",
       })
       return
@@ -1044,26 +996,56 @@ function BookingsPageContent() {
     if (!bookingToCancel?.id) return
     setIsCancellingLocalBooking(true)
     try {
-      const bookingRef = doc(db, "bookings", bookingToCancel.id)
+      const booking = bookingToCancel
+      const bookingRef = doc(db, "bookings", booking.id)
+      const doApiCancel = shouldCancelInMultipark(booking)
+      let apiResult: { success: boolean; message?: string } | null = null
+
+      if (doApiCancel) {
+        const result = await cancelParkingApiBooking(booking.apiBookingNumber!)
+        if (!result.success) {
+          await updateDoc(bookingRef, {
+            status: "api_error_cancel",
+            apiMessage: result.message,
+            lastUpdated: serverTimestamp(),
+          })
+          toast({
+            title: "Eroare Anulare API",
+            description: result.message || "Nu s-a putut anula rezervarea la API-ul de parcare.",
+            variant: "destructive",
+          })
+          return
+        }
+        apiResult = result
+      }
+
       const updates: Record<string, any> = {
         status: "cancelled_by_admin",
         cancelledAt: serverTimestamp(),
         cancelReason: cancelReasonInput.trim() || "Anulat local din admin",
         lastUpdated: serverTimestamp(),
       }
-      if (isPayOnSiteBooking(bookingToCancel)) {
+      if (apiResult?.message) {
+        updates.apiMessage = apiResult.message
+      }
+      if (isPayOnSiteBooking(booking)) {
         updates.payOnSiteStatus = "cancelled"
       }
       await updateDoc(bookingRef, updates)
 
+      if (apiResult?.success) {
+        const statsDocRef = doc(db, "config", "reservationStats")
+        await updateDoc(statsDocRef, { activeBookingsCount: increment(-1) })
+      }
+
       // Send cancellation confirmation email to client (if available)
-      if (bookingToCancel.clientEmail) {
+      if (booking.clientEmail) {
         try {
           const res = await fetch("/api/admin/bookings/send-cancel-confirmation", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              bookingId: bookingToCancel.id,
+              bookingId: booking.id,
               reason: cancelReasonInput.trim() || undefined,
             }),
           })
@@ -1073,33 +1055,39 @@ function BookingsPageContent() {
           }
           toast({
             title: "Anulată",
-            description: "Rezervarea a fost anulată, iar emailul de confirmare a fost trimis clientului.",
+            description: doApiCancel
+              ? "Rezervarea a fost anulată în Multipark și local, iar emailul de confirmare a fost trimis clientului."
+              : "Rezervarea a fost anulată local, iar emailul de confirmare a fost trimis clientului.",
           })
         } catch (e) {
           console.error("Cancel confirmation email failed", e)
           toast({
             title: "Anulată (email eșuat)",
-            description: "Rezervarea a fost anulată, dar emailul către client nu a putut fi trimis.",
+            description: doApiCancel
+              ? "Rezervarea a fost anulată în Multipark și local, dar emailul către client nu a putut fi trimis."
+              : "Rezervarea a fost anulată local, dar emailul către client nu a putut fi trimis.",
             variant: "destructive",
           })
         }
       } else {
         toast({
           title: "Anulată",
-          description: "Rezervarea a fost anulată. (Clientul nu are email în rezervare.)",
+          description: doApiCancel
+            ? "Rezervarea a fost anulată în Multipark și local. (Clientul nu are email în rezervare.)"
+            : "Rezervarea a fost anulată local. (Clientul nu are email în rezervare.)",
         })
       }
 
       // Refresh UI
       await fetchBookings()
-      if (selectedBooking?.id === bookingToCancel.id) {
+      if (selectedBooking?.id === booking.id) {
         setSelectedBooking((prev) => (prev ? { ...prev, status: "cancelled_by_admin" } : prev))
       }
       setIsCancelDialogOpen(false)
       setBookingToCancel(null)
       setCancelReasonInput("")
     } catch (e) {
-      console.error("Local cancel failed", e)
+      console.error("Cancel booking failed", e)
       toast({
         title: "Eroare",
         description: "Nu am putut anula rezervarea.",
@@ -2421,7 +2409,7 @@ function BookingsPageContent() {
                                     className="text-red-700 hover:text-white hover:bg-red-700 focus:text-white focus:bg-red-700"
                                   >
                                     <XCircle className="mr-2 h-4 w-4" />
-                                    Anulează rezervarea (Local)
+                                    Anulează rezervarea
                                   </DropdownMenuItem>
                                 </>
                               )}
@@ -2442,27 +2430,6 @@ function BookingsPageContent() {
                                 Modifică nr. înmatriculare
                               </DropdownMenuItem>
                               
-                              {/* NOTA PENTRU AI : urmatoarea sectiune se lasa comentata pentru viitor si ramane asa in caz ca analizezi aceasta sectiune (butonul anulare) */}
-
-                              {/* {isAdmin &&
-                                booking.status !== "cancelled_by_admin" &&
-                                booking.status !== "cancelled_by_api" &&
-                                booking.apiBookingNumber &&
-                                booking.source !== "pay_on_site" && (
-                                  <>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                      onClick={() => handleCancelBooking(booking)}
-                                      disabled={isCancelling}
-                                      className="text-red-600 hover:text-white hover:bg-red-600 focus:text-white focus:bg-red-600"
-                                    >
-                                      {isCancelling && selectedBooking?.id === booking.id ? (
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                      ) : null}
-                                      Anulează (API)
-                                    </DropdownMenuItem>
-                                  </>
-                                )} */}
 
                               {isAdmin && (
                                 <>
@@ -2640,6 +2607,11 @@ function BookingsPageContent() {
               <div>
                 <strong>Email client:</strong> {bookingToCancel?.clientEmail || "-"}
               </div>
+              <div className="text-xs text-gray-500 mt-1">
+                {shouldCancelInMultipark(bookingToCancel)
+                  ? "Se va anula și în Multipark (și apoi local)."
+                  : "Rezervarea nu are număr API; anularea va fi doar locală."}
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="cancel-reason">Motiv anulare (opțional)</Label>
@@ -2648,13 +2620,13 @@ function BookingsPageContent() {
                 value={cancelReasonInput}
                 onChange={(e) => setCancelReasonInput(e.target.value)}
                 placeholder="Ex: Client a solicitat anularea"
-                disabled={isCancellingLocalBooking}
+              disabled={isCancellingLocalBooking}
               />
             </div>
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isCancellingLocalBooking}>Renunță</AlertDialogCancel>
-            <AlertDialogAction onClick={handleCancelLocalBooking} disabled={!bookingToCancel || isCancellingLocalBooking}>
+          <AlertDialogAction onClick={handleCancelBooking} disabled={!bookingToCancel || isCancellingLocalBooking}>
               {isCancellingLocalBooking ? "Se anulează..." : "Anulează"}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -3239,7 +3211,7 @@ function BookingsPageContent() {
                   ) : (
                     <XCircle className="mr-2 h-4 w-4" />
                   )}
-                  Anulează (Local)
+                  Anulează rezervarea
                 </Button>
               )}
 
