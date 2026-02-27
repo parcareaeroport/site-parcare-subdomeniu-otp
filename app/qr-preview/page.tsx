@@ -1,7 +1,11 @@
 import type { Metadata } from "next"
+import { notFound } from "next/navigation"
+import { signQrBookingNumber } from "@/lib/qr-link"
+
+export const dynamic = "force-dynamic"
 
 export const metadata: Metadata = {
-  title: "QR",
+  title: "QR Preview",
   robots: {
     index: false,
     follow: false,
@@ -15,20 +19,38 @@ export const metadata: Metadata = {
   },
 }
 
-export default async function QrPage({
+export default async function QrPreviewPage({
   searchParams,
 }: {
-  searchParams: Promise<{ bookingNumber?: string; sig?: string }>
+  searchParams: Promise<{ token?: string; bookingNumber?: string }>
 }) {
   const sp = await searchParams
-  const bookingNumber = String(sp?.bookingNumber || "").trim()
-  const sig = String(sp?.sig || "").trim()
+  const token = String(sp?.token || "").trim()
+  const expectedToken = String(
+    process.env.QR_PREVIEW_TOKEN || process.env.EXTERNAL_BOOKING_TOKEN || ""
+  ).trim()
+
+  // Keep the page hidden: without the right token it behaves as if it doesn't exist.
+  if (!expectedToken || !token || token !== expectedToken) {
+    notFound()
+  }
+
+  const rawBookingNumber = String(sp?.bookingNumber || "123456").trim()
+  const bookingNumber = rawBookingNumber.replace(/\D/g, "").slice(0, 6) || "123456"
+
+  const secret = process.env.QR_LINK_SECRET
+  const sig =
+    secret && bookingNumber
+      ? signQrBookingNumber(bookingNumber, secret)
+      : process.env.NODE_ENV === "development"
+        ? "dev"
+        : ""
 
   const imgSrc =
     bookingNumber && sig
       ? `/api/qr?bookingNumber=${encodeURIComponent(bookingNumber)}&sig=${encodeURIComponent(sig)}`
       : ""
-  const hasValidQr = Boolean(bookingNumber && sig)
+  const hasValidQr = Boolean(imgSrc)
 
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-10">
@@ -36,13 +58,13 @@ export default async function QrPage({
         <div className={hasValidQr ? "hidden sm:block" : ""}>
           <h1 className="text-lg font-semibold text-gray-900">Cod QR acces parcare</h1>
           <p className="mt-2 text-sm text-gray-600">
-            Acest cod QR este generat la deschiderea paginii.
+            Preview protejat pentru layout-ul real de QR.
           </p>
         </div>
 
-        {!bookingNumber || !sig ? (
+        {!imgSrc ? (
           <div className="mt-6 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            Link invalid (lipsește bookingNumber sau semnătura).
+            QR indisponibil. Verifică variabilele `QR_LINK_SECRET` (prod) sau rulează în development.
           </div>
         ) : (
           <div className="mt-6 flex flex-col items-center gap-3">
@@ -54,7 +76,7 @@ export default async function QrPage({
             <div className="text-center sm:hidden">
               <h1 className="text-base font-semibold text-gray-900">Cod QR acces parcare</h1>
               <p className="mt-1 text-xs text-gray-600">
-                Acest cod QR este generat la deschiderea paginii.
+                Preview protejat pentru layout-ul real de QR.
               </p>
             </div>
             <div className="text-xs text-gray-500">
@@ -74,4 +96,3 @@ export default async function QrPage({
     </div>
   )
 }
-

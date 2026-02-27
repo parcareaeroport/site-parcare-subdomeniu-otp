@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { RefreshCw, Loader2 } from "lucide-react"
+import { RefreshCw, Loader2, LogOut } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
@@ -65,6 +65,12 @@ type ManualLprDialogState = {
   date: string
   time: string
   confirmOverwrite: boolean
+  saving: boolean
+}
+
+type QuickExitDialogState = {
+  open: boolean
+  row: EnrichedRow | null
   saving: boolean
 }
 
@@ -251,6 +257,11 @@ export default function EntriesExitsPage() {
     confirmOverwrite: false,
     saving: false,
   })
+  const [quickExitDialog, setQuickExitDialog] = useState<QuickExitDialogState>({
+    open: false,
+    row: null,
+    saving: false,
+  })
   const [simulatedExits, setSimulatedExits] = useState<DailyEntryExit[]>([])
   const [simDialogOpen, setSimDialogOpen] = useState(false)
   const [simType, setSimType] = useState<"pay_on_site" | "online">("pay_on_site")
@@ -369,6 +380,22 @@ export default function EntriesExitsPage() {
 
   const closeManualLprDialog = () => {
     setManualLpr((s) => ({ ...s, open: false, row: null, saving: false, confirmOverwrite: false }))
+  }
+
+  const openQuickExitDialog = (row: EnrichedRow) => {
+    setQuickExitDialog({
+      open: true,
+      row,
+      saving: false,
+    })
+  }
+
+  const closeQuickExitDialog = () => {
+    setQuickExitDialog({
+      open: false,
+      row: null,
+      saving: false,
+    })
   }
 
   const toManualLprIsoZ = (date: string, time: string): string | null => {
@@ -645,6 +672,51 @@ export default function EntriesExitsPage() {
         variant: "destructive",
       })
       setManualLpr((s) => ({ ...s, saving: false }))
+    }
+  }
+
+  const markQuickExitNow = async () => {
+    const row = quickExitDialog.row
+    if (!row?.id) return
+
+    if (!user || !isAdmin) {
+      toast({
+        title: "Acces restricționat",
+        description: "Doar administratorii pot marca ieșirea din această pagină.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    try {
+      setQuickExitDialog((s) => ({ ...s, saving: true }))
+      const result = await writeManualLprEvent({
+        bookingId: row.id,
+        plateNumber: row.licensePlate || "",
+        eventType: "exit",
+        eventTimeIsoZ: new Date().toISOString(),
+        adminUid: user?.uid ?? null,
+        adminEmail: user?.email ?? null,
+      })
+
+      toast({
+        title: "Ieșire marcată",
+        description:
+          result.occupancyChanged === "decremented"
+            ? "Mașina a fost marcată ieșită și gradul de ocupare a fost actualizat."
+            : "Mașina a fost marcată ieșită. Gradul de ocupare era deja sincronizat.",
+      })
+
+      closeQuickExitDialog()
+      await loadData()
+    } catch (e: any) {
+      console.error("Quick exit mark failed", e)
+      toast({
+        title: "Eroare la marcarea ieșirii",
+        description: e?.message ? String(e.message) : "Nu s-a putut marca ieșirea.",
+        variant: "destructive",
+      })
+      setQuickExitDialog((s) => ({ ...s, saving: false }))
     }
   }
 
@@ -1479,6 +1551,33 @@ export default function EntriesExitsPage() {
                     >
                       {row.licensePlate}
                     </Button>
+                    {kind === "exit" &&
+                      (row as any).manualLprOverride === true &&
+                      String((row as any).manualLprEventType || "").toLowerCase() === "exit" && (
+                        <Badge
+                          variant="outline"
+                          title="Intervenție manuală: ieșirea a fost marcată de operator."
+                          className="text-amber-800 border-amber-400 bg-amber-100 text-[10px] leading-tight whitespace-nowrap px-2 py-1"
+                        >
+                          Ieșire marcată manual
+                        </Badge>
+                      )}
+                    {kind === "exit" && isAdmin && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 px-2 text-xs border-red-300 text-red-700 hover:bg-red-700 hover:text-white"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openQuickExitDialog(row)
+                        }}
+                        disabled={quickExitDialog.saving || Boolean(row.actualTime)}
+                      >
+                        <LogOut className="mr-1 h-3.5 w-3.5" />
+                        Marchează ieșire acum
+                      </Button>
+                    )}
                   </div>
                 </td>
                 <td className="py-3 px-2">{row.phone}</td>
@@ -1558,6 +1657,33 @@ export default function EntriesExitsPage() {
                 >
                   {row.licensePlate}
                 </Button>
+                {kind === "exit" &&
+                  (row as any).manualLprOverride === true &&
+                  String((row as any).manualLprEventType || "").toLowerCase() === "exit" && (
+                    <Badge
+                      variant="outline"
+                      title="Intervenție manuală: ieșirea a fost marcată de operator."
+                      className="text-amber-800 border-amber-400 bg-amber-100 text-xs"
+                    >
+                      Ieșire marcată manual
+                    </Badge>
+                  )}
+                {kind === "exit" && isAdmin && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-xs border-red-300 text-red-700 hover:bg-red-700 hover:text-white"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      openQuickExitDialog(row)
+                    }}
+                    disabled={quickExitDialog.saving || Boolean(row.actualTime)}
+                  >
+                    <LogOut className="mr-1 h-3.5 w-3.5" />
+                    Marchează ieșire acum
+                  </Button>
+                )}
               </div>
               {(() => {
                 const scheduledDate = kind === "entry" ? row.startDate : row.endDate
@@ -1740,6 +1866,52 @@ export default function EntriesExitsPage() {
           </div>
             </TabsContent>
           </Tabs>
+
+      <Dialog
+        open={quickExitDialog.open}
+        onOpenChange={(open) => {
+          if (!open) closeQuickExitDialog()
+        }}
+      >
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Confirmi ieșirea din parcare?</DialogTitle>
+            <DialogDescription>
+              Această acțiune marchează mașina ca ieșită acum, fără ștergerea rezervării.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 text-sm text-gray-700">
+            <div>
+              <strong>Nr. înmatriculare:</strong> {quickExitDialog.row?.licensePlate || "-"}
+            </div>
+            <div>
+              <strong>Booking ID:</strong> {quickExitDialog.row?.id || "-"}
+            </div>
+            <div className="text-xs text-gray-500">
+              Rezervarea va fi actualizată cu `lpr.isInside=false` și eveniment LPR manual de ieșire.
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={closeQuickExitDialog}
+              disabled={quickExitDialog.saving}
+            >
+              Renunță
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={markQuickExitNow}
+              disabled={quickExitDialog.saving || !quickExitDialog.row?.id}
+            >
+              {quickExitDialog.saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Marchează ieșire acum
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={manualLpr.open}

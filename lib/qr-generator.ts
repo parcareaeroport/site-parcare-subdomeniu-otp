@@ -26,7 +26,7 @@ export async function generateMultiparkQR(bookingNumber: string): Promise<string
         dark: '#000000',  // Culoare neagră pentru cod
         light: '#FFFFFF'  // Fundal alb
       },
-      width: 256  // Dimensiune optimă pentru scanare
+      width: 170  // ~2/3 din dimensiunea anterioară (256), pentru compatibilitate scanner
     })
     
     console.log(`QR code generated successfully for booking: ${formattedBookingNumber}`)
@@ -68,7 +68,7 @@ export async function generateMultiparkQRBuffer(bookingNumber: string): Promise<
         dark: '#000000',
         light: '#FFFFFF'
       },
-      width: 256
+      width: 170
     })
     
     return qrBuffer

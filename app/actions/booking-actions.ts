@@ -85,6 +85,7 @@ interface CompleteBookingData {
   // Status intern
   status: "confirmed_paid" | "confirmed_test" | "api_error" | "cancelled_by_admin" | "cancelled_by_api" | "confirmed_pay_on_site"
   source: "webhook" | "test_mode" | "manual" | "pay_on_site"
+  bookingOrigin?: string
   
   // Metadata
   createdAt: any // serverTimestamp
@@ -638,6 +639,7 @@ export async function createBookingWithFirestore(
     amount?: number
     days?: number
     source?: "webhook" | "test_mode" | "manual" | "pay_on_site"
+    bookingOrigin?: string
     // Date pentru facturare și adresă
     company?: string
     companyVAT?: string
@@ -820,6 +822,7 @@ export async function createBookingWithFirestore(
            additionalData?.source === "pay_on_site" ? "confirmed_pay_on_site" : "confirmed_test")
         : "api_error",
       source: additionalData?.source || "manual",
+      bookingOrigin: additionalData?.bookingOrigin,
       
       // Metadata
       createdAt: serverTimestamp()
@@ -1235,7 +1238,11 @@ export async function cleanupExpiredBookings(): Promise<{ cleanedCount: number, 
         if (!startDate || !startTime) continue
         const startDt = new Date(`${startDate}T${startTime}:00`)
         if (isNaN(startDt.getTime())) continue
-        if (b.lpr?.isInside === true) continue
+        const lpr = b?.lpr || {}
+        // Auto-cancel applies only for true no-show bookings.
+        // If we have any LPR evidence of presence (arrived/departed/inside), skip.
+        const hasLprPresence = Boolean(lpr.arrivedAt) || Boolean(lpr.departedAt) || lpr.isInside === true
+        if (hasLprPresence) continue
         const diffMin = Math.round((now.getTime() - startDt.getTime()) / (1000 * 60))
         if (diffMin <= PAY_ON_SITE_TIMEOUT_MIN) continue
 

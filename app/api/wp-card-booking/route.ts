@@ -309,6 +309,7 @@ export async function POST(request: NextRequest) {
       numberOfPersons,
       paymentStatus: resolvedPaymentStatus,
       source: resolvedSource,
+      bookingOrigin: "wp-card-booking",
       // adresă & facturare
       address: ro.adresa || undefined,
       city: ro.oras || undefined,

@@ -1,14 +1,136 @@
 const {setGlobalOptions} = require("firebase-functions/v2");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
+const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
+const nodemailer = require("nodemailer");
 
 admin.initializeApp();
+
+const REVIEW_SITE_BASE_URL = "https://rezervari.otp-parking.ro";
 
 // Limităm instanțele și setăm regiunea implicită
 setGlobalOptions({
   maxInstances: 5,
   region: "europe-west1",
 });
+
+/**
+ * Encode a string in URL-safe base64 form.
+ * @param {string} input
+ * @return {string}
+ */
+function getBase64Url(input) {
+  return Buffer.from(input)
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+}
+
+/**
+ * Create HMAC SHA-256 hex digest.
+ * @param {string} secret
+ * @param {string} data
+ * @return {string}
+ */
+function getHmacHex(secret, data) {
+  return crypto.createHmac("sha256", secret).update(data).digest("hex");
+}
+
+/**
+ * Build signed token used in review links.
+ * @param {{bookingId: string, email: string, iat: number, exp: number}} payload
+ * @param {string} secret
+ * @return {string}
+ */
+function createReviewToken(payload, secret) {
+  const payloadJson = JSON.stringify(payload);
+  const payload64 = getBase64Url(payloadJson);
+  const sig = getHmacHex(secret, payload64);
+  return `${payload64}.${sig}`;
+}
+
+/**
+ * Convert Firestore timestamp-like values to Date.
+ * @param {unknown} ts
+ * @return {Date|null}
+ */
+function getDateFromTimestamp(ts) {
+  if (!ts) return null;
+  if (typeof ts.toDate === "function") return ts.toDate();
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Build SMTP transporter for review emails.
+ * @return {Object}
+ */
+function createReviewTransporter() {
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+  if (!user || !pass) {
+    throw new Error(
+        "Missing GMAIL_USER or GMAIL_APP_PASSWORD for review email",
+    );
+  }
+  return nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    auth: {user, pass},
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 30000,
+  });
+}
+
+/**
+ * Build HTML body for the review email.
+ * @param {{clientName: string, reviewUrl: string}} params
+ * @return {string}
+ */
+function buildReviewEmailHtml({clientName, reviewUrl}) {
+  const safeName = String(clientName || "Client");
+  return `
+    <div
+      style="
+        font-family: Arial, sans-serif;
+        max-width: 640px;
+        margin: 0 auto;
+        color: #222;
+      "
+    >
+      <h2 style="margin-bottom: 8px;">Multumim pentru rezervare!</h2>
+      <p>Buna, ${safeName}.</p>
+      <p>
+        Ne ajuta foarte mult daca ne lasi o recenzie rapida despre experienta
+        ta.
+        Dureaza sub 1 minut.
+      </p>
+      <p style="margin: 22px 0;">
+        <a
+          href="${reviewUrl}"
+          style="
+            background: #ee7f1a;
+            color: #fff;
+            text-decoration: none;
+            padding: 12px 18px;
+            border-radius: 8px;
+            font-weight: bold;
+          "
+        >
+          Lasa o recenzie
+        </a>
+      </p>
+      <p style="font-size: 13px; color: #666;">
+        Daca butonul nu merge, foloseste acest link:<br/>
+        <a href="${reviewUrl}">${reviewUrl}</a>
+      </p>
+    </div>
+  `;
+}
 
 /**
  * Cron: auto-exit pay_on_site după 3h fără LPR
@@ -29,14 +151,26 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
     const settingsSnap = await db.doc("config/reservationSettings").get();
     const data = settingsSnap.exists ? (settingsSnap.data() || {}) : {};
     payOnSiteAutoCancelEnabled = data.payOnSiteAutoCancelEnabled !== false;
-    const rawMin = Number(data.payOnSiteAutoCancelMinutes ?? 180);
-    payOnSiteAutoCancelMinutes = Number.isFinite(rawMin) && rawMin > 0 ? rawMin : 180;
+    const rawMin = Number(
+        data.payOnSiteAutoCancelMinutes !== undefined ?
+          data.payOnSiteAutoCancelMinutes :
+          180,
+    );
+    payOnSiteAutoCancelMinutes = Number.isFinite(rawMin) && rawMin > 0 ?
+      rawMin :
+      180;
   } catch (e) {
-    console.error("autoExitPayOnSite: failed reading reservationSettings, using defaults", e);
+    console.error(
+        "autoExitPayOnSite: failed reading reservationSettings, using defaults",
+        e,
+    );
   }
 
   if (!payOnSiteAutoCancelEnabled) {
-    console.log("autoExitPayOnSite: disabled by config (payOnSiteAutoCancelEnabled=false)");
+    console.log(
+        "autoExitPayOnSite: disabled by config " +
+        "(payOnSiteAutoCancelEnabled=false)",
+    );
     return null;
   }
 
@@ -68,9 +202,13 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
     if (b.payOnSiteStatus === "cancelled") continue;
 
     const lpr = b.lpr || {};
-    // IMPORTANT: auto-cancel only for no-show (Intrări), never for cars that arrived.
-    const hasArrived = Boolean(lpr.arrivedAt) || lpr.isInside === true;
-    if (hasArrived) continue;
+    // IMPORTANT: auto-cancel only for no-show (Intrări), never for cars
+    // that have any LPR presence signal (arrived/departed/inside).
+    const hasLprPresence =
+        Boolean(lpr.arrivedAt) ||
+        Boolean(lpr.departedAt) ||
+        lpr.isInside === true;
+    if (hasLprPresence) continue;
 
     const startDt = new Date(`${b.startDate}T${b.startTime}:00`);
     if (Number.isNaN(startDt.getTime())) continue;
@@ -82,7 +220,9 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
 
     const updates = {
       "status": "cancelled_pay_on_site_timeout",
-      "cancelReason": `Auto-cancel pay_on_site: no-show după ${payOnSiteAutoCancelMinutes} minute de la intrare`,
+      "cancelReason":
+        "Auto-cancel pay_on_site: no-show după " +
+        `${payOnSiteAutoCancelMinutes} minute de la intrare`,
       "payOnSiteStatus": "cancelled",
       "payOnSiteAutoCancelled": true,
       "payOnSiteAutoCancelledAt": admin.firestore.FieldValue.serverTimestamp(),
@@ -143,5 +283,211 @@ exports.autoExitPayOnSite = onSchedule("every 15 minutes", async () => {
   const sP = `autoExitPayOnSite: done, processed=${processed}`;
   const sC = `checked=${snap.size}`;
   console.log(`${sP}, ${sC}`);
+  return null;
+});
+
+exports.scheduleWpCardReviewEmail = onDocumentCreated(
+    "bookings/{bookingId}",
+    async (event) => {
+      const snap = event.data;
+      if (!snap) return;
+
+      const bookingId = event.params.bookingId;
+      const booking = snap.data() || {};
+      const origin = String(booking.bookingOrigin || "");
+      const paymentStatus = String(booking.paymentStatus || "");
+      const clientEmail = String(booking.clientEmail || "").trim();
+
+      if (origin !== "wp-card-booking") return;
+      if (paymentStatus !== "paid") return;
+      if (!clientEmail) return;
+
+      const db = admin.firestore();
+      const createdAt = getDateFromTimestamp(booking.createdAt) || new Date();
+      const scheduledForDate = new Date(createdAt.getTime() + 60 * 60 * 1000);
+      const scheduledFor = admin.firestore.Timestamp.fromDate(scheduledForDate);
+
+      const taskRef = db.collection("review_email_tasks").doc(bookingId);
+      const existingTask = await taskRef.get();
+      if (existingTask.exists) {
+        console.log(
+            "scheduleWpCardReviewEmail: task already exists",
+            {bookingId},
+        );
+        return;
+      }
+
+      await taskRef.set({
+        bookingId,
+        bookingOrigin: origin,
+        status: "pending",
+        attempts: 0,
+        maxAttempts: 3,
+        scheduledFor,
+        clientEmail,
+        clientName: booking.clientName || "",
+        licensePlate: booking.licensePlate || "",
+        apiBookingNumber: booking.apiBookingNumber || "",
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await db.collection("bookings").doc(bookingId).set({
+        reviewEmailStatus: "scheduled",
+        reviewEmailScheduledAt: scheduledFor,
+        reviewEmailTaskId: bookingId,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+
+      console.log("scheduleWpCardReviewEmail: scheduled", {
+        bookingId,
+        clientEmail,
+        scheduledFor: scheduledForDate.toISOString(),
+      });
+    },
+);
+
+exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
+  const db = admin.firestore();
+  const nowTs = admin.firestore.Timestamp.now();
+  const siteBaseUrl = REVIEW_SITE_BASE_URL.replace(/\/+$/g, "");
+  const reviewSecret = process.env.REVIEW_LINK_SECRET;
+
+  if (!reviewSecret) {
+    console.error("processWpCardReviewEmails: REVIEW_LINK_SECRET is missing");
+    return null;
+  }
+
+  const fromAddress = process.env.REVIEW_EMAIL_FROM || process.env.GMAIL_USER;
+  if (!fromAddress) {
+    console.error(
+        "processWpCardReviewEmails: REVIEW_EMAIL_FROM/GMAIL_USER missing",
+    );
+    return null;
+  }
+
+  const snap = await db.collection("review_email_tasks")
+      .where("status", "==", "pending")
+      .where("scheduledFor", "<=", nowTs)
+      .limit(50)
+      .get();
+
+  if (snap.empty) {
+    console.log("processWpCardReviewEmails: no due tasks");
+    return null;
+  }
+
+  const transporter = createReviewTransporter();
+  let sent = 0;
+  let failed = 0;
+
+  for (const docSnap of snap.docs) {
+    const task = docSnap.data() || {};
+    const taskRef = docSnap.ref;
+    const bookingId = String(task.bookingId || docSnap.id);
+    const attempts = Number(task.attempts || 0);
+    const maxAttempts = Number(task.maxAttempts || 3);
+    const clientEmail = String(task.clientEmail || "").trim();
+    const clientName = String(task.clientName || "").trim() || "Client";
+
+    if (!clientEmail) {
+      await taskRef.set({
+        status: "failed",
+        lastError: "Missing clientEmail",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      failed += 1;
+      continue;
+    }
+
+    await taskRef.set({
+      status: "processing",
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, {merge: true});
+
+    try {
+      const exp = Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60);
+      const iat = Math.floor(Date.now() / 1000);
+      const token = createReviewToken({
+        bookingId,
+        email: clientEmail,
+        iat,
+        exp,
+      }, reviewSecret);
+      const reviewUrl =
+        `${siteBaseUrl}/recenzie?token=${encodeURIComponent(token)}`;
+
+      const mailOptions = {
+        from: {
+          name: "OTP Parking",
+          address: fromAddress,
+        },
+        to: clientEmail,
+        subject: "Cum a fost experienta ta la OTP Parking?",
+        html: buildReviewEmailHtml({clientName, reviewUrl}),
+      };
+
+      const result = await transporter.sendMail(mailOptions);
+
+      await taskRef.set({
+        status: "completed",
+        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        messageId: result && result.messageId ? result.messageId : null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+
+      await db.collection("bookings").doc(bookingId).set({
+        reviewEmailStatus: "sent",
+        reviewEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),
+        reviewEmailLastError: admin.firestore.FieldValue.delete(),
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+
+      sent += 1;
+      console.log("processWpCardReviewEmails: sent", {bookingId, clientEmail});
+    } catch (err) {
+      const nextAttempts = attempts + 1;
+      const isFinal = nextAttempts >= maxAttempts;
+      const backoffMinutes = Math.min(
+          60,
+          Math.pow(2, Math.max(0, attempts)) * 5,
+      );
+      const retryAt = new Date(Date.now() + backoffMinutes * 60 * 1000);
+      const errMsg = err instanceof Error ? err.message : String(err);
+
+      await taskRef.set({
+        status: isFinal ? "failed" : "pending",
+        attempts: nextAttempts,
+        lastError: errMsg,
+        scheduledFor: isFinal ?
+          admin.firestore.FieldValue.delete() :
+          admin.firestore.Timestamp.fromDate(retryAt),
+        failedAt: isFinal ? admin.firestore.FieldValue.serverTimestamp() :
+          admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+
+      await db.collection("bookings").doc(bookingId).set({
+        reviewEmailStatus: isFinal ? "failed" : "retry_pending",
+        reviewEmailLastError: errMsg,
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+
+      failed += 1;
+      console.error("processWpCardReviewEmails: failed", {
+        bookingId,
+        attempts: nextAttempts,
+        maxAttempts,
+        isFinal,
+        errMsg,
+      });
+    }
+  }
+
+  console.log("processWpCardReviewEmails: done", {
+    checked: snap.size,
+    sent,
+    failed,
+  });
   return null;
 });

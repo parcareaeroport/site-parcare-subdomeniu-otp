@@ -5,7 +5,7 @@ import Image from "next/image"
 import { useRouter, usePathname } from "next/navigation"
 import { AuthProvider, useAuth } from "@/context/auth-context"
 import { Button } from "@/components/ui/button"
-import { LayoutDashboard, ListTree, LogOut, Tag, Car, Loader2, RefreshCw, Menu, ArrowLeftRight, ShieldCheck } from "lucide-react"
+import { LayoutDashboard, ListTree, LogOut, Tag, Car, Loader2, RefreshCw, Menu, ArrowLeftRight, ShieldCheck, Star } from "lucide-react"
 
 function AdminLayoutContent({ children }: { children: ReactNode }) {
   const { user, loading, isAdmin, signOut } = useAuth()
@@ -73,6 +73,7 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
     const adminNavItems = isAdmin ? [
       { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
+      { href: "/admin/dashboard/reviews", label: "Recenzii", icon: Star },
       { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
       { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
       // { href: "/admin/dashboard/statistics", label: "Statistici", icon: RefreshCw }, AICI TREBUIE SA LASI COMENTAT LA DIVERSE MODIFICARI, NU PUNE DIN NOU ACEST LINK IN SIDEBAR

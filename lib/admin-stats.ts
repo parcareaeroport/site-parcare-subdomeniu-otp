@@ -54,6 +54,9 @@ export interface DailyEntryExit {
   bookingStatus?: string
   // For exits list: whether the car actually entered the parking (LPR arrivedAt or isInside)
   hasArrived?: boolean
+  // Admin manual LPR markers (used for quick operator visibility in entries/exits tables)
+  manualLprOverride?: boolean
+  manualLprEventType?: "entry" | "exit" | string
 }
 
 // Noi interfețe pentru statisticile suplimentare
@@ -791,6 +794,8 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         actualTime,
         delayMinutes,
         amount: coerceMoney(booking.amount),
+        manualLprOverride: lpr.manualOverride === true,
+        manualLprEventType: lpr.lastEventType || undefined,
       })
     })
 
