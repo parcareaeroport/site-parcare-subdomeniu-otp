@@ -2,7 +2,6 @@ const {setGlobalOptions} = require("firebase-functions/v2");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
-const crypto = require("crypto");
 const nodemailer = require("nodemailer");
 
 admin.initializeApp();
@@ -14,42 +13,6 @@ setGlobalOptions({
   maxInstances: 5,
   region: "europe-west1",
 });
-
-/**
- * Encode a string in URL-safe base64 form.
- * @param {string} input
- * @return {string}
- */
-function getBase64Url(input) {
-  return Buffer.from(input)
-      .toString("base64")
-      .replace(/\+/g, "-")
-      .replace(/\//g, "_")
-      .replace(/=+$/g, "");
-}
-
-/**
- * Create HMAC SHA-256 hex digest.
- * @param {string} secret
- * @param {string} data
- * @return {string}
- */
-function getHmacHex(secret, data) {
-  return crypto.createHmac("sha256", secret).update(data).digest("hex");
-}
-
-/**
- * Build signed token used in review links.
- * @param {{bookingId: string, email: string, iat: number, exp: number}} payload
- * @param {string} secret
- * @return {string}
- */
-function createReviewToken(payload, secret) {
-  const payloadJson = JSON.stringify(payload);
-  const payload64 = getBase64Url(payloadJson);
-  const sig = getHmacHex(secret, payload64);
-  return `${payload64}.${sig}`;
-}
 
 /**
  * Convert Firestore timestamp-like values to Date.
@@ -351,12 +314,6 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
   const db = admin.firestore();
   const nowTs = admin.firestore.Timestamp.now();
   const siteBaseUrl = REVIEW_SITE_BASE_URL.replace(/\/+$/g, "");
-  const reviewSecret = process.env.REVIEW_LINK_SECRET;
-
-  if (!reviewSecret) {
-    console.error("processWpCardReviewEmails: REVIEW_LINK_SECRET is missing");
-    return null;
-  }
 
   const fromAddress = process.env.REVIEW_EMAIL_FROM || process.env.GMAIL_USER;
   if (!fromAddress) {
@@ -406,16 +363,8 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
     }, {merge: true});
 
     try {
-      const exp = Math.floor(Date.now() / 1000) + (14 * 24 * 60 * 60);
-      const iat = Math.floor(Date.now() / 1000);
-      const token = createReviewToken({
-        bookingId,
-        email: clientEmail,
-        iat,
-        exp,
-      }, reviewSecret);
       const reviewUrl =
-        `${siteBaseUrl}/recenzie?token=${encodeURIComponent(token)}`;
+        `${siteBaseUrl}/recenzie?bookingId=${encodeURIComponent(bookingId)}`;
 
       const mailOptions = {
         from: {

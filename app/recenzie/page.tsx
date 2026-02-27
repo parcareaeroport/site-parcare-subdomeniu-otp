@@ -1,21 +1,36 @@
 import ReviewForm from "@/components/review-form";
-import { verifyReviewToken } from "@/lib/review-token";
 
 export const metadata = {
   title: "Recenzie rezervare",
   description: "Lasa o recenzie pentru experienta ta la parcare.",
 };
 
+function bookingIdFromLegacyToken(tokenValue: string): string {
+  const raw = String(tokenValue || "").trim();
+  if (!raw) return "";
+
+  try {
+    const payload64 = raw.split(".")[0] || "";
+    if (!payload64) return "";
+    const json = Buffer.from(payload64, "base64url").toString("utf8");
+    const payload = JSON.parse(json) as {bookingId?: string};
+    return String(payload?.bookingId || "").trim();
+  } catch (_err) {
+    return "";
+  }
+}
+
 export default async function RecenziePage({
   searchParams,
 }: {
-  searchParams: Promise<{ token?: string }>;
+  searchParams: Promise<{ bookingId?: string; token?: string }>;
 }) {
   const sp = await searchParams;
-  const token = String(sp?.token || "").trim();
-  const secret = process.env.REVIEW_LINK_SECRET || "";
+  const bookingIdDirect = String(sp?.bookingId || "").trim();
+  const bookingId =
+    bookingIdDirect || bookingIdFromLegacyToken(String(sp?.token || ""));
 
-  if (!token || !secret) {
+  if (!bookingId) {
     return (
       <div className="mx-auto max-w-2xl px-4 py-10">
         <h1 className="text-2xl font-bold mb-3">Link invalid</h1>
@@ -26,22 +41,9 @@ export default async function RecenziePage({
     );
   }
 
-  const verification = verifyReviewToken(token, secret);
-  if (!verification.valid) {
-    return (
-      <div className="mx-auto max-w-2xl px-4 py-10">
-        <h1 className="text-2xl font-bold mb-3">Link invalid</h1>
-        <p className="text-gray-700">
-          {verification.error}
-        </p>
-      </div>
-    );
-  }
-
   return (
     <ReviewForm
-      token={token}
-      bookingId={verification.payload.bookingId}
+      bookingId={bookingId}
     />
   );
 }

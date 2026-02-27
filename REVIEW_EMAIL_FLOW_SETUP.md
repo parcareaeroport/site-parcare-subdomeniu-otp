@@ -8,20 +8,16 @@ This document covers the delayed review email flow for bookings created via
 - Marks WP card bookings with `bookingOrigin: "wp-card-booking"`.
 - On booking create, a Firebase Function schedules a review email task for `+1h`.
 - A scheduled Firebase Function processes due tasks every 5 minutes.
-- The email contains a signed link to `/recenzie?token=...`.
+- The email contains a direct link to `/recenzie?bookingId=<id>`.
+- Review link is always accessible (no token, no open-limit validation).
 - Review submit is handled by `POST /api/reviews` and saved in Firestore.
 
 ## Required environment variables
-
-### Next.js app
-
-- `REVIEW_LINK_SECRET` (must match Functions secret)
 
 ### Firebase Functions
 
 - `GMAIL_USER`
 - `GMAIL_APP_PASSWORD`
-- `REVIEW_LINK_SECRET` (same value as app)
 - `REVIEW_EMAIL_FROM` (optional; fallback is `GMAIL_USER`)
 
 Note: review links are generated with the fixed site base
@@ -41,6 +37,8 @@ Note: review links are generated with the fixed site base
 - `reviewEmailSentAt`
 - `reviewEmailTaskId`
 - `reviewEmailLastError`
+- `reviewLinkConsumedAt`
+- `reviewLinkUsedByEmail`
 - `reviewSubmittedAt`
 - `reviewRating`
 - `reviewComment`

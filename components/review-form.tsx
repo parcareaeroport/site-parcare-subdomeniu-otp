@@ -4,11 +4,10 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 
 type ReviewFormProps = {
-  token: string;
   bookingId: string;
 };
 
-export default function ReviewForm({ token, bookingId }: ReviewFormProps) {
+export default function ReviewForm({ bookingId }: ReviewFormProps) {
   const [rating, setRating] = useState(5);
   const [name, setName] = useState("");
   const [comment, setComment] = useState("");
@@ -29,7 +28,7 @@ export default function ReviewForm({ token, bookingId }: ReviewFormProps) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          token,
+          bookingId,
           rating,
           name: name.trim() || undefined,
           comment: comment.trim() || undefined,
