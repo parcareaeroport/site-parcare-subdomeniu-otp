@@ -7,6 +7,8 @@ type ReviewFormProps = {
   bookingId: string;
 };
 
+const GOOGLE_REVIEW_URL = "https://g.page/r/CWWqOp4BhgTkEAE/review";
+
 export default function ReviewForm({ bookingId }: ReviewFormProps) {
   const [rating, setRating] = useState(5);
   const [name, setName] = useState("");
@@ -51,11 +53,23 @@ export default function ReviewForm({ bookingId }: ReviewFormProps) {
   return (
     <div className="mx-auto max-w-2xl px-4 py-10">
       <h1 className="text-2xl font-bold mb-2">Lasa o recenzie</h1>
-   
+      <p className="text-sm text-gray-600 mb-6">
+        Dupa trimitere, poti lasa si o recenzie publica pe Google.
+      </p>
 
       {success ? (
-        <div className="rounded-md border border-green-200 bg-green-50 p-4 text-green-800">
-          {success}
+        <div className="rounded-md border border-green-200 bg-green-50 p-4 text-green-800 space-y-4">
+          <p>{success}</p>
+          <div>
+            <a
+              href={GOOGLE_REVIEW_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center rounded-md border border-green-700 bg-white px-4 py-2 text-sm font-semibold text-green-800 hover:bg-green-100"
+            >
+              Lasa si pe Google
+            </a>
+          </div>
         </div>
       ) : (
         <form onSubmit={onSubmit} className="space-y-5">

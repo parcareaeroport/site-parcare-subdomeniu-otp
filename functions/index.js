@@ -7,6 +7,7 @@ const nodemailer = require("nodemailer");
 admin.initializeApp();
 
 const REVIEW_SITE_BASE_URL = "https://rezervari.otp-parking.ro";
+const GOOGLE_REVIEW_URL = "https://g.page/r/CWWqOp4BhgTkEAE/review";
 
 // Limităm instanțele și setăm regiunea implicită
 setGlobalOptions({
@@ -51,10 +52,18 @@ function createReviewTransporter() {
 
 /**
  * Build HTML body for the review email.
- * @param {{clientName: string, reviewUrl: string}} params
+ * @param {{
+ *   clientName: string,
+ *   reviewUrl: string,
+ *   googleReviewUrl: string
+ * }} params
  * @return {string}
  */
-function buildReviewEmailHtml({clientName, reviewUrl}) {
+function buildReviewEmailHtml({
+  clientName,
+  reviewUrl,
+  googleReviewUrl,
+}) {
   const safeName = String(clientName || "Client");
   return `
     <div
@@ -68,11 +77,10 @@ function buildReviewEmailHtml({clientName, reviewUrl}) {
       <h2 style="margin-bottom: 8px;">Multumim pentru rezervare!</h2>
       <p>Buna, ${safeName}.</p>
       <p>
-        Ne ajuta foarte mult daca ne lasi o recenzie rapida despre experienta
-        ta.
-        Dureaza sub 1 minut.
+        Ne ajuta mult feedback-ul tau. Poti lasa rapid o recenzie direct pe
+        site sau pe Google Maps.
       </p>
-      <p style="margin: 22px 0;">
+      <p style="margin: 18px 0 12px 0;">
         <a
           href="${reviewUrl}"
           style="
@@ -82,14 +90,39 @@ function buildReviewEmailHtml({clientName, reviewUrl}) {
             padding: 12px 18px;
             border-radius: 8px;
             font-weight: bold;
+            display: inline-block;
           "
         >
-          Lasa o recenzie
+          Lasa o recenzie rapida
+        </a>
+      </p>
+      <p style="margin: 0 0 22px 0;">
+        <a
+          href="${googleReviewUrl}"
+          style="
+            background: #fff;
+            color: #1f2937;
+            border: 1px solid #d1d5db;
+            text-decoration: none;
+            padding: 12px 18px;
+            border-radius: 8px;
+            font-weight: bold;
+            display: inline-block;
+          "
+        >
+          Lasa recenzie pe Google
         </a>
       </p>
       <p style="font-size: 13px; color: #666;">
-        Daca butonul nu merge, foloseste acest link:<br/>
+        Daca butoanele nu merg, foloseste linkurile de mai jos:
+      </p>
+      <p style="font-size: 13px; color: #666; margin: 8px 0 0 0;">
+        Recenzie pe site:<br/>
         <a href="${reviewUrl}">${reviewUrl}</a>
+      </p>
+      <p style="font-size: 13px; color: #666; margin: 8px 0 0 0;">
+        Recenzie Google:<br/>
+        <a href="${googleReviewUrl}">${googleReviewUrl}</a>
       </p>
     </div>
   `;
@@ -373,7 +406,11 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
         },
         to: clientEmail,
         subject: "Cum a fost experienta ta la OTP Parking?",
-        html: buildReviewEmailHtml({clientName, reviewUrl}),
+        html: buildReviewEmailHtml({
+          clientName,
+          reviewUrl,
+          googleReviewUrl: GOOGLE_REVIEW_URL,
+        }),
       };
 
       const result = await transporter.sendMail(mailOptions);
