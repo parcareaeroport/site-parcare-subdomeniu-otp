@@ -13,6 +13,7 @@ const SUPPORT_ADDRESS_LINE = "Str. Calea Bucureştilor, Nr.303A1";
 const SUPPORT_CITY_LINE = "Otopeni, Ilfov";
 const GOOGLE_MAPS_URL = "https://maps.app.goo.gl/GhoVMNWvst6BamHx5?g_st=aw";
 const WAZE_URL = "https://waze.com/ul?ll=44.575660,26.069918&navigate=yes";
+const REVIEW_TIME_ZONE = "Europe/Bucharest";
 
 // Limităm instanțele și setăm regiunea implicită
 setGlobalOptions({
@@ -95,7 +96,7 @@ function buildReviewEmailHtml({
             display: inline-block;
           "
         >
-          Lasa recenzie pe Google
+          Lasă o recenzie rapidă
         </a>
       </p>
       <p style="font-size: 13px; color: #666;">
@@ -218,20 +219,123 @@ function buildReviewEmailHtml({
 }
 
 /**
+ * Parse date parts from yyyy-mm-dd.
+ * @param {string} dateStr
+ * @return {{year: number, month: number, day: number}|null}
+ */
+function parseDateParts(dateStr) {
+  const match = String(dateStr || "").trim()
+      .match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isInteger(year) || year < 1970) return null;
+  if (!Number.isInteger(month) || month < 1 || month > 12) return null;
+  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+
+  return {year, month, day};
+}
+
+/**
+ * Parse time parts from hh:mm or hh:mm:ss.
+ * @param {string} timeStr
+ * @return {{hour: number, minute: number, second: number}|null}
+ */
+function parseTimeParts(timeStr) {
+  const match = String(timeStr || "").trim()
+      .match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = match[3] ? Number(match[3]) : 0;
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  if (!Number.isInteger(second) || second < 0 || second > 59) return null;
+
+  return {hour, minute, second};
+}
+
+/**
+ * Compute timezone offset in milliseconds for a specific instant.
+ * @param {Date} date
+ * @param {string} timeZone
+ * @return {number}
+ */
+function getTimeZoneOffsetMs(date, timeZone) {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+
+  const parts = dtf.formatToParts(date);
+  const values = {};
+  for (const part of parts) {
+    if (part.type === "literal") continue;
+    values[part.type] = Number(part.value);
+  }
+
+  const zonedAsUtcMs = Date.UTC(
+      values.year,
+      values.month - 1,
+      values.day,
+      values.hour,
+      values.minute,
+      values.second,
+  );
+  return zonedAsUtcMs - date.getTime();
+}
+
+/**
+ * Parse local date-time in target timezone to a UTC Date instant.
+ * @param {string} dateStr
+ * @param {string} timeStr
+ * @param {string} timeZone
+ * @return {Date|null}
+ */
+function parseLocalDateTimeInZone(dateStr, timeStr, timeZone) {
+  const dateParts = parseDateParts(dateStr);
+  const timeParts = parseTimeParts(timeStr);
+  if (!dateParts || !timeParts) return null;
+
+  const naiveUtcMs = Date.UTC(
+      dateParts.year,
+      dateParts.month - 1,
+      dateParts.day,
+      timeParts.hour,
+      timeParts.minute,
+      timeParts.second,
+  );
+
+  const firstOffsetMs = getTimeZoneOffsetMs(new Date(naiveUtcMs), timeZone);
+  let utcMs = naiveUtcMs - firstOffsetMs;
+  const secondOffsetMs = getTimeZoneOffsetMs(new Date(utcMs), timeZone);
+  if (secondOffsetMs !== firstOffsetMs) {
+    utcMs = naiveUtcMs - secondOffsetMs;
+  }
+
+  const parsed = new Date(utcMs);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
  * Parse booking start date-time from booking fields.
  * @param {Record<string, unknown>} booking
  * @return {Date|null}
  */
 function getBookingStartDateTime(booking) {
   const startDate = String(booking.startDate || "").trim();
-  const rawStartTime = String(booking.startTime || "").trim();
-  if (!startDate || !rawStartTime) return null;
-
-  const startTime = rawStartTime.length === 5 ?
-    `${rawStartTime}:00` :
-    rawStartTime;
-  const startDateTime = new Date(`${startDate}T${startTime}`);
-  return Number.isNaN(startDateTime.getTime()) ? null : startDateTime;
+  const startTime = String(booking.startTime || "").trim();
+  if (!startDate || !startTime) return null;
+  return parseLocalDateTimeInZone(startDate, startTime, REVIEW_TIME_ZONE);
 }
 
 /**
