@@ -532,11 +532,21 @@ function BookingsPageContent() {
             if (!raw.startTime && arrivedTimeKey) raw.startTime = arrivedTimeKey
             if (!raw.endTime && departedTimeKey) raw.endTime = departedTimeKey
 
-            // Calculează și marchează depășirea pragului pentru pay_on_site (minute după START, dacă nu a intrat prin LPR)
+            // Calculează și marchează depășirea pragului pentru pay_on_site
+            // doar pentru no-show real (fără niciun semnal LPR).
             try {
-              const isPayOnSite = raw.source === "pay_on_site" || raw.status === "confirmed_pay_on_site"
-              const isInside = raw?.lpr?.isInside === true
-              if (isPayOnSite && !isInside && raw.startDate && raw.startTime && !raw.payOnSiteOverdueLocked) {
+              const isPayOnSite = raw.source === "pay_on_site" || (raw.status === "confirmed_pay_on_site" && raw.source !== "lpr")
+              const hasLprPresence =
+                Boolean(raw?.lpr?.arrivedAt) ||
+                Boolean(raw?.lpr?.departedAt) ||
+                raw?.lpr?.isInside === true
+
+              // Any LPR signal means the booking is no longer a no-show.
+              if (hasLprPresence) {
+                raw.payOnSiteOverdueMoreThan3h = false
+              }
+
+              if (isPayOnSite && !hasLprPresence && raw.startDate && raw.startTime && !raw.payOnSiteOverdueLocked) {
                 const plannedStart = new Date(`${raw.startDate}T${raw.startTime}:00`)
                 const diffMinutes = Math.floor((nowTs - plannedStart.getTime()) / (1000 * 60))
                 const overdueMoreThanThreshold = diffMinutes > payOnSiteCancelMinutes
@@ -764,6 +774,9 @@ function BookingsPageContent() {
 
   const isPayOnSiteOverThreshold = (b: Booking) => {
     if (!isPayOnSiteBooking(b)) return false
+    const lpr: any = (b as any)?.lpr || {}
+    const hasLprPresence = Boolean(lpr.arrivedAt) || Boolean(lpr.departedAt) || lpr.isInside === true
+    if (hasLprPresence) return false
     const s = String(b.status || "").toLowerCase()
     return Boolean((b as any).payOnSiteOverdueMoreThan3h) || s.includes("cancelled_pay_on_site_timeout")
   }
@@ -2241,12 +2254,12 @@ function BookingsPageContent() {
                             <Badge
                               variant="outline"
                               className={`mr-2 text-xs ${
-                                (booking as any).payOnSiteOverdueMoreThan3h
+                                isPayOnSiteOverThreshold(booking)
                                   ? "text-red-800 border-red-500 bg-red-100"
                                   : "text-orange-800 border-orange-500 bg-orange-200"
                               }`}
                             >
-                              {(booking as any).payOnSiteOverdueMoreThan3h
+                              {isPayOnSiteOverThreshold(booking)
                                 ? `PLATĂ LA PARCARE (>${payOnSiteCancelMinutes} min)`
                                 : "PLATĂ LA PARCARE"}
                             </Badge>
