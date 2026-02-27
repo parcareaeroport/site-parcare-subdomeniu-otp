@@ -6,8 +6,13 @@ const nodemailer = require("nodemailer");
 
 admin.initializeApp();
 
-const REVIEW_SITE_BASE_URL = "https://rezervari.otp-parking.ro";
 const GOOGLE_REVIEW_URL = "https://g.page/r/CWWqOp4BhgTkEAE/review";
+const SUPPORT_PHONE = "0742.039.955";
+const SUPPORT_EMAIL = "contact.parcareaeroport@gmail.com";
+const SUPPORT_ADDRESS_LINE = "Str. Calea Bucureştilor, Nr.303A1";
+const SUPPORT_CITY_LINE = "Otopeni, Ilfov";
+const GOOGLE_MAPS_URL = "https://maps.app.goo.gl/GhoVMNWvst6BamHx5?g_st=aw";
+const WAZE_URL = "https://waze.com/ul?ll=44.575660,26.069918&navigate=yes";
 
 // Limităm instanțele și setăm regiunea implicită
 setGlobalOptions({
@@ -54,14 +59,12 @@ function createReviewTransporter() {
  * Build HTML body for the review email.
  * @param {{
  *   clientName: string,
- *   reviewUrl: string,
  *   googleReviewUrl: string
  * }} params
  * @return {string}
  */
 function buildReviewEmailHtml({
   clientName,
-  reviewUrl,
   googleReviewUrl,
 }) {
   const safeName = String(clientName || "Client");
@@ -77,32 +80,14 @@ function buildReviewEmailHtml({
       <h2 style="margin-bottom: 8px;">Multumim pentru rezervare!</h2>
       <p>Buna, ${safeName}.</p>
       <p>
-        Ne ajuta mult feedback-ul tau. Poti lasa rapid o recenzie direct pe
-        site sau pe Google Maps.
+        Daca ai 1 minut, ne-ar ajuta mult o recenzie pe Google Maps.
       </p>
-      <p style="margin: 18px 0 12px 0;">
-        <a
-          href="${reviewUrl}"
-          style="
-            background: #ee7f1a;
-            color: #fff;
-            text-decoration: none;
-            padding: 12px 18px;
-            border-radius: 8px;
-            font-weight: bold;
-            display: inline-block;
-          "
-        >
-          Lasa o recenzie rapida
-        </a>
-      </p>
-      <p style="margin: 0 0 22px 0;">
+      <p style="margin: 18px 0 22px 0;">
         <a
           href="${googleReviewUrl}"
           style="
-            background: #fff;
-            color: #1f2937;
-            border: 1px solid #d1d5db;
+            background: #ee7f1a;
+            color: #fff;
             text-decoration: none;
             padding: 12px 18px;
             border-radius: 8px;
@@ -114,18 +99,150 @@ function buildReviewEmailHtml({
         </a>
       </p>
       <p style="font-size: 13px; color: #666;">
-        Daca butoanele nu merg, foloseste linkurile de mai jos:
-      </p>
-      <p style="font-size: 13px; color: #666; margin: 8px 0 0 0;">
-        Recenzie pe site:<br/>
-        <a href="${reviewUrl}">${reviewUrl}</a>
-      </p>
-      <p style="font-size: 13px; color: #666; margin: 8px 0 0 0;">
-        Recenzie Google:<br/>
+        Daca butonul nu merge, foloseste acest link:<br/>
         <a href="${googleReviewUrl}">${googleReviewUrl}</a>
+      </p>
+
+      <div
+        style="
+          background: #fff;
+          padding: 20px;
+          border-radius: 8px;
+          margin: 20px 0 0 0;
+          border: 1px solid #f1f1f1;
+        "
+      >
+        <h3
+          style="
+            text-align: center;
+            color: #ee7f1a;
+            margin: 0 0 20px 0;
+          "
+        >
+          📞 Contactați-ne
+        </h3>
+
+        <div
+          style="
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+          "
+        >
+          <div style="text-align: center; padding: 10px;">
+            <h4 style="margin: 0 0 5px; color: #ee7f1a; font-size: 14px;">
+              📞 Telefon suport
+            </h4>
+            <p style="margin: 0; font-size: 13px;">${SUPPORT_PHONE}</p>
+          </div>
+
+          <div style="text-align: center; padding: 10px;">
+            <h4 style="margin: 0 0 5px; color: #ee7f1a; font-size: 14px;">
+              📧 Email suport
+            </h4>
+            <p style="margin: 0; font-size: 13px;">${SUPPORT_EMAIL}</p>
+          </div>
+
+          <div style="text-align: center; padding: 10px;">
+            <h4 style="margin: 0 0 5px; color: #ee7f1a; font-size: 14px;">
+              🕒 Program
+            </h4>
+            <p style="margin: 0; font-size: 13px;">
+              <strong>Non-Stop</strong>
+            </p>
+          </div>
+
+          <div style="text-align: center; padding: 10px;">
+            <h4 style="margin: 0 0 5px; color: #ee7f1a; font-size: 14px;">
+              📍 Locație
+            </h4>
+            <p style="margin: 0; font-size: 13px;">${SUPPORT_ADDRESS_LINE}</p>
+            <p style="margin: 0; font-size: 13px;">${SUPPORT_CITY_LINE}</p>
+            <p style="margin: 0; font-size: 12px;">
+              La 500 metri de Aeroportul Henri Coandă
+            </p>
+            <div
+              style="
+                margin-top: 10px;
+                display: flex;
+                gap: 8px;
+                justify-content: center;
+              "
+            >
+              <a
+                href="${GOOGLE_MAPS_URL}"
+                style="
+                  display: inline-block;
+                  background: #ee7f1a;
+                  color: #fff;
+                  padding: 8px 12px;
+                  border-radius: 6px;
+                  text-decoration: none;
+                  font-size: 13px;
+                "
+              >
+                📍 Google Maps
+              </a>
+              <a
+                href="${WAZE_URL}"
+                style="
+                  display: inline-block;
+                  background: #0099ff;
+                  color: #fff;
+                  padding: 8px 12px;
+                  border-radius: 6px;
+                  text-decoration: none;
+                  font-size: 13px;
+                "
+              >
+                🚗 Waze
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p
+        style="
+          margin: 20px 0 0 0;
+          text-align: center;
+          color: #666;
+          font-size: 12px;
+        "
+      >
+        <strong>OTP Parking SRL</strong> | ${SUPPORT_ADDRESS_LINE},
+        ${SUPPORT_CITY_LINE} | ${SUPPORT_EMAIL}
       </p>
     </div>
   `;
+}
+
+/**
+ * Parse booking start date-time from booking fields.
+ * @param {Record<string, unknown>} booking
+ * @return {Date|null}
+ */
+function getBookingStartDateTime(booking) {
+  const startDate = String(booking.startDate || "").trim();
+  const rawStartTime = String(booking.startTime || "").trim();
+  if (!startDate || !rawStartTime) return null;
+
+  const startTime = rawStartTime.length === 5 ?
+    `${rawStartTime}:00` :
+    rawStartTime;
+  const startDateTime = new Date(`${startDate}T${startTime}`);
+  return Number.isNaN(startDateTime.getTime()) ? null : startDateTime;
+}
+
+/**
+ * Compute review email schedule date as startDate + startTime + 1 hour.
+ * @param {Record<string, unknown>} booking
+ * @return {Date|null}
+ */
+function getReviewArrivalScheduleDate(booking) {
+  const startDateTime = getBookingStartDateTime(booking);
+  if (!startDateTime) return null;
+  return new Date(startDateTime.getTime() + 60 * 60 * 1000);
 }
 
 /**
@@ -291,16 +408,34 @@ exports.scheduleWpCardReviewEmail = onDocumentCreated(
       const bookingId = event.params.bookingId;
       const booking = snap.data() || {};
       const origin = String(booking.bookingOrigin || "");
+      const source = String(booking.source || "");
+      const status = String(booking.status || "");
       const paymentStatus = String(booking.paymentStatus || "");
       const clientEmail = String(booking.clientEmail || "").trim();
 
-      if (origin !== "wp-card-booking") return;
-      if (paymentStatus !== "paid") return;
+      const isWpCardBooking =
+        origin === "wp-card-booking" && paymentStatus === "paid";
+      const isPayOnSiteBooking =
+        source === "pay_on_site" && status === "confirmed_pay_on_site";
+
+      if (!isWpCardBooking && !isPayOnSiteBooking) return;
       if (!clientEmail) return;
 
       const db = admin.firestore();
-      const createdAt = getDateFromTimestamp(booking.createdAt) || new Date();
-      const scheduledForDate = new Date(createdAt.getTime() + 60 * 60 * 1000);
+      const scheduledForDate = getReviewArrivalScheduleDate(booking);
+      if (!scheduledForDate) {
+        await db.collection("bookings").doc(bookingId).set({
+          reviewEmailStatus: "schedule_failed",
+          reviewEmailLastError:
+            "Missing or invalid startDate/startTime for review email",
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        console.warn("scheduleWpCardReviewEmail: start date-time missing", {
+          bookingId,
+        });
+        return;
+      }
+
       const scheduledFor = admin.firestore.Timestamp.fromDate(scheduledForDate);
 
       const taskRef = db.collection("review_email_tasks").doc(bookingId);
@@ -315,7 +450,8 @@ exports.scheduleWpCardReviewEmail = onDocumentCreated(
 
       await taskRef.set({
         bookingId,
-        bookingOrigin: origin,
+        bookingOrigin: origin || source || "unknown",
+        scheduleMode: "arrival_plus_1h",
         status: "pending",
         attempts: 0,
         maxAttempts: 3,
@@ -331,6 +467,7 @@ exports.scheduleWpCardReviewEmail = onDocumentCreated(
       await db.collection("bookings").doc(bookingId).set({
         reviewEmailStatus: "scheduled",
         reviewEmailScheduledAt: scheduledFor,
+        reviewEmailScheduleMode: "arrival_plus_1h",
         reviewEmailTaskId: bookingId,
         lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       }, {merge: true});
@@ -338,6 +475,7 @@ exports.scheduleWpCardReviewEmail = onDocumentCreated(
       console.log("scheduleWpCardReviewEmail: scheduled", {
         bookingId,
         clientEmail,
+        scheduleMode: "arrival_plus_1h",
         scheduledFor: scheduledForDate.toISOString(),
       });
     },
@@ -345,8 +483,7 @@ exports.scheduleWpCardReviewEmail = onDocumentCreated(
 
 exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
   const db = admin.firestore();
-  const nowTs = admin.firestore.Timestamp.now();
-  const siteBaseUrl = REVIEW_SITE_BASE_URL.replace(/\/+$/g, "");
+  const nowMs = Date.now();
 
   const fromAddress = process.env.REVIEW_EMAIL_FROM || process.env.GMAIL_USER;
   if (!fromAddress) {
@@ -358,8 +495,7 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
 
   const snap = await db.collection("review_email_tasks")
       .where("status", "==", "pending")
-      .where("scheduledFor", "<=", nowTs)
-      .limit(50)
+      .limit(100)
       .get();
 
   if (snap.empty) {
@@ -368,6 +504,8 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
   }
 
   const transporter = createReviewTransporter();
+  let rescheduled = 0;
+  let deferred = 0;
   let sent = 0;
   let failed = 0;
 
@@ -379,6 +517,90 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
     const maxAttempts = Number(task.maxAttempts || 3);
     const clientEmail = String(task.clientEmail || "").trim();
     const clientName = String(task.clientName || "").trim() || "Client";
+    const bookingRef = db.collection("bookings").doc(bookingId);
+    let expectedScheduleDate = null;
+    let bookingExists = false;
+    try {
+      const bookingSnap = await bookingRef.get();
+      const bookingData = bookingSnap.exists ? (bookingSnap.data() || {}) : {};
+      if (bookingSnap.exists) {
+        bookingExists = true;
+        expectedScheduleDate = getReviewArrivalScheduleDate(bookingData);
+      }
+    } catch (bookingErr) {
+      console.error("processWpCardReviewEmails: booking read failed", {
+        bookingId,
+        error: bookingErr instanceof Error ?
+          bookingErr.message :
+          String(bookingErr),
+      });
+    }
+
+    if (!bookingExists) {
+      await taskRef.set({
+        status: "failed",
+        lastError: "Missing booking for arrival_plus_1h schedule",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      failed += 1;
+      continue;
+    }
+
+    if (!expectedScheduleDate) {
+      await taskRef.set({
+        status: "failed",
+        lastError:
+          "Missing or invalid startDate/startTime for arrival_plus_1h",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      await bookingRef.set({
+        reviewEmailStatus: "schedule_failed",
+        reviewEmailLastError:
+          "Missing or invalid startDate/startTime for review email",
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      failed += 1;
+      continue;
+    }
+
+    const currentScheduledFor = getDateFromTimestamp(task.scheduledFor);
+    const shouldReschedule =
+      !currentScheduledFor ||
+      Math.abs(
+          currentScheduledFor.getTime() - expectedScheduleDate.getTime(),
+      ) > 60 * 1000;
+
+    if (shouldReschedule) {
+      const expectedScheduledForTs =
+        admin.firestore.Timestamp.fromDate(expectedScheduleDate);
+
+      await taskRef.set({
+        scheduledFor: expectedScheduledForTs,
+        scheduleMode: "arrival_plus_1h",
+        lastRescheduledAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastRescheduleReason: "arrival_plus_1h_recalc",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+
+      await bookingRef.set({
+        reviewEmailStatus: "scheduled",
+        reviewEmailScheduledAt: expectedScheduledForTs,
+        reviewEmailScheduleMode: "arrival_plus_1h",
+        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+
+      rescheduled += 1;
+      console.log("processWpCardReviewEmails: task rescheduled", {
+        bookingId,
+        scheduleMode: "arrival_plus_1h",
+        scheduledFor: expectedScheduleDate.toISOString(),
+      });
+    }
+
+    if (expectedScheduleDate.getTime() > nowMs) {
+      deferred += 1;
+      continue;
+    }
 
     if (!clientEmail) {
       await taskRef.set({
@@ -396,9 +618,6 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
     }, {merge: true});
 
     try {
-      const reviewUrl =
-        `${siteBaseUrl}/recenzie?bookingId=${encodeURIComponent(bookingId)}`;
-
       const mailOptions = {
         from: {
           name: "OTP Parking",
@@ -408,7 +627,6 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
         subject: "Cum a fost experienta ta la OTP Parking?",
         html: buildReviewEmailHtml({
           clientName,
-          reviewUrl,
           googleReviewUrl: GOOGLE_REVIEW_URL,
         }),
       };
@@ -472,6 +690,8 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
 
   console.log("processWpCardReviewEmails: done", {
     checked: snap.size,
+    rescheduled,
+    deferred,
     sent,
     failed,
   });

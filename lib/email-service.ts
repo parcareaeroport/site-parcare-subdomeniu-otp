@@ -157,7 +157,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
           ` : `
           <div class="qr-section">
             <h3>Cod QR pentru Acces</h3>
-            <p>Pentru a accesa codul qr, acceseaza link-ul de mai jos la sosirea la parcare.</p>
+            <p>Pentru a accesa codul qr, acceseaza butonul de mai jos la sosirea la parcare.</p>
             ${qrLink ? `
               <p style="margin: 14px 0;">
                 <a class="qr-button" href="${qrLink}">Generează / Deschide codul QR</a>

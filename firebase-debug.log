@@ -1,0 +1,179 @@
+[debug] [2026-02-27T19:11:00.442Z] ----------------------------------------------------------------------
+[debug] [2026-02-27T19:11:00.446Z] Command:       /opt/homebrew/Cellar/node/25.6.1/bin/node /opt/homebrew/bin/firebase deploy --only functions
+[debug] [2026-02-27T19:11:00.446Z] CLI Version:   14.11.0
+[debug] [2026-02-27T19:11:00.446Z] Platform:      darwin
+[debug] [2026-02-27T19:11:00.447Z] Node Version:  v25.6.1
+[debug] [2026-02-27T19:11:00.447Z] Time:          Fri Feb 27 2026 21:11:00 GMT+0200 (Eastern European Standard Time)
+[debug] [2026-02-27T19:11:00.447Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-02-27T19:11:00.447Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[debug] [2026-02-27T19:11:00.550Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-02-27T19:11:00.550Z] > authorizing via signed-in user (contact.parcareaeroport@gmail.com)
+[debug] [2026-02-27T19:11:00.550Z] [iam] checking project parcare-aeroport-ebe28 for permissions ["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]
+[debug] [2026-02-27T19:11:00.550Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:00.550Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:00.551Z] > refreshing access token with scopes: []
+[debug] [2026-02-27T19:11:00.551Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-02-27T19:11:00.551Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-02-27T19:11:00.554Z] *** [apiv2] error from fetch(https://firebase-public.firebaseio.com/cli.json, {"headers":{},"method":"GET"}): FetchError: request to https://firebase-public.firebaseio.com/cli.json failed, reason: getaddrinfo ENOTFOUND firebase-public.firebaseio.com
+[warn] ⚠  Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection. 
+[debug] [2026-02-27T19:11:00.554Z] Failed to fetch MOTD FirebaseError: Failed to make request to https://firebase-public.firebaseio.com/cli.json
+[debug] [2026-02-27T19:11:00.554Z] *** [apiv2] error from fetch(https://www.googleapis.com/oauth2/v3/token, {"headers":{},"method":"POST","body":{"_overheadLength":545,"_valueLength":212,"_valuesToMeasure":[],"writable":false,"readable":true,"dataSize":0,"maxDataSize":2097152,"pauseStreams":true,"_released":true,"_streams":[],"_currentStream":null,"_insideLoop":false,"_pendingNext":false,"_boundary":"--------------------------ba3d373cf6227e545a879600","_events":{},"_eventsCount":1}}): FetchError: request to https://www.googleapis.com/oauth2/v3/token failed, reason: getaddrinfo ENOTFOUND www.googleapis.com
+[error] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-02-27T19:11:00.555Z] [iam] error while checking permissions, command may fail: Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-02-27T19:11:00.555Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:00.555Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:00.555Z] > refreshing access token with scopes: []
+[debug] [2026-02-27T19:11:00.555Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-02-27T19:11:00.555Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-02-27T19:11:00.558Z] *** [apiv2] error from fetch(https://www.googleapis.com/oauth2/v3/token, {"headers":{},"method":"POST","body":{"_overheadLength":545,"_valueLength":212,"_valuesToMeasure":[],"writable":false,"readable":true,"dataSize":0,"maxDataSize":2097152,"pauseStreams":true,"_released":true,"_streams":[],"_currentStream":null,"_insideLoop":false,"_pendingNext":false,"_boundary":"--------------------------ef9b1668cfe1296bf7d318fd","_events":{},"_eventsCount":1}}): FetchError: request to https://www.googleapis.com/oauth2/v3/token failed, reason: getaddrinfo ENOTFOUND www.googleapis.com
+[error] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-02-27T19:11:00.558Z] [functions] service account IAM check errored, deploy may fail: Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci {"name":"FirebaseError","children":[],"exit":1,"message":"Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth\n\nFor CI servers and headless environments, generate a new token with firebase login:ci","status":500}
+[info] 
+[info] === Deploying to 'parcare-aeroport-ebe28'...
+[info] 
+[info] i  deploying functions 
+[info] Running command: npm --prefix "$RESOURCE_DIR" run lint
+[info] ✔  functions: Finished running predeploy script. 
+[debug] [2026-02-27T19:11:01.218Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:01.218Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:01.218Z] > refreshing access token with scopes: []
+[debug] [2026-02-27T19:11:01.219Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-02-27T19:11:01.219Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-02-27T19:11:01.220Z] *** [apiv2] error from fetch(https://www.googleapis.com/oauth2/v3/token, {"headers":{},"method":"POST","body":{"_overheadLength":545,"_valueLength":212,"_valuesToMeasure":[],"writable":false,"readable":true,"dataSize":0,"maxDataSize":2097152,"pauseStreams":true,"_released":true,"_streams":[],"_currentStream":null,"_insideLoop":false,"_pendingNext":false,"_boundary":"--------------------------4362217507c3f29a36f5d601","_events":{},"_eventsCount":1}}): FetchError: request to https://www.googleapis.com/oauth2/v3/token failed, reason: getaddrinfo ENOTFOUND www.googleapis.com
+[error] Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[error] 
+[error] Error: Authentication Error: Your credentials are no longer valid. Please run firebase login --reauth
+
+For CI servers and headless environments, generate a new token with firebase login:ci
+[debug] [2026-02-27T19:11:01.500Z] Error: EPERM: operation not permitted, open '/Users/code-with-a/.config/configstore/firebase-tools.json.3862290259'
+    at Object.openSync (node:fs:555:18)
+    at writeFile.writeFileSync [as sync] (/opt/homebrew/Cellar/firebase-cli/14.11.0/libexec/lib/node_modules/firebase-tools/node_modules/write-file-atomic/index.js:205:13)
+    at set all (/opt/homebrew/Cellar/firebase-cli/14.11.0/libexec/lib/node_modules/firebase-tools/node_modules/configstore/index.js:61:20)
+    at Configstore.delete (/opt/homebrew/Cellar/firebase-cli/14.11.0/libexec/lib/node_modules/firebase-tools/node_modules/configstore/index.js:101:12)
+    at process.<anonymous> (/opt/homebrew/Cellar/firebase-cli/14.11.0/libexec/lib/node_modules/firebase-tools/lib/bin/cli.js:65:45)
+    at process.emit (node:events:520:22)
+    at process.exit (node:internal/process/per_thread:236:15)
+    at Timeout._onTimeout (/opt/homebrew/Cellar/firebase-cli/14.11.0/libexec/lib/node_modules/firebase-tools/lib/errorOut.js:20:17)
+    at listOnTimeout (node:internal/timers:605:17)
+    at process.processTimers (node:internal/timers:541:7)
+[error] 
+[error] Error: An unexpected error has occurred.
+[debug] [2026-02-27T19:11:15.906Z] ----------------------------------------------------------------------
+[debug] [2026-02-27T19:11:15.910Z] Command:       /opt/homebrew/Cellar/node/25.6.1/bin/node /opt/homebrew/bin/firebase deploy --only functions
+[debug] [2026-02-27T19:11:15.910Z] CLI Version:   14.11.0
+[debug] [2026-02-27T19:11:15.910Z] Platform:      darwin
+[debug] [2026-02-27T19:11:15.910Z] Node Version:  v25.6.1
+[debug] [2026-02-27T19:11:15.910Z] Time:          Fri Feb 27 2026 21:11:15 GMT+0200 (Eastern European Standard Time)
+[debug] [2026-02-27T19:11:15.910Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-02-27T19:11:15.911Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[debug] [2026-02-27T19:11:16.090Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-02-27T19:11:16.090Z] > authorizing via signed-in user (contact.parcareaeroport@gmail.com)
+[debug] [2026-02-27T19:11:16.090Z] [iam] checking project parcare-aeroport-ebe28 for permissions ["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]
+[debug] [2026-02-27T19:11:16.091Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:16.091Z] Checked if tokens are valid: false, expires at: 1772211155266
+[debug] [2026-02-27T19:11:16.091Z] > refreshing access token with scopes: []
+[debug] [2026-02-27T19:11:16.092Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-02-27T19:11:16.092Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-02-27T19:11:16.230Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-02-27T19:11:16.231Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-02-27T19:11:16.238Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions [none]
+[debug] [2026-02-27T19:11:16.238Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions x-goog-quota-user=projects/parcare-aeroport-ebe28
+[debug] [2026-02-27T19:11:16.238Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-02-27T19:11:16.422Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2026-02-27T19:11:16.422Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
+[debug] [2026-02-27T19:11:17.140Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions 200
+[debug] [2026-02-27T19:11:17.140Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-02-27T19:11:17.140Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:17.141Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:17.141Z] >>> [apiv2][query] POST https://iam.googleapis.com/v1/projects/parcare-aeroport-ebe28/serviceAccounts/parcare-aeroport-ebe28@appspot.gserviceaccount.com:testIamPermissions [none]
+[debug] [2026-02-27T19:11:17.141Z] >>> [apiv2][body] POST https://iam.googleapis.com/v1/projects/parcare-aeroport-ebe28/serviceAccounts/parcare-aeroport-ebe28@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[debug] [2026-02-27T19:11:18.007Z] <<< [apiv2][status] POST https://iam.googleapis.com/v1/projects/parcare-aeroport-ebe28/serviceAccounts/parcare-aeroport-ebe28@appspot.gserviceaccount.com:testIamPermissions 200
+[debug] [2026-02-27T19:11:18.007Z] <<< [apiv2][body] POST https://iam.googleapis.com/v1/projects/parcare-aeroport-ebe28/serviceAccounts/parcare-aeroport-ebe28@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[info] 
+[info] === Deploying to 'parcare-aeroport-ebe28'...
+[info] 
+[info] i  deploying functions 
+[info] Running command: npm --prefix "$RESOURCE_DIR" run lint
+[info] ✔  functions: Finished running predeploy script. 
+[debug] [2026-02-27T19:11:18.682Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:18.682Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:18.682Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28 [none]
+[debug] [2026-02-27T19:11:18.892Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28 200
+[debug] [2026-02-27T19:11:18.892Z] <<< [apiv2][body] GET https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28 {"projectNumber":"923582189021","projectId":"parcare-aeroport-ebe28","lifecycleState":"ACTIVE","name":"parcare-aeroport","labels":{"firebase":"enabled","firebase-core":"disabled"},"createTime":"2025-06-06T12:34:50.089532Z"}
+[info] i  functions: preparing codebase default for deployment 
+[info] i  functions: ensuring required API cloudfunctions.googleapis.com is enabled... 
+[info] i  functions: ensuring required API cloudbuild.googleapis.com is enabled... 
+[info] i  artifactregistry: ensuring required API artifactregistry.googleapis.com is enabled... 
+[debug] [2026-02-27T19:11:18.895Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:18.896Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:18.896Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects/parcare-aeroport-ebe28/adminSdkConfig [none]
+[debug] [2026-02-27T19:11:19.257Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects/parcare-aeroport-ebe28/adminSdkConfig 200
+[debug] [2026-02-27T19:11:19.257Z] <<< [apiv2][body] GET https://firebase.googleapis.com/v1beta1/projects/parcare-aeroport-ebe28/adminSdkConfig {"projectId":"parcare-aeroport-ebe28","storageBucket":"parcare-aeroport-ebe28.firebasestorage.app"}
+[debug] [2026-02-27T19:11:19.257Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:19.258Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:19.258Z] >>> [apiv2][query] GET https://runtimeconfig.googleapis.com/v1beta1/projects/parcare-aeroport-ebe28/configs [none]
+[debug] [2026-02-27T19:11:19.586Z] <<< [apiv2][status] GET https://runtimeconfig.googleapis.com/v1beta1/projects/parcare-aeroport-ebe28/configs 200
+[debug] [2026-02-27T19:11:19.586Z] <<< [apiv2][body] GET https://runtimeconfig.googleapis.com/v1beta1/projects/parcare-aeroport-ebe28/configs {}
+[debug] [2026-02-27T19:11:19.588Z] Validating nodejs source
+[warn] ⚠  functions: package.json indicates an outdated version of firebase-functions. Please upgrade using npm install --save firebase-functions@latest in your functions directory. 
+[warn] ⚠  functions: Please note that there will be breaking changes when you upgrade. 
+[debug] [2026-02-27T19:11:20.089Z] > [functions] package.json contents: {
+  "name": "functions",
+  "description": "Cloud Functions for Firebase",
+  "scripts": {
+    "lint": "eslint .",
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions",
+    "logs": "firebase functions:log"
+  },
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^12.6.0",
+    "firebase-functions": "^6.0.1",
+    "nodemailer": "^6.9.16"
+  },
+  "devDependencies": {
+    "eslint": "^8.15.0",
+    "eslint-config-google": "^0.14.0",
+    "firebase-functions-test": "^3.1.0"
+  },
+  "private": true
+}
+[debug] [2026-02-27T19:11:20.089Z] Building nodejs source
+[info] i  functions: Loading and analyzing source code for codebase default to determine what to deploy 
+[debug] [2026-02-27T19:11:20.090Z] Could not find functions.yaml. Must use http discovery
+[debug] [2026-02-27T19:11:20.097Z] Found firebase-functions binary at '/Users/code-with-a/Dev/site-parcari/parcare-aeroport-subdomeniu/functions/node_modules/.bin/firebase-functions'
+[info] Serving at port 8294
+
+[debug] [2026-02-27T19:11:20.645Z] Got response from /__/functions.yaml {"endpoints":{"autoExitPayOnSite":{"availableMemoryMb":null,"timeoutSeconds":null,"minInstances":null,"maxInstances":5,"ingressSettings":null,"concurrency":null,"serviceAccountEmail":null,"vpc":null,"platform":"gcfv2","region":["europe-west1"],"labels":{},"scheduleTrigger":{"schedule":"every 15 minutes","retryConfig":{"retryCount":null,"maxDoublings":null,"maxRetrySeconds":null,"minBackoffSeconds":null,"maxBackoffSeconds":null},"timeZone":null},"entryPoint":"autoExitPayOnSite"},"scheduleWpCardReviewEmail":{"availableMemoryMb":null,"timeoutSeconds":null,"minInstances":null,"maxInstances":5,"ingressSettings":null,"concurrency":null,"serviceAccountEmail":null,"vpc":null,"platform":"gcfv2","region":["europe-west1"],"labels":{},"eventTrigger":{"eventType":"google.cloud.firestore.document.v1.created","eventFilters":{"database":"(default)","namespace":"(default)"},"eventFilterPathPatterns":{"document":"bookings/{bookingId}"},"retry":false},"entryPoint":"scheduleWpCardReviewEmail"},"processWpCardReviewEmails":{"availableMemoryMb":null,"timeoutSeconds":null,"minInstances":null,"maxInstances":5,"ingressSettings":null,"concurrency":null,"serviceAccountEmail":null,"vpc":null,"platform":"gcfv2","region":["europe-west1"],"labels":{},"scheduleTrigger":{"schedule":"every 5 minutes","retryConfig":{"retryCount":null,"maxDoublings":null,"maxRetrySeconds":null,"minBackoffSeconds":null,"maxBackoffSeconds":null},"timeZone":null},"entryPoint":"processWpCardReviewEmails"}},"specVersion":"v1alpha1","requiredAPIs":[{"api":"cloudscheduler.googleapis.com","reason":"Needed for scheduled functions."}],"extensions":{}}
+[info] i  extensions: ensuring required API firebaseextensions.googleapis.com is enabled... 
+[debug] [2026-02-27T19:11:24.665Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-02-27T19:11:24.665Z] > authorizing via signed-in user (contact.parcareaeroport@gmail.com)
+[debug] [2026-02-27T19:11:24.666Z] [iam] checking project parcare-aeroport-ebe28 for permissions ["firebase.projects.get","firebaseextensions.instances.list"]
+[debug] [2026-02-27T19:11:24.666Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:24.666Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:24.667Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions [none]
+[debug] [2026-02-27T19:11:24.667Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions x-goog-quota-user=projects/parcare-aeroport-ebe28
+[debug] [2026-02-27T19:11:24.667Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions {"permissions":["firebase.projects.get","firebaseextensions.instances.list"]}
+[debug] [2026-02-27T19:11:25.547Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions 200
+[debug] [2026-02-27T19:11:25.547Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/parcare-aeroport-ebe28:testIamPermissions {"permissions":["firebase.projects.get","firebaseextensions.instances.list"]}
+[debug] [2026-02-27T19:11:25.548Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:25.548Z] Checked if tokens are valid: true, expires at: 1772223075231
+[debug] [2026-02-27T19:11:25.550Z] >>> [apiv2][query] GET https://firebaseextensions.googleapis.com/v1beta/projects/parcare-aeroport-ebe28/instances pageSize=100&pageToken=
