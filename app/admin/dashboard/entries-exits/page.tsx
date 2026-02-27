@@ -1575,7 +1575,7 @@ export default function EntriesExitsPage() {
                         disabled={quickExitDialog.saving || Boolean(row.actualTime)}
                       >
                         <LogOut className="mr-1 h-3.5 w-3.5" />
-                        Marchează ieșire acum
+                        
                       </Button>
                     )}
                   </div>
@@ -1681,7 +1681,7 @@ export default function EntriesExitsPage() {
                     disabled={quickExitDialog.saving || Boolean(row.actualTime)}
                   >
                     <LogOut className="mr-1 h-3.5 w-3.5" />
-                    Marchează ieșire acum
+                   
                   </Button>
                 )}
               </div>
@@ -1907,7 +1907,7 @@ export default function EntriesExitsPage() {
               disabled={quickExitDialog.saving || !quickExitDialog.row?.id}
             >
               {quickExitDialog.saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Marchează ieșire acum
+            
             </Button>
           </DialogFooter>
         </DialogContent>
