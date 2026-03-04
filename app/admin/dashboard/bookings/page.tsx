@@ -2259,9 +2259,11 @@ function BookingsPageContent() {
                                   : "text-orange-800 border-orange-500 bg-orange-200"
                               }`}
                             >
-                              {isPayOnSiteOverThreshold(booking)
+                              {/* Temporar ascuns textul de prag (>X min) pentru pay_on_site */}
+                              {/* {isPayOnSiteOverThreshold(booking)
                                 ? `PLATĂ LA PARCARE (>${payOnSiteCancelMinutes} min)`
-                                : "PLATĂ LA PARCARE"}
+                                : "PLATĂ LA PARCARE"} */}
+                              {"PLATĂ LA PARCARE"}
                             </Badge>
                           )}
                           {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
-import { RefreshCw, Loader2, LogOut } from "lucide-react"
+import { RefreshCw, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
@@ -380,14 +380,6 @@ export default function EntriesExitsPage() {
 
   const closeManualLprDialog = () => {
     setManualLpr((s) => ({ ...s, open: false, row: null, saving: false, confirmOverwrite: false }))
-  }
-
-  const openQuickExitDialog = (row: EnrichedRow) => {
-    setQuickExitDialog({
-      open: true,
-      row,
-      saving: false,
-    })
   }
 
   const closeQuickExitDialog = () => {
@@ -932,15 +924,36 @@ export default function EntriesExitsPage() {
         }
 
       } else {
-        // ONLINE: allowed exit = scheduled END + grace (60 min)
+        // ONLINE: allowed exit = billable END + grace (60 min)
+        // Billable END uses the later of:
+        // - scheduled end time
+        // - start clock on end date (e.g. start 12:00, end day 10:00 => billable end is 12:00)
         // This must match what operations expects in the "Ieșiri întârziate" table:
-        // charge 30 lei/zi for any time past the scheduled end + 60 min.
+        // charge 30 lei/zi for any time past billable end + 60 min.
         const endDateVal = withDates.endDate
         const endTimeVal = (withDates as any).endTime || raw.endTime || row.time
+        const startTimeVal = (withDates as any).startTime || raw.startTime || row.startTime
         const endDtLocal = endDateVal && endTimeVal ? parseDateTime(endDateVal, endTimeVal) : null
+        const endAtStartClockLocal = endDateVal && startTimeVal ? parseDateTime(endDateVal, startTimeVal) : null
+
+        let billableEndMs = endBase
+        if (endDtLocal && endAtStartClockLocal) {
+          billableEndMs = Math.max(endDtLocal.getTime(), endAtStartClockLocal.getTime())
+        } else if (endDtLocal) {
+          billableEndMs = endDtLocal.getTime()
+        } else if (endAtStartClockLocal) {
+          billableEndMs = endAtStartClockLocal.getTime()
+        }
+
         const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
-        const allowedExitMs = endDtLocal ? endDtLocal.getTime() + graceMs : endBase + graceMs
+        const allowedExitMs = billableEndMs + graceMs
         const overMs = now.getTime() - allowedExitMs
+        const overMinAfterGrace = overMs > 0 ? Math.round(overMs / (1000 * 60)) : 0
+
+        // Keep "Ore întârziate" aligned with billing start for ONLINE paid exits:
+        // delay starts only after grace window expires.
+        delay = overMinAfterGrace
+
         if (overMs > 0) {
           const daysLate = Math.ceil(overMs / (24 * 60 * 60 * 1000))
           amountDueValue = daysLate * LATE_FEE_PER_DAY
@@ -1067,10 +1080,22 @@ export default function EntriesExitsPage() {
       return out
     }
 
-    // ONLINE paid: allowed exit = scheduled END + grace (60 min)
+    // ONLINE paid: allowed exit = billable END + grace (60 min),
+    // where billable END = max(scheduled end, start clock on end date).
+    const endAtStartClock = endDateVal && startTimeVal ? parseDateTime(endDateVal, startTimeVal) : null
+    let billableEndMs = endBase ?? 0
+    if (endDt && endAtStartClock) {
+      billableEndMs = Math.max(endDt.getTime(), endAtStartClock.getTime())
+    } else if (endDt) {
+      billableEndMs = endDt.getTime()
+    } else if (endAtStartClock) {
+      billableEndMs = endAtStartClock.getTime()
+    }
     const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
-    const allowedExitMs = endDt ? endDt.getTime() + graceMs : (endBase ?? 0) + graceMs
+    const allowedExitMs = billableEndMs + graceMs
     const overMs = now.getTime() - allowedExitMs
+    // For ONLINE paid exits, delayMinutesComputed is interpreted as minutes after grace.
+    const overMinAfterGrace = overMs > 0 ? Math.round(overMs / (1000 * 60)) : 0
     const daysLate = overMs > 0 ? Math.ceil(overMs / (24 * 60 * 60 * 1000)) : 0
     const fee = daysLate > 0 ? daysLate * LATE_FEE_PER_DAY : 0
 
@@ -1078,9 +1103,12 @@ export default function EntriesExitsPage() {
       mode: "online_paid",
       start: { startDateVal, startTimeVal, startDt: startDt?.toISOString() ?? null },
       end: { endDateVal, endTimeVal, endDt: endDt?.toISOString() ?? null, endBase },
+      billableEndMs,
+      endAtStartClock: endAtStartClock?.toISOString() ?? null,
       graceMs,
       allowedExitMs,
       overMs,
+      overMinAfterGrace,
       daysLate,
       lateFeePerDay: LATE_FEE_PER_DAY,
       fee,
@@ -1562,22 +1590,6 @@ export default function EntriesExitsPage() {
                           Ieșire marcată manual
                         </Badge>
                       )}
-                    {kind === "exit" && isAdmin && (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        className="h-7 px-2 text-xs border-red-300 text-red-700 hover:bg-red-700 hover:text-white"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openQuickExitDialog(row)
-                        }}
-                        disabled={quickExitDialog.saving || Boolean(row.actualTime)}
-                      >
-                        <LogOut className="mr-1 h-3.5 w-3.5" />
-                        
-                      </Button>
-                    )}
                   </div>
                 </td>
                 <td className="py-3 px-2">{row.phone}</td>
@@ -1668,22 +1680,6 @@ export default function EntriesExitsPage() {
                       Ieșire marcată manual
                     </Badge>
                   )}
-                {kind === "exit" && isAdmin && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2 text-xs border-red-300 text-red-700 hover:bg-red-700 hover:text-white"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      openQuickExitDialog(row)
-                    }}
-                    disabled={quickExitDialog.saving || Boolean(row.actualTime)}
-                  >
-                    <LogOut className="mr-1 h-3.5 w-3.5" />
-                   
-                  </Button>
-                )}
               </div>
               {(() => {
                 const scheduledDate = kind === "entry" ? row.startDate : row.endDate
@@ -2072,7 +2068,8 @@ export default function EntriesExitsPage() {
                     <div>
                       - <span className="font-semibold">Întârziere:</span>{" "}
                       se compară ora programată cu ora LPR (dacă există). Dacă nu există LPR, se compară cu timpul curent.
-                      Rezultatul este `delayMinutesComputed`; dacă e &gt; 0 ⇒ `isLate=true`.
+                      Rezultatul este `delayMinutesComputed`; dacă e &gt; 0 ⇒ `isLate=true`. Pentru ieșiri ONLINE achitat,
+                      `delayMinutesComputed` pornește după cele 60 minute de grație.
                     </div>
                     {debugDialog.kind === "exit" ? (
                       <>
@@ -2334,4 +2331,3 @@ export default function EntriesExitsPage() {
     </div>
   )
 } 
-
