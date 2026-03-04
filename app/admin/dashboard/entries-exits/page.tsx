@@ -108,6 +108,41 @@ function computeTotalDaysByStartClock(startDt: Date | null, endDt: Date | null):
   return Math.max(1, Math.ceil(diffMs / DAY_MS))
 }
 
+function resolvePaidDays(input: {
+  rawDays?: any
+  rawDurationMinutes?: any
+  startDt: Date | null
+  endDt: Date | null
+}) {
+  const daysFromField = Number(input.rawDays)
+  if (Number.isFinite(daysFromField) && daysFromField > 0) {
+    return {
+      paidDays: Math.max(1, Math.ceil(daysFromField)),
+      paidDaysSource: "days" as const,
+    }
+  }
+
+  const durationMinutes = Number(input.rawDurationMinutes)
+  if (Number.isFinite(durationMinutes) && durationMinutes > 0) {
+    return {
+      paidDays: Math.max(1, Math.ceil(durationMinutes / (24 * 60))),
+      paidDaysSource: "durationMinutes" as const,
+    }
+  }
+
+  if (input.startDt && input.endDt && input.endDt.getTime() > input.startDt.getTime()) {
+    return {
+      paidDays: Math.max(1, Math.ceil((input.endDt.getTime() - input.startDt.getTime()) / DAY_MS)),
+      paidDaysSource: "start_end_diff" as const,
+    }
+  }
+
+  return {
+    paidDays: 1,
+    paidDaysSource: "fallback_1" as const,
+  }
+}
+
 function parseDateTime(date?: string, time?: string) {
   if (!date || !time) return null
   const tt = normalizeHHmm(time)
@@ -924,35 +959,29 @@ export default function EntriesExitsPage() {
         }
 
       } else {
-        // ONLINE: allowed exit = billable END + grace (60 min)
-        // Billable END uses the later of:
-        // - scheduled end time
-        // - start clock on end date (e.g. start 12:00, end day 10:00 => billable end is 12:00)
-        // This must match what operations expects in the "Ieșiri întârziate" table:
-        // charge 30 lei/zi for any time past billable end + 60 min.
+        // ONLINE:
+        // - operational delay/listing remains based on scheduled end (delay/isLate).
+        // - billing starts at financial threshold: max(scheduled end, start + paidDays*24h) + 60m grace.
+        const startDateVal = withDates.startDate
         const endDateVal = withDates.endDate
         const endTimeVal = (withDates as any).endTime || raw.endTime || row.time
         const startTimeVal = (withDates as any).startTime || raw.startTime || row.startTime
+        const startDtLocal = startDateVal && startTimeVal ? parseDateTime(startDateVal, startTimeVal) : null
         const endDtLocal = endDateVal && endTimeVal ? parseDateTime(endDateVal, endTimeVal) : null
-        const endAtStartClockLocal = endDateVal && startTimeVal ? parseDateTime(endDateVal, startTimeVal) : null
+        const { paidDays } = resolvePaidDays({
+          rawDays: raw.days,
+          rawDurationMinutes: raw.durationMinutes,
+          startDt: startDtLocal,
+          endDt: endDtLocal,
+        })
 
-        let billableEndMs = endBase
-        if (endDtLocal && endAtStartClockLocal) {
-          billableEndMs = Math.max(endDtLocal.getTime(), endAtStartClockLocal.getTime())
-        } else if (endDtLocal) {
-          billableEndMs = endDtLocal.getTime()
-        } else if (endAtStartClockLocal) {
-          billableEndMs = endAtStartClockLocal.getTime()
-        }
+        const scheduledEndMs = endDtLocal ? endDtLocal.getTime() : endBase
+        const paidEndByDaysMs = startDtLocal ? startDtLocal.getTime() + paidDays * DAY_MS : null
+        const billableEndMs = paidEndByDaysMs !== null ? Math.max(scheduledEndMs, paidEndByDaysMs) : scheduledEndMs
 
         const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
         const allowedExitMs = billableEndMs + graceMs
         const overMs = now.getTime() - allowedExitMs
-        const overMinAfterGrace = overMs > 0 ? Math.round(overMs / (1000 * 60)) : 0
-
-        // Keep "Ore întârziate" aligned with billing start for ONLINE paid exits:
-        // delay starts only after grace window expires.
-        delay = overMinAfterGrace
 
         if (overMs > 0) {
           const daysLate = Math.ceil(overMs / (24 * 60 * 60 * 1000))
@@ -1080,21 +1109,23 @@ export default function EntriesExitsPage() {
       return out
     }
 
-    // ONLINE paid: allowed exit = billable END + grace (60 min),
-    // where billable END = max(scheduled end, start clock on end date).
-    const endAtStartClock = endDateVal && startTimeVal ? parseDateTime(endDateVal, startTimeVal) : null
-    let billableEndMs = endBase ?? 0
-    if (endDt && endAtStartClock) {
-      billableEndMs = Math.max(endDt.getTime(), endAtStartClock.getTime())
-    } else if (endDt) {
-      billableEndMs = endDt.getTime()
-    } else if (endAtStartClock) {
-      billableEndMs = endAtStartClock.getTime()
-    }
+    // ONLINE paid:
+    // - delayMinutesComputed/isLate stay operational (based on scheduled END).
+    // - billing starts at financial threshold max(scheduled END, start + paidDays*24h) + grace.
+    const rawDaysForBilling = rawDoc?.days ?? anyRow.days
+    const rawDurationMinutesForBilling = rawDoc?.durationMinutes ?? anyRow.durationMinutes
+    const { paidDays, paidDaysSource } = resolvePaidDays({
+      rawDays: rawDaysForBilling,
+      rawDurationMinutes: rawDurationMinutesForBilling,
+      startDt,
+      endDt,
+    })
+    const scheduledEndMs = endDt ? endDt.getTime() : (endBase ?? 0)
+    const paidEndByDaysMs = startDt ? startDt.getTime() + paidDays * DAY_MS : null
+    const billableEndMs = paidEndByDaysMs !== null ? Math.max(scheduledEndMs, paidEndByDaysMs) : scheduledEndMs
     const graceMs = ONLINE_GRACE_MINUTES * 60 * 1000
     const allowedExitMs = billableEndMs + graceMs
     const overMs = now.getTime() - allowedExitMs
-    // For ONLINE paid exits, delayMinutesComputed is interpreted as minutes after grace.
     const overMinAfterGrace = overMs > 0 ? Math.round(overMs / (1000 * 60)) : 0
     const daysLate = overMs > 0 ? Math.ceil(overMs / (24 * 60 * 60 * 1000)) : 0
     const fee = daysLate > 0 ? daysLate * LATE_FEE_PER_DAY : 0
@@ -1103,8 +1134,14 @@ export default function EntriesExitsPage() {
       mode: "online_paid",
       start: { startDateVal, startTimeVal, startDt: startDt?.toISOString() ?? null },
       end: { endDateVal, endTimeVal, endDt: endDt?.toISOString() ?? null, endBase },
+      operationalDelayMin: typeof delayFromState === "number" ? Math.max(0, delayFromState) : null,
+      paidDays,
+      paidDaysSource,
+      rawDays: rawDaysForBilling ?? null,
+      rawDurationMinutes: rawDurationMinutesForBilling ?? null,
+      scheduledEndMs,
+      paidEndByDaysMs,
       billableEndMs,
-      endAtStartClock: endAtStartClock?.toISOString() ?? null,
       graceMs,
       allowedExitMs,
       overMs,
@@ -2069,7 +2106,7 @@ export default function EntriesExitsPage() {
                       - <span className="font-semibold">Întârziere:</span>{" "}
                       se compară ora programată cu ora LPR (dacă există). Dacă nu există LPR, se compară cu timpul curent.
                       Rezultatul este `delayMinutesComputed`; dacă e &gt; 0 ⇒ `isLate=true`. Pentru ieșiri ONLINE achitat,
-                      `delayMinutesComputed` pornește după cele 60 minute de grație.
+                      `delayMinutesComputed` rămâne operațional (după ora de ieșire programată).
                     </div>
                     {debugDialog.kind === "exit" ? (
                       <>
@@ -2079,7 +2116,8 @@ export default function EntriesExitsPage() {
                         </div>
                         <div>
                           - <span className="font-semibold">Dacă e Online achitat:</span>{" "}
-                          se acordă 60 min grație; după aceea se taxează 30 lei/zi (rotunjit în sus).
+                          taxarea pornește la pragul financiar `max(endTime, start + zile*24h) + 60 min`,
+                          cu 30 lei/zi (rotunjit în sus), dar listarea la întârziate rămâne operațională.
                         </div>
                       </>
                     ) : (
