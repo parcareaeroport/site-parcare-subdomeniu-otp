@@ -177,10 +177,11 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
           
           <div class="warning">
             <strong>⚠️ Importante:</strong><br>
-            • Prezentați-vă cu maximum 2 ore înainte de ora rezervată<br>
-            ${isPayOnSite ? '' : '• Păstrați acest email și codul QR pentru accesul la parcare<br>'}
-            • Anularea se poate face cu minimum 24 ore înainte<br>
-            • Pentru suport, contactați-ne folosind datele de mai jos
+            • Ora rezervării reprezintă ora estimată de sosire la parcare.<br>
+            • Dacă ajungeți mai devreme, accesul în parcare este permis cu până la 2 ore înainte de ora rezervată.<br>
+            • Vă rugăm să păstrați acest email și codul QR, deoarece sunt necesare pentru accesul în parcare.<br>
+            • Anularea rezervării se poate face cu minimum 24 de ore înainte de ora rezervată.<br>
+            • Pentru suport, vă rugăm să ne contactați folosind datele de mai jos.
           </div>
           
           <!-- Buton Anulare Rezervare -->

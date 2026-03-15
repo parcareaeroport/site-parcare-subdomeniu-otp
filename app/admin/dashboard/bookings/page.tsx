@@ -137,6 +137,29 @@ interface Booking {
   lastEmailError?: string
   payOnSiteStatus?: "pending" | "paid" | "cancelled" // Adaugă status special pentru pay-on-site
   payOnSiteAutoCancelled?: boolean
+  oblio?: {
+    status?: "pending" | "success" | "failed" | string
+    attempts?: number
+    lastAttemptAt?: Timestamp
+    lastSuccessAt?: Timestamp
+    lastFailureAt?: Timestamp
+    lastError?: string | null
+    invoiceNumber?: string
+    invoiceUrl?: string
+    lastSource?: "auto" | "manual" | string
+  }
+}
+
+type OblioOpsAlert = {
+  status?: string
+  openedAt?: Timestamp
+  resolvedAt?: Timestamp
+  lastEventAt?: Timestamp
+  windowMinutes?: number
+  threshold?: number
+  lastCountInWindow?: number
+  lastErrorKind?: string
+  lastErrorSample?: string
 }
 
 type PriceEntry = {
@@ -284,6 +307,8 @@ function BookingsPageContent() {
 
   // Prag anulare „Plată la Parcare” (minute) – din config/reservationSettings
   const [payOnSiteCancelMinutes, setPayOnSiteCancelMinutes] = useState<number>(180)
+  const [retryingOblioBookingId, setRetryingOblioBookingId] = useState<string | null>(null)
+  const [oblioOpsAlert, setOblioOpsAlert] = useState<OblioOpsAlert | null>(null)
 
   useEffect(() => {
     const unsub = onSnapshot(
@@ -293,6 +318,28 @@ function BookingsPageContent() {
         setPayOnSiteCancelMinutes(Number.isFinite(v) && v > 0 ? v : 180)
       },
       (err) => console.error("Error listening to reservationSettings (payOnSiteAutoCancelMinutes)", err),
+    )
+    return () => unsub()
+  }, [])
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      doc(db, "ops_alerts", "oblio"),
+      (snap) => {
+        if (!snap.exists()) {
+          setOblioOpsAlert(null)
+          return
+        }
+
+        const data = snap.data() as OblioOpsAlert
+        if (String(data?.status || "") === "open") {
+          setOblioOpsAlert(data)
+          return
+        }
+
+        setOblioOpsAlert(null)
+      },
+      (err) => console.error("Error listening to ops_alerts/oblio", err),
     )
     return () => unsub()
   }, [])
@@ -793,6 +840,13 @@ function BookingsPageContent() {
   const isOnlinePaidBooking = (b: Booking) => {
     if (isPayOnSiteBooking(b)) return false
     return b.paymentStatus === "paid" || String(b.status || "") === "confirmed_paid"
+  }
+
+  const canRetryOblioInvoice = (booking?: Booking | null) => {
+    if (!booking) return false
+    const source = String(booking.source || "")
+    const status = String(booking.status || "").toLowerCase()
+    return booking.paymentStatus === "paid" && (source === "webhook" || source === "test_mode") && !status.includes("cancelled")
   }
 
   const isManualPaidBooking = (b: Booking) => {
@@ -1673,6 +1727,76 @@ function BookingsPageContent() {
     }
   }
 
+  const handleRetryOblioInvoice = async (booking: Booking) => {
+    if (!isAdmin) {
+      toast({
+        title: "Acces restricționat",
+        description: "Doar administratorii pot re-factura manual în Oblio.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    if (!canRetryOblioInvoice(booking)) {
+      toast({
+        title: "Rezervare neeligibilă",
+        description: "Re-facturarea manuală este disponibilă doar pentru rezervări paid online (webhook/test_mode) neanulate.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setRetryingOblioBookingId(booking.id)
+    try {
+      const res = await fetch("/api/admin/bookings/retry-oblio-invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookingId: booking.id }),
+      })
+      const json = await res.json().catch(() => ({}))
+
+      if (!res.ok || !json?.success) {
+        throw new Error(json?.error || `HTTP ${res.status}`)
+      }
+
+      toast({
+        title: "Factură Oblio regenerată",
+        description: json?.invoiceNumber
+          ? `Factura ${json.invoiceNumber} a fost generată cu succes.`
+          : "Factura Oblio a fost generată cu succes.",
+      })
+
+      await fetchBookings()
+      if (selectedBooking?.id === booking.id) {
+        setSelectedBooking((prev) =>
+          prev
+            ? ({
+                ...prev,
+                oblio: {
+                  ...(prev.oblio || {}),
+                  status: "success",
+                  lastError: null,
+                  invoiceNumber: json?.invoiceNumber || prev.oblio?.invoiceNumber,
+                  invoiceUrl: json?.invoiceUrl || prev.oblio?.invoiceUrl,
+                  lastSource: "manual",
+                },
+              } as Booking)
+            : prev,
+        )
+      }
+    } catch (error) {
+      console.error("Manual Oblio retry failed:", error)
+      toast({
+        title: "Eroare la re-facturare Oblio",
+        description: error instanceof Error ? error.message : "Nu s-a putut genera factura Oblio.",
+        variant: "destructive",
+      })
+      await fetchBookings()
+    } finally {
+      setRetryingOblioBookingId(null)
+    }
+  }
+
   const handleUpdateManualPaymentStatus = async (booking: Booking, newStatus: string) => {
     setIsUpdatingPayment(true)
     setUpdatingPaymentBookingId(booking.id)
@@ -1884,6 +2008,25 @@ function BookingsPageContent() {
           </Button>
         </div>
       </div>
+
+      {isAdmin && oblioOpsAlert && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Alertă Oblio activă</AlertTitle>
+          <AlertDescription>
+            {`Eroare repetitivă Oblio: ${oblioOpsAlert.lastCountInWindow ?? "?"}/${oblioOpsAlert.threshold ?? 3} în ultimele ${
+              oblioOpsAlert.windowMinutes ?? 5
+            } minute.`}{" "}
+            {`Ultimul eveniment: ${
+              (() => {
+                const lastEventDate = parseFirestoreDate(oblioOpsAlert.lastEventAt)
+                return lastEventDate ? formatDateFn(lastEventDate, "dd MMM yyyy, HH:mm:ss", { locale: ro }) : "N/A"
+              })()
+            }.`}{" "}
+            {`Tip: ${oblioOpsAlert.lastErrorKind || "invoice_error"}.`}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* Bara de statistici rapide */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
@@ -3127,6 +3270,57 @@ function BookingsPageContent() {
                     </p>
                   )}
                 </div>
+
+                <h3 className="text-lg font-medium mt-4 mb-2 text-gray-800">Factură Oblio</h3>
+                <div className="space-y-1 text-sm">
+                  <p>
+                    <strong>Status:</strong>{" "}
+                    {selectedBooking.oblio?.status === "success" ? (
+                      <span className="text-green-600">✅ Generată</span>
+                    ) : selectedBooking.oblio?.status === "failed" ? (
+                      <span className="text-red-600">❌ Eșuată</span>
+                    ) : selectedBooking.oblio?.status === "pending" ? (
+                      <span className="text-amber-600">⏳ În curs</span>
+                    ) : (
+                      <span className="text-gray-500">-</span>
+                    )}
+                  </p>
+                  <p>
+                    <strong>Încercări:</strong> {selectedBooking.oblio?.attempts ?? 0}
+                  </p>
+                  {selectedBooking.oblio?.invoiceNumber && (
+                    <p>
+                      <strong>Număr factură:</strong> {selectedBooking.oblio.invoiceNumber}
+                    </p>
+                  )}
+                  {selectedBooking.oblio?.invoiceUrl && (
+                    <p>
+                      <strong>Link factură:</strong>{" "}
+                      <a
+                        href={selectedBooking.oblio.invoiceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 underline"
+                      >
+                        Deschide factura
+                      </a>
+                    </p>
+                  )}
+                  {selectedBooking.oblio?.lastError && (
+                    <p>
+                      <strong>Ultima eroare:</strong> <span className="text-red-600 text-xs">{selectedBooking.oblio.lastError}</span>
+                    </p>
+                  )}
+                  {selectedBooking.oblio?.lastAttemptAt && (
+                    <p>
+                      <strong>Ultima încercare:</strong>{" "}
+                      {(() => {
+                        const attemptDate = parseFirestoreDate(selectedBooking.oblio?.lastAttemptAt)
+                        return attemptDate ? formatDateFn(attemptDate, "dd MMM yyyy, HH:mm", { locale: ro }) : "N/A"
+                      })()}
+                    </p>
+                  )}
+                </div>
                 
                 <h3 className="text-lg font-medium mt-4 mb-2 text-gray-800">Status Email & QR</h3>
                 <div className="space-y-1 text-sm">
@@ -3217,6 +3411,22 @@ function BookingsPageContent() {
                   <Mail className="mr-2 h-4 w-4" />
                 )}
                 {isPayOnSiteBooking(selectedBooking) ? "Trimite Email (fără QR)" : "Trimite Email cu QR"}
+              </Button>
+            )}
+
+            {isAdmin && selectedBooking && canRetryOblioInvoice(selectedBooking) && (
+              <Button
+                variant="outline"
+                onClick={() => handleRetryOblioInvoice(selectedBooking)}
+                disabled={retryingOblioBookingId === selectedBooking.id}
+                className="text-amber-700 border-amber-500 hover:bg-amber-50"
+              >
+                {retryingOblioBookingId === selectedBooking.id ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Regenerează factură Oblio
               </Button>
             )}
             

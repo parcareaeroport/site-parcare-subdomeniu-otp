@@ -8,6 +8,7 @@ import { db } from "@/lib/firebase"
 import { generateMultiparkQR } from "@/lib/qr-generator"
 import { sendBookingConfirmationEmail } from "@/lib/email-service"
 import { normalizeLicensePlate } from "@/lib/utils"
+import { recordOblioFailure } from "@/lib/oblio-alerting"
 
 // Define validation schema for the form data
 const bookingFormSchema = z.object({
@@ -29,6 +30,8 @@ const API_CONFIG = {
   password: process.env.PARKING_API_PASSWORD || "",
   multiparkId: process.env.PARKING_MULTIPARK_ID || "001#002", // Default value, should be configured in env
 }
+
+const OBLIO_INVOICE_TIMEOUT_MS = 25000
 
 // Interfață pentru datele complete de rezervare
 interface CompleteBookingData {
@@ -943,6 +946,7 @@ export async function createBookingWithFirestore(
       }
 
       console.log("✅ Rezervare confirmată:", firestoreResult.firestoreId)
+      const bookingDocRef = firestoreResult.firestoreId ? doc(db, "bookings", firestoreResult.firestoreId) : null
       
       // Generează factură OBLIO automată pentru TOATE rezervările plătite ȘI în test mode
       if (additionalData?.paymentStatus === 'paid' || additionalData?.source === 'webhook' || additionalData?.source === 'test_mode') {
@@ -952,6 +956,20 @@ export async function createBookingWithFirestore(
           if (!invoiceBookingId) {
             console.warn('⚠️ Oblio invoice skipped: missing booking id (both apiBookingNumber and firestoreId are empty)')
           } else {
+          if (bookingDocRef) {
+            try {
+              await updateDoc(bookingDocRef, {
+                "oblio.status": "pending",
+                "oblio.lastAttemptAt": serverTimestamp(),
+                "oblio.attempts": increment(1),
+                "oblio.lastSource": "auto",
+                "oblio.lastUpdatedAt": serverTimestamp(),
+              })
+            } catch (oblioTrackingError) {
+              console.error("⚠️ Failed to set Oblio pending status in Firestore:", oblioTrackingError)
+            }
+          }
+
           console.log(`🧾 Starting Oblio invoice generation for booking ${invoiceBookingId}`)
           
           const { generateOblioInvoice } = await import('@/lib/oblio-integration')
@@ -980,22 +998,77 @@ export async function createBookingWithFirestore(
             clientCountry: additionalData.country,
           }
 
-          // Timeout pentru Oblio (max 10 secunde)
+          // Timeout pentru Oblio (max 25 secunde)
           const oblioPromise = generateOblioInvoice(oblioInvoiceData)
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Oblio timeout')), 10000)
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Oblio timeout')), OBLIO_INVOICE_TIMEOUT_MS)
           )
           
           const invoiceResult = await Promise.race([oblioPromise, timeoutPromise]) as any
           
           if (invoiceResult.success) {
             console.log('✅ Factură Oblio generată cu succes:', invoiceResult.invoiceNumber, '- Link:', invoiceResult.invoiceUrl)
+            if (bookingDocRef) {
+              try {
+                await updateDoc(bookingDocRef, {
+                  "oblio.status": "success",
+                  "oblio.invoiceNumber": invoiceResult.invoiceNumber || null,
+                  "oblio.invoiceUrl": invoiceResult.invoiceUrl || null,
+                  "oblio.lastError": null,
+                  "oblio.lastSuccessAt": serverTimestamp(),
+                  "oblio.lastSource": "auto",
+                  "oblio.lastUpdatedAt": serverTimestamp(),
+                })
+              } catch (oblioTrackingError) {
+                console.error("⚠️ Failed to set Oblio success status in Firestore:", oblioTrackingError)
+              }
+            }
           } else {
-            console.error('❌ Eroare la generarea facturii Oblio:', invoiceResult.error)
+            const oblioErrorMessage = String(invoiceResult.error || "Oblio invoice failed")
+            console.error('❌ Eroare la generarea facturii Oblio:', oblioErrorMessage)
+            if (bookingDocRef) {
+              try {
+                await updateDoc(bookingDocRef, {
+                  "oblio.status": "failed",
+                  "oblio.lastError": oblioErrorMessage,
+                  "oblio.lastFailureAt": serverTimestamp(),
+                  "oblio.lastSource": "auto",
+                  "oblio.lastUpdatedAt": serverTimestamp(),
+                })
+              } catch (oblioTrackingError) {
+                console.error("⚠️ Failed to set Oblio failed status in Firestore:", oblioTrackingError)
+              }
+            }
+            await recordOblioFailure({
+              bookingId: invoiceBookingId,
+              bookingOrigin: additionalData?.bookingOrigin,
+              source: "auto",
+              message: oblioErrorMessage,
+            })
             }
           }
         } catch (error) {
           console.error('❌ Eroare critică la generarea facturii Oblio:', error)
+          const criticalOblioMessage = error instanceof Error ? error.message : String(error)
+          if (bookingDocRef) {
+            try {
+              await updateDoc(bookingDocRef, {
+                "oblio.status": "failed",
+                "oblio.lastError": criticalOblioMessage,
+                "oblio.lastFailureAt": serverTimestamp(),
+                "oblio.lastSource": "auto",
+                "oblio.lastUpdatedAt": serverTimestamp(),
+              })
+            } catch (oblioTrackingError) {
+              console.error("⚠️ Failed to persist critical Oblio error in Firestore:", oblioTrackingError)
+            }
+          }
+          await recordOblioFailure({
+            bookingId: completeBookingData.apiBookingNumber || firestoreResult.firestoreId,
+            bookingOrigin: additionalData?.bookingOrigin,
+            source: "auto",
+            message: criticalOblioMessage,
+          })
           console.error('⚠️ Factura Oblio a fost omisă - rezervarea continuă normal')
           // Nu oprim procesul pentru erori la facturare - rezervarea trebuie să continue
         }

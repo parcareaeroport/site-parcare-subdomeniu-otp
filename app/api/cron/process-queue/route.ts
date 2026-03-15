@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { runQueueProcessor, cleanupOldQueueItems } from "@/lib/queue-system"
+import { autoResolveOblioAlert } from "@/lib/oblio-alerting"
 
 /**
  * API endpoint pentru procesarea queue-ului de email-uri
@@ -28,6 +29,9 @@ export async function GET(request: NextRequest) {
     
     // Procesează queue-ul
     await runQueueProcessor()
+
+    // Auto-resolve pentru alerta Oblio dacă nu mai sunt erori de 30 minute
+    const oblioAlertResolution = await autoResolveOblioAlert()
     
     let cleanupResult = 0
     if (shouldCleanup) {
@@ -39,7 +43,8 @@ export async function GET(request: NextRequest) {
       success: true,
       message: "Queue processed successfully",
       timestamp: new Date().toISOString(),
-      cleanedItems: shouldCleanup ? cleanupResult : 0
+      cleanedItems: shouldCleanup ? cleanupResult : 0,
+      oblioAlertResolution,
     }
     
     console.log("✅ Cron job completed:", response)
