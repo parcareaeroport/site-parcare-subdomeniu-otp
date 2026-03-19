@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import nodemailer from "nodemailer"
 import { db } from "@/lib/firebase"
 import { doc, getDoc } from "firebase/firestore"
+import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 
 type Body = {
   bookingId?: string
@@ -81,6 +82,11 @@ function generateCancelConfirmationHtml(input: {
 }
 
 export async function POST(req: NextRequest) {
+  const authResult = await authorizeAdminRequest(req, ["admin"])
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
   try {
     const body = (await req.json().catch(() => ({}))) as Body
     const bookingId = String(body.bookingId || "").trim()

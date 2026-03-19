@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/firebase"
+import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 import {
   collection,
   doc,
@@ -14,7 +15,12 @@ import {
   deleteField,
 } from "firebase/firestore"
 
-export async function GET() {
+export async function GET(request: Request) {
+  const authResult = await authorizeAdminRequest(request, ["admin", "employee"])
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
   try {
     const settingsDoc = await getDoc(doc(db, "config", "reservationSettings"))
     const maxLimit = settingsDoc.exists() ? Number(settingsDoc.data().maxTotalReservations || 0) : 0
@@ -51,6 +57,11 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const authResult = await authorizeAdminRequest(req, ["admin"])
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
   try {
     const ref = doc(db, "config", "parkingLive")
     const body = await req.json().catch(() => null)

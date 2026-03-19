@@ -13,9 +13,12 @@ import { useToast } from "@/components/ui/use-toast"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { OccupancyCounter } from "./occupancy-counter"
+import { useAuth } from "@/context/auth-context"
+import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 
 export function ReservationLimitManager() {
   const { toast } = useToast()
+  const { user } = useAuth()
 
   /*──────────────────────────────────┐
   │   STATE                         │
@@ -105,8 +108,10 @@ export function ReservationLimitManager() {
     let cancelled = false
 
     const refresh = async () => {
+      if (!user) return
+
       try {
-        const res = await fetch("/api/admin/occupancy")
+        const res = await adminAuthorizedFetch("/api/admin/occupancy", user)
         if (!res.ok) return
         const json = (await res.json()) as { occupiedCount?: number; plates?: any[] }
         const count =
@@ -127,7 +132,7 @@ export function ReservationLimitManager() {
       cancelled = true
       clearInterval(id)
     }
-  }, [])
+  }, [user])
 
   /*──────────────────────────────────┐
   │   HANDLERS                       │

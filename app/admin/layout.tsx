@@ -16,15 +16,17 @@ import {
   Menu,
   ArrowLeftRight,
   ShieldCheck,
+  UserPlus,
 } from "lucide-react"
+import { canAccessAdminPath, getAdminRoleLabel } from "@/lib/admin-roles"
 
 function AdminLayoutContent({ children }: { children: ReactNode }) {
-  const { user, loading, isAdmin, signOut } = useAuth()
+  const { user, loading, role, isAdmin, defaultRoute, signOut } = useAuth()
   const router = useRouter()
   const pathname = usePathname()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
-  console.log("[AdminLayoutContent] Rendering. Pathname:", pathname, "Loading:", loading, "User:", user, "IsAdmin:", isAdmin)
+  console.log("[AdminLayoutContent] Rendering. Pathname:", pathname, "Loading:", loading, "User:", user, "Role:", role)
 
   useEffect(() => {
     console.log("[AdminLayoutContent] useEffect triggered. Pathname:", pathname, "Loading:", loading, "User:", user, "IsAdmin:", isAdmin)
@@ -38,19 +40,11 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
       return
     }
     
-    // Redirect non-admin users trying to access admin-only pages
-    // Allow employees to access: Bookings, Entries/Exits, Ocupare.
-    if (
-      user &&
-      !isAdmin &&
-      pathname !== "/admin/dashboard/bookings" &&
-      pathname !== "/admin/dashboard/entries-exits" &&
-      pathname !== "/admin/dashboard/ocupare"
-    ) {
-      console.log("[AdminLayoutContent] useEffect: Non-admin user trying to access admin page, redirecting to bookings.")
-      router.push("/admin/dashboard/bookings")
+    if (user && role && !canAccessAdminPath(pathname, role)) {
+      console.log("[AdminLayoutContent] useEffect: User tried to access forbidden admin page, redirecting.")
+      router.push(defaultRoute)
     }
-  }, [user, loading, isAdmin, router, pathname])
+  }, [user, loading, role, router, pathname, defaultRoute])
 
   if (loading && pathname !== "/admin/login") {
     console.log("[AdminLayoutContent] Displaying global loader for admin area.")
@@ -81,20 +75,26 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
     console.log("[AdminLayoutContent] User is authenticated, rendering admin dashboard layout.")
     
     // Define navigation items based on admin status
-    const adminNavItems = isAdmin ? [
-      { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
-      { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
-      { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
-      { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
-      // { href: "/admin/dashboard/statistics", label: "Statistici", icon: RefreshCw }, AICI TREBUIE SA LASI COMENTAT LA DIVERSE MODIFICARI, NU PUNE DIN NOU ACEST LINK IN SIDEBAR
-      { href: "/admin/dashboard/prices", label: "Prețuri", icon: Tag },
-      { href: "/admin/dashboard/whitelist", label: "Numere whitelist", icon: ShieldCheck },
-      { href: "/admin/dashboard/api-test", label: "Test API", icon: ListTree },
-    ] : [
-      { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
-      { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
-      { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
-    ]
+    const adminNavItems =
+      role === "admin"
+        ? [
+            { href: "/admin/dashboard", label: "Dashboard", icon: LayoutDashboard },
+            { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
+            { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
+            { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
+            // { href: "/admin/dashboard/statistics", label: "Statistici", icon: RefreshCw }, AICI TREBUIE SA LASI COMENTAT LA DIVERSE MODIFICARI, NU PUNE DIN NOU ACEST LINK IN SIDEBAR
+            { href: "/admin/dashboard/prices", label: "Prețuri", icon: Tag },
+            { href: "/admin/dashboard/whitelist", label: "Numere whitelist", icon: ShieldCheck },
+            { href: "/admin/dashboard/users/create", label: "Creare angajați", icon: UserPlus },
+            { href: "/admin/dashboard/api-test", label: "Test API", icon: ListTree },
+          ]
+        : role === "entriesOperator"
+          ? [{ href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight }]
+          : [
+              { href: "/admin/dashboard/bookings", label: "Rezervări", icon: Car },
+              { href: "/admin/dashboard/entries-exits", label: "Intrări/Ieșiri", icon: ArrowLeftRight },
+              { href: "/admin/dashboard/ocupare", label: "Ocupare", icon: RefreshCw },
+            ]
 
     const SidebarContent = () => (
       <div className="flex flex-col h-full">
@@ -141,7 +141,7 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
           <div className="flex items-center justify-between mb-3">
             <div className="text-sm">
               <p className="font-medium text-gray-900">{user.email}</p>
-              <p className="text-gray-500">{isAdmin ? "Administrator" : "Utilizator"}</p>
+              <p className="text-gray-500">{role ? getAdminRoleLabel(role) : "Utilizator"}</p>
             </div>
           </div>
           <Button

@@ -4,13 +4,14 @@ import type React from "react"
 import { useState, useEffect } from "react" // Adaugă useEffect pentru log
 import { useRouter } from "next/navigation"
 import Image from "next/image"
-import { signInWithEmailAndPassword } from "firebase/auth"
+import { getIdTokenResult, signInWithEmailAndPassword } from "firebase/auth"
 import { auth } from "@/lib/firebase"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { AlertCircle } from "lucide-react"
+import { getDefaultAdminRoute, normalizeAdminRole } from "@/lib/admin-roles"
 
 export default function LoginPage() {
   const router = useRouter()
@@ -47,13 +48,9 @@ export default function LoginPage() {
       const userCredential = await signInWithEmailAndPassword(auth, email, password)
       console.log("[LoginPage] Firebase signInWithEmailAndPassword successful.")
       
-      // Redirect based on admin status
-      const isAdmin = userCredential.user.email === "contact.parcareaeroport@gmail.com"
-      if (isAdmin) {
-        router.push("/admin/dashboard")
-      } else {
-        router.push("/admin/dashboard/bookings")
-      }
+      const tokenResult = await getIdTokenResult(userCredential.user)
+      const role = normalizeAdminRole(tokenResult.claims.role, userCredential.user.email)
+      router.push(getDefaultAdminRoute(role))
     } catch (err: any) {
       console.error("[LoginPage] Firebase login error:", err)
       if (

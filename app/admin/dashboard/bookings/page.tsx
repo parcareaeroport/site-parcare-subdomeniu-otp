@@ -53,6 +53,7 @@ import { recoverSpecificBooking } from "@/app/actions/booking-recovery" // Recov
 import { TimePickerDemo } from "@/components/time-picker"
 import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { normalizeLicensePlate } from "@/lib/utils"
+import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 import { Clock, XCircle } from "lucide-react"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
@@ -992,9 +993,8 @@ function BookingsPageContent() {
   const handleRecalculateOccupancy = async () => {
     setRecalculatingOcc(true)
     try {
-      const res = await fetch("/api/admin/occupancy", {
+      const res = await adminAuthorizedFetch("/api/admin/occupancy", user, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "recalculate" }),
       })
       if (!res.ok) throw new Error(`Status ${res.status}`)
@@ -1017,11 +1017,18 @@ function BookingsPageContent() {
 
   const handleDeleteBooking = async () => {
     if (!bookingToDelete) return
+    if (!isAdmin) {
+      toast({
+        title: "Acces restricționat",
+        description: "Doar administratorii pot șterge rezervări.",
+        variant: "destructive",
+      })
+      return
+    }
     setIsDeleting(true)
     try {
-      const res = await fetch("/api/admin/bookings/delete", {
+      const res = await adminAuthorizedFetch("/api/admin/bookings/delete", user, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bookingId: bookingToDelete.id }),
       })
       const json = await res.json().catch(() => null)
@@ -1115,9 +1122,8 @@ function BookingsPageContent() {
       // Send cancellation confirmation email to client (if available)
       if (booking.clientEmail) {
         try {
-          const res = await fetch("/api/admin/bookings/send-cancel-confirmation", {
+          const res = await adminAuthorizedFetch("/api/admin/bookings/send-cancel-confirmation", user, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               bookingId: booking.id,
               reason: cancelReasonInput.trim() || undefined,
@@ -1748,9 +1754,8 @@ function BookingsPageContent() {
 
     setRetryingOblioBookingId(booking.id)
     try {
-      const res = await fetch("/api/admin/bookings/retry-oblio-invoice", {
+      const res = await adminAuthorizedFetch("/api/admin/bookings/retry-oblio-invoice", user, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ bookingId: booking.id }),
       })
       const json = await res.json().catch(() => ({}))

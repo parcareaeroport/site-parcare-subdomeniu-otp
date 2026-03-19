@@ -3,6 +3,7 @@ import { db } from "@/lib/firebase"
 import { doc, getDoc, increment, serverTimestamp, updateDoc } from "firebase/firestore"
 import { generateOblioInvoice } from "@/lib/oblio-integration"
 import { classifyOblioError, recordOblioFailure } from "@/lib/oblio-alerting"
+import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 
 const OBLIO_INVOICE_TIMEOUT_MS = 25000
 
@@ -28,6 +29,11 @@ function isEligibleForManualRetry(booking: any): { ok: boolean; reason?: string 
 }
 
 export async function POST(req: Request) {
+  const authResult = await authorizeAdminRequest(req, ["admin"])
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
   let bookingId = ""
   let bookingRef: any = null
   let bookingData: any = null

@@ -14,6 +14,7 @@ import { OccupancyForecast } from "@/components/admin/occupancy-forecast"
 import { useSearchParams } from "next/navigation"
 import { useAuth } from "@/context/auth-context"
 import { auth } from "@/lib/firebase"
+import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth"
 import { useToast } from "@/components/ui/use-toast"
 import { writeManualLprEvent } from "@/lib/manual-lpr-event"
@@ -91,10 +92,15 @@ export default function OccupancyPage() {
   const [plateSearch, setPlateSearch] = useState("")
 
   const fetchData = async () => {
+    if (!user) {
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch("/api/admin/occupancy")
+      const res = await adminAuthorizedFetch("/api/admin/occupancy", user)
       if (!res.ok) throw new Error(`Status ${res.status}`)
       const json = await res.json()
       setData(json)
@@ -107,7 +113,7 @@ export default function OccupancyPage() {
 
   useEffect(() => {
     fetchData()
-  }, [])
+  }, [user])
 
   const isPaid = (status: string) => status === "paid"
 
@@ -178,7 +184,7 @@ export default function OccupancyPage() {
     setResetting(true)
     setError(null)
     try {
-      const res = await fetch("/api/admin/occupancy", { method: "POST" })
+      const res = await adminAuthorizedFetch("/api/admin/occupancy", user, { method: "POST" })
       if (!res.ok) throw new Error(`Status ${res.status}`)
       await fetchData()
     } catch (e) {
@@ -192,9 +198,8 @@ export default function OccupancyPage() {
     setResetting(true)
     setError(null)
     try {
-      const res = await fetch("/api/admin/occupancy", {
+      const res = await adminAuthorizedFetch("/api/admin/occupancy", user, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "recalculate" }),
       })
       if (!res.ok) throw new Error(`Status ${res.status}`)
@@ -300,9 +305,8 @@ export default function OccupancyPage() {
     setResetting(true)
     setError(null)
     try {
-      const res = await fetch("/api/admin/occupancy", {
+      const res = await adminAuthorizedFetch("/api/admin/occupancy", user, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "set_all_outside" }),
       })
       if (!res.ok) throw new Error(`Status ${res.status}`)
@@ -345,9 +349,8 @@ export default function OccupancyPage() {
       // Window is UTC (Bookings shows LPR in UTC).
       const fromIso = "2025-12-25T12:15:00Z"
       const toIso = "2025-12-25T12:22:59Z"
-      const resPreview = await fetch("/api/admin/occupancy", {
+      const resPreview = await adminAuthorizedFetch("/api/admin/occupancy", user, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reverse_set_all_outside_window_preview", fromIso, toIso }),
       })
       const jsonPreview = await resPreview.json().catch(() => null)
@@ -405,9 +408,8 @@ export default function OccupancyPage() {
       const cred = EmailAuthProvider.credential(email, reversePassword)
       await reauthenticateWithCredential(current, cred)
 
-      const res = await fetch("/api/admin/occupancy", {
+      const res = await adminAuthorizedFetch("/api/admin/occupancy", user, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reverse_set_all_outside_window", fromIso, toIso }),
       })
       const json = await res.json().catch(() => null)

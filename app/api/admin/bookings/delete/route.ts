@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/firebase"
 import { cancelBooking as cancelParkingApiBooking } from "@/app/actions/booking-actions"
+import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 import {
   doc,
   increment,
@@ -10,6 +11,11 @@ import {
 } from "firebase/firestore"
 
 export async function POST(req: Request) {
+  const authResult = await authorizeAdminRequest(req, ["admin"])
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
   try {
     const body = await req.json().catch(() => null)
     const bookingId = String(body?.bookingId || "").trim()
