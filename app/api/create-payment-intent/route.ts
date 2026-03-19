@@ -3,10 +3,8 @@ import Stripe from "stripe"
 import { normalizeLicensePlate } from "@/lib/utils"
 
 // Inițializăm clientul Stripe cu cheia secretă
-// Folosim versiunea de API suportată de tipurile Stripe instalate
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2026-02-25.clover",
-})
+// Lăsăm Stripe să folosească versiunea API pinned de pachetul instalat
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "")
 
 export async function POST(request: NextRequest) {
   try {
