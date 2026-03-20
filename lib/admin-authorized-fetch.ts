@@ -9,16 +9,36 @@ export async function adminAuthorizedFetch(
     throw new Error("Trebuie să fiți autentificat pentru această acțiune.")
   }
 
-  const token = await user.getIdToken()
-  const headers = new Headers(init.headers)
-  headers.set("Authorization", `Bearer ${token}`)
+  const createHeaders = (token: string) => {
+    const headers = new Headers(init.headers)
+    headers.set("Authorization", `Bearer ${token}`)
 
-  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json")
+    if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json")
+    }
+
+    return headers
   }
 
-  return fetch(input, {
+  const token = await user.getIdToken()
+  let response = await fetch(input, {
     ...init,
-    headers,
+    headers: createHeaders(token),
   })
+
+  if (response.status !== 401) {
+    return response
+  }
+
+  const refreshedToken = await user.getIdToken(true)
+  if (!refreshedToken) {
+    return response
+  }
+
+  response = await fetch(input, {
+    ...init,
+    headers: createHeaders(refreshedToken),
+  })
+
+  return response
 }

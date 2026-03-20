@@ -13,14 +13,15 @@ export async function authorizeAdminRequest(
   allowedRoles: AdminRole[],
 ): Promise<{ ok: true; user: AuthorizedUser } | { ok: false; response: NextResponse }> {
   const authHeader = request.headers.get("authorization") || request.headers.get("Authorization")
-  if (!authHeader?.startsWith("Bearer ")) {
+  const bearerMatch = authHeader?.match(/^Bearer\s+(.+)$/i)
+  if (!bearerMatch) {
     return {
       ok: false,
       response: NextResponse.json({ error: "Missing bearer token" }, { status: 401 }),
     }
   }
 
-  const idToken = authHeader.slice("Bearer ".length).trim()
+  const idToken = bearerMatch[1].trim().replace(/^"|"$/g, "")
   if (!idToken) {
     return {
       ok: false,

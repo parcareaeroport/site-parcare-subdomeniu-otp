@@ -9,8 +9,67 @@ type Body = {
   password?: string
 }
 
-export async function POST(request: Request) {
+type PatchBody = {
+  uid?: string
+  active?: boolean
+}
+
+async function authorizeAdminOnly(request: Request) {
   const authResult = await authorizeAdminRequest(request, ["admin"])
+  if (!authResult.ok) {
+    return authResult
+  }
+
+  return authResult
+}
+
+export async function GET(request: Request) {
+  const authResult = await authorizeAdminOnly(request)
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
+  try {
+    const snapshot = await adminDb.collection("users").where("role", "==", "entriesOperator").get()
+
+    const users = snapshot.docs
+      .map((doc) => {
+        const data = doc.data() as {
+          uid?: string
+          name?: string
+          email?: string
+          active?: boolean
+          createdAt?: { toDate?: () => Date }
+          createdByEmail?: string | null
+        }
+
+        const createdAtDate =
+          typeof data?.createdAt?.toDate === "function" ? data.createdAt.toDate() : null
+
+        return {
+          uid: data.uid || doc.id,
+          name: String(data.name || "").trim(),
+          email: String(data.email || "").trim().toLowerCase(),
+          active: data.active !== false,
+          createdAt: createdAtDate ? createdAtDate.toISOString() : null,
+          createdByEmail: data.createdByEmail || null,
+        }
+      })
+      .sort((a, b) => {
+        const aTs = a.createdAt ? Date.parse(a.createdAt) : 0
+        const bTs = b.createdAt ? Date.parse(b.createdAt) : 0
+        return bTs - aTs
+      })
+
+    return NextResponse.json({ success: true, users })
+  } catch (error) {
+    console.error("[admin/users/create] Failed to load entries operators.", error)
+    return NextResponse.json({ error: "Nu am putut încărca lista de conturi Entries/Exits." }, { status: 500 })
+  }
+}
+
+export async function POST(request: Request) {
+  const authResult = await authorizeAdminOnly(request)
   if (!authResult.ok) {
     return authResult.response
   }
@@ -82,5 +141,66 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ error: "Nu am putut crea contul angajatului." }, { status: 500 })
+  }
+}
+
+export async function PATCH(request: Request) {
+  const authResult = await authorizeAdminOnly(request)
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
+  try {
+    const body = (await request.json().catch(() => ({}))) as PatchBody
+    const uid = String(body.uid || "").trim()
+    const active = body.active
+
+    if (!uid) {
+      return NextResponse.json({ error: "UID-ul utilizatorului este obligatoriu." }, { status: 400 })
+    }
+    if (typeof active !== "boolean") {
+      return NextResponse.json({ error: "Câmpul active trebuie să fie true sau false." }, { status: 400 })
+    }
+
+    const userDocRef = adminDb.collection("users").doc(uid)
+    const userDoc = await userDocRef.get()
+    if (!userDoc.exists) {
+      return NextResponse.json({ error: "Contul selectat nu există." }, { status: 404 })
+    }
+
+    const userData = userDoc.data() as { role?: string; email?: string; name?: string } | undefined
+    if (userData?.role !== "entriesOperator") {
+      return NextResponse.json({ error: "Poți modifica doar conturi Entries/Exits." }, { status: 403 })
+    }
+
+    await adminAuth.updateUser(uid, { disabled: !active })
+
+    await userDocRef.set(
+      {
+        active,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedByUid: authResult.user.uid,
+        updatedByEmail: authResult.user.email,
+      },
+      { merge: true },
+    )
+
+    return NextResponse.json({
+      success: true,
+      user: {
+        uid,
+        active,
+        email: String(userData?.email || "").trim().toLowerCase(),
+        name: String(userData?.name || "").trim(),
+      },
+    })
+  } catch (error: any) {
+    console.error("[admin/users/create] Failed to update user status.", error)
+
+    if (error?.code === "auth/user-not-found") {
+      return NextResponse.json({ error: "Contul din Firebase Auth nu mai există." }, { status: 404 })
+    }
+
+    return NextResponse.json({ error: "Nu am putut actualiza statusul contului." }, { status: 500 })
   }
 }

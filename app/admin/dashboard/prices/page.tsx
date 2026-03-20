@@ -552,7 +552,7 @@ export default function PricesPage() {
           {/* Dialog pentru Import Excel */}
           <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" className="border-green-500 text-green-600 hover:bg-green-50">
+              <Button variant="outline" className="border-green-500 text-green-600 hover:bg-green-50 hover:text-green-700">
                 <FileSpreadsheet className="mr-2 h-4 w-4" /> Import Excel
               </Button>
             </DialogTrigger>

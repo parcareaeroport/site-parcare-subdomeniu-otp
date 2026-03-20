@@ -3408,7 +3408,7 @@ function BookingsPageContent() {
                   handleSendEmail(selectedBooking)
                 }}
                 disabled={isSendingEmail}
-                className="text-blue-600 border-blue-600 hover:bg-blue-50"
+                className="text-blue-600 border-blue-600 hover:bg-blue-50 hover:text-blue-700"
               >
                 {isSendingEmail && sendingEmailBookingId === selectedBooking.id ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -3424,7 +3424,7 @@ function BookingsPageContent() {
                 variant="outline"
                 onClick={() => handleRetryOblioInvoice(selectedBooking)}
                 disabled={retryingOblioBookingId === selectedBooking.id}
-                className="text-amber-700 border-amber-500 hover:bg-amber-50"
+                className="text-amber-700 border-amber-500 hover:bg-amber-50 hover:text-amber-800"
               >
                 {retryingOblioBookingId === selectedBooking.id ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
