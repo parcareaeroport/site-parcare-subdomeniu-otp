@@ -14,6 +14,10 @@ type PatchBody = {
   active?: boolean
 }
 
+type DeleteBody = {
+  uid?: string
+}
+
 async function authorizeAdminOnly(request: Request) {
   const authResult = await authorizeAdminRequest(request, ["admin"])
   if (!authResult.ok) {
@@ -202,5 +206,54 @@ export async function PATCH(request: Request) {
     }
 
     return NextResponse.json({ error: "Nu am putut actualiza statusul contului." }, { status: 500 })
+  }
+}
+
+export async function DELETE(request: Request) {
+  const authResult = await authorizeAdminOnly(request)
+  if (!authResult.ok) {
+    return authResult.response
+  }
+
+  try {
+    const body = (await request.json().catch(() => ({}))) as DeleteBody
+    const uid = String(body.uid || "").trim()
+
+    if (!uid) {
+      return NextResponse.json({ error: "UID-ul utilizatorului este obligatoriu." }, { status: 400 })
+    }
+
+    const userDocRef = adminDb.collection("users").doc(uid)
+    const userDoc = await userDocRef.get()
+    if (!userDoc.exists) {
+      return NextResponse.json({ error: "Contul selectat nu există." }, { status: 404 })
+    }
+
+    const userData = userDoc.data() as { role?: string; email?: string; name?: string } | undefined
+    if (userData?.role !== "entriesOperator") {
+      return NextResponse.json({ error: "Poți șterge doar conturi Entries/Exits." }, { status: 403 })
+    }
+
+    try {
+      await adminAuth.deleteUser(uid)
+    } catch (error: any) {
+      if (error?.code !== "auth/user-not-found") {
+        throw error
+      }
+    }
+
+    await userDocRef.delete()
+
+    return NextResponse.json({
+      success: true,
+      user: {
+        uid,
+        email: String(userData?.email || "").trim().toLowerCase(),
+        name: String(userData?.name || "").trim(),
+      },
+    })
+  } catch (error) {
+    console.error("[admin/users/create] Failed to delete user.", error)
+    return NextResponse.json({ error: "Nu am putut șterge contul angajatului." }, { status: 500 })
   }
 }

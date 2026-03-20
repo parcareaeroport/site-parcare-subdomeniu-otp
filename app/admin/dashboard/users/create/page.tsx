@@ -25,7 +25,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Loader2, Plus, ShieldAlert, UserPlus } from "lucide-react"
+import { Loader2, Plus, ShieldAlert, Trash2, UserPlus } from "lucide-react"
 import { useAuth } from "@/context/auth-context"
 import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 
@@ -79,8 +79,10 @@ export default function CreateEmployeePage() {
   const [resetError, setResetError] = useState("")
   const [success, setSuccess] = useState("")
   const [actionLoadingUid, setActionLoadingUid] = useState<string | null>(null)
+  const [actionType, setActionType] = useState<"toggle" | "delete" | null>(null)
   const [toggleTargetUser, setToggleTargetUser] = useState<EntriesUser | null>(null)
   const [toggleTargetActive, setToggleTargetActive] = useState(false)
+  const [deleteTargetUser, setDeleteTargetUser] = useState<EntriesUser | null>(null)
   const [isResetDialogOpen, setIsResetDialogOpen] = useState(false)
   const [resetTargetUser, setResetTargetUser] = useState<EntriesUser | null>(null)
   const [resetPassword, setResetPassword] = useState("")
@@ -138,6 +140,7 @@ export default function CreateEmployeePage() {
     setListError("")
     setSuccess("")
     setActionLoadingUid(entryUser.uid)
+    setActionType("toggle")
 
     try {
       const response = await adminAuthorizedFetch("/api/admin/users/create", user, {
@@ -159,6 +162,7 @@ export default function CreateEmployeePage() {
       setListError(toggleError instanceof Error ? toggleError.message : "Nu am putut actualiza statusul contului.")
     } finally {
       setActionLoadingUid(null)
+      setActionType(null)
       setToggleTargetUser(null)
     }
   }
@@ -168,6 +172,49 @@ export default function CreateEmployeePage() {
     setResetError("")
     setResetPassword(generateTemporaryPassword())
     setIsResetDialogOpen(true)
+  }
+
+  const openDeleteDialog = (entryUser: EntriesUser) => {
+    setDeleteTargetUser(entryUser)
+  }
+
+  const confirmDeleteAccount = async () => {
+    const entryUser = deleteTargetUser
+    if (!entryUser) {
+      return
+    }
+    if (!user) {
+      setListError("Trebuie să fiți autentificat pentru această acțiune.")
+      return
+    }
+
+    setListError("")
+    setSuccess("")
+    setActionLoadingUid(entryUser.uid)
+    setActionType("delete")
+
+    try {
+      const response = await adminAuthorizedFetch("/api/admin/users/create", user, {
+        method: "DELETE",
+        body: JSON.stringify({
+          uid: entryUser.uid,
+        }),
+      })
+
+      const json = await response.json().catch(() => null)
+      if (!response.ok) {
+        throw new Error(json?.error || `HTTP ${response.status}`)
+      }
+
+      setSuccess(`Contul ${entryUser.email} a fost șters definitiv.`)
+      await loadUsers()
+    } catch (deleteError) {
+      setListError(deleteError instanceof Error ? deleteError.message : "Nu am putut șterge contul.")
+    } finally {
+      setActionLoadingUid(null)
+      setActionType(null)
+      setDeleteTargetUser(null)
+    }
   }
 
   const handleResetPassword = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -440,7 +487,7 @@ export default function CreateEmployeePage() {
                             onClick={() => openToggleDialog(entryUser)}
                             disabled={Boolean(actionLoadingUid) || resetSaving}
                           >
-                            {actionLoadingUid === entryUser.uid ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            {actionLoadingUid === entryUser.uid && actionType === "toggle" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                             {entryUser.active ? "Dezactivează" : "Activează"}
                           </Button>
                           <Button
@@ -451,6 +498,16 @@ export default function CreateEmployeePage() {
                             disabled={Boolean(actionLoadingUid) || resetSaving}
                           >
                             Resetează parola
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => openDeleteDialog(entryUser)}
+                            disabled={Boolean(actionLoadingUid) || resetSaving}
+                          >
+                            {actionLoadingUid === entryUser.uid && actionType === "delete" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                            Șterge cont
                           </Button>
                         </div>
                       </td>
@@ -483,7 +540,7 @@ export default function CreateEmployeePage() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={Boolean(actionLoadingUid)}>Renunță</AlertDialogCancel>
             <AlertDialogAction onClick={confirmToggleActive} disabled={Boolean(actionLoadingUid)}>
-              {actionLoadingUid === toggleTargetUser?.uid ? (
+              {actionLoadingUid === toggleTargetUser?.uid && actionType === "toggle" ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   Se procesează...
@@ -492,6 +549,38 @@ export default function CreateEmployeePage() {
                 "Activează"
               ) : (
                 "Dezactivează"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={Boolean(deleteTargetUser)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteTargetUser(null)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Ștergi definitiv contul?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Contul {deleteTargetUser?.email || "-"} va fi șters definitiv din Firebase Auth și din lista internă.
+              Această acțiune nu poate fi anulată.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(actionLoadingUid)}>Renunță</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteAccount} disabled={Boolean(actionLoadingUid)}>
+              {actionLoadingUid === deleteTargetUser?.uid && actionType === "delete" ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Se șterge...
+                </>
+              ) : (
+                "Șterge definitiv"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
