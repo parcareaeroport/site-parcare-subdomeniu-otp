@@ -22,6 +22,8 @@ import {
   onSnapshot,
   where,
   limit,
+  startAfter,
+  documentId,
 } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -29,6 +31,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
   DropdownMenu,
@@ -306,6 +309,27 @@ function BookingsPageContent() {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
 
+  // Căutare globală (după număr / API / id / client / email),
+  // independentă de intervalul "Creată la" și de limita de 1000.
+  // Două canale:
+  //  (1) prefix direct în Firestore (instant)
+  //  (2) index local "subțire" cu toate placutele (substring oriunde)
+  type PlateIndexEntry = {
+    id: string
+    plate: string // normalizat (uppercase, fără separatori)
+    api?: string // lowercase
+    client?: string // lowercase
+    email?: string // lowercase
+    createdAt?: number // millis, pentru sort
+  }
+  const [globalSearchResults, setGlobalSearchResults] = useState<Booking[]>([])
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false)
+  const [plateIndex, setPlateIndex] = useState<PlateIndexEntry[]>([])
+  const [plateIndexLoading, setPlateIndexLoading] = useState(false)
+  const [plateIndexLoadedAt, setPlateIndexLoadedAt] = useState<number | null>(null)
+  const [bookingsHitLimit, setBookingsHitLimit] = useState(false)
+  const globalSearchReqIdRef = useRef(0)
+
   // Prag anulare „Plată la Parcare” (minute) – din config/reservationSettings
   const [payOnSiteCancelMinutes, setPayOnSiteCancelMinutes] = useState<number>(180)
   const [retryingOblioBookingId, setRetryingOblioBookingId] = useState<string | null>(null)
@@ -543,6 +567,9 @@ function BookingsPageContent() {
         const nowTs = now.getTime()
 
         const dataCreated = await getDocs(qCreated)
+        // Dacă Firestore returnează exact limita, probabil că există mai multe rezervări
+        // în interval care au fost tăiate. Afișăm un banner.
+        setBookingsHitLimit(dataCreated.size >= 1000)
         const combinedDocsMap = new Map<string, any>()
         const pushDocSnap = (docSnap: any) => {
           if (!docSnap) return
@@ -650,6 +677,256 @@ function BookingsPageContent() {
       setIsLoading(false)
     }
   }, [user, authLoading, fetchBookings, loadPrices, dateRange])
+
+  // ----------------------------------------------------------------
+  // Căutare globală: index local subțire + cache sessionStorage (TTL 5 min)
+  // ----------------------------------------------------------------
+  const PLATE_INDEX_CACHE_KEY = "bookings.plateIndex.v1"
+  const PLATE_INDEX_TTL_MS = 5 * 60 * 1000
+
+  const loadPlateIndex = useCallback(
+    async (opts?: { force?: boolean }) => {
+      const force = !!opts?.force
+      // 1) încearcă din sessionStorage dacă nu forțăm
+      if (!force && typeof window !== "undefined") {
+        try {
+          const raw = window.sessionStorage.getItem(PLATE_INDEX_CACHE_KEY)
+          if (raw) {
+            const parsed = JSON.parse(raw) as { savedAt: number; items: PlateIndexEntry[] }
+            if (parsed && Array.isArray(parsed.items) && parsed.savedAt) {
+              const age = Date.now() - parsed.savedAt
+              if (age < PLATE_INDEX_TTL_MS) {
+                setPlateIndex(parsed.items)
+                setPlateIndexLoadedAt(parsed.savedAt)
+                return
+              }
+            }
+          }
+        } catch (e) {
+          // ignore, refetch
+        }
+      }
+
+      setPlateIndexLoading(true)
+      try {
+        const bookingsCollectionRef = collection(db, "bookings")
+        const items: PlateIndexEntry[] = []
+        const INDEX_PAGE_SIZE = 500
+        let cursor: any = null
+        // safety cap ca să nu blocăm totul dacă există zeci de mii; putem relaxa mai târziu
+        const MAX_DOCS = 100000
+        while (items.length < MAX_DOCS) {
+          const qPage = cursor
+            ? query(
+                bookingsCollectionRef,
+                orderBy("createdAt", "desc"),
+                startAfter(cursor),
+                limit(INDEX_PAGE_SIZE),
+              )
+            : query(
+                bookingsCollectionRef,
+                orderBy("createdAt", "desc"),
+                limit(INDEX_PAGE_SIZE),
+              )
+          const snap = await getDocs(qPage)
+          if (snap.empty) break
+          snap.forEach((d) => {
+            const raw: any = d.data()
+            const plate = normalizeLicensePlate(String(raw?.licensePlate || ""))
+            items.push({
+              id: d.id,
+              plate,
+              api: raw?.apiBookingNumber ? String(raw.apiBookingNumber).toLowerCase() : undefined,
+              client: raw?.clientName ? String(raw.clientName).toLowerCase() : undefined,
+              email: raw?.clientEmail ? String(raw.clientEmail).toLowerCase() : undefined,
+              createdAt:
+                typeof raw?.createdAt?.toMillis === "function"
+                  ? raw.createdAt.toMillis()
+                  : undefined,
+            })
+          })
+          if (snap.size < INDEX_PAGE_SIZE) break
+          cursor = snap.docs[snap.docs.length - 1]
+        }
+
+        setPlateIndex(items)
+        const savedAt = Date.now()
+        setPlateIndexLoadedAt(savedAt)
+        try {
+          if (typeof window !== "undefined") {
+            window.sessionStorage.setItem(
+              PLATE_INDEX_CACHE_KEY,
+              JSON.stringify({ savedAt, items }),
+            )
+          }
+        } catch (e) {
+          // quota exceeded etc. — ignorăm, indexul rămâne doar în memorie
+        }
+      } catch (e) {
+        console.error("Error loading plate index", e)
+      } finally {
+        setPlateIndexLoading(false)
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      void loadPlateIndex()
+    }
+  }, [authLoading, user, loadPlateIndex])
+
+  // Part 1 — prefix direct în Firestore pe licensePlate / apiBookingNumber
+  // + fallback getDoc(id) când input-ul arată ca un ID Firestore.
+  const runFirestorePrefixSearch = useCallback(async (rawInput: string): Promise<Booking[]> => {
+    const q = rawInput.trim()
+    if (!q) return []
+
+    const plateQ = normalizeLicensePlate(q)
+    const apiLowerQ = q.toLowerCase()
+
+    const bookingsRef = collection(db, "bookings")
+    const results: Booking[] = []
+    const seen = new Set<string>()
+    const push = (id: string, data: any) => {
+      if (seen.has(id)) return
+      seen.add(id)
+      results.push({ id, ...data } as Booking)
+    }
+
+    const tasks: Promise<unknown>[] = []
+
+    if (plateQ.length >= 2) {
+      const qPlate = query(
+        bookingsRef,
+        where("licensePlate", ">=", plateQ),
+        where("licensePlate", "<=", plateQ + "\uf8ff"),
+        orderBy("licensePlate"),
+        limit(25),
+      )
+      tasks.push(
+        getDocs(qPlate)
+          .then((snap) => snap.forEach((d) => push(d.id, d.data())))
+          .catch((e) => console.warn("prefix plate search failed", e)),
+      )
+    }
+
+    if (apiLowerQ.length >= 2) {
+      const qApi = query(
+        bookingsRef,
+        where("apiBookingNumber", ">=", q),
+        where("apiBookingNumber", "<=", q + "\uf8ff"),
+        orderBy("apiBookingNumber"),
+        limit(25),
+      )
+      tasks.push(
+        getDocs(qApi)
+          .then((snap) => snap.forEach((d) => push(d.id, d.data())))
+          .catch(() => {
+            // index-ul compus poate lipsi la prima cerere; nu e blocant
+          }),
+      )
+    }
+
+    // Dacă input-ul poate fi un ID Firestore, încercăm fetch direct.
+    // ID-urile Firestore auto generate au ~20 caractere alfanumerice.
+    if (q.length >= 10) {
+      tasks.push(
+        getDoc(doc(db, "bookings", q))
+          .then((snap) => {
+            if (snap.exists()) push(snap.id, snap.data())
+          })
+          .catch(() => undefined),
+      )
+    }
+
+    await Promise.all(tasks)
+    return results
+  }, [])
+
+  // Part 2 — filtrare substring pe indexul local și hidratare batch a id-urilor găsite.
+  const runLocalIndexSearch = useCallback(
+    async (rawInput: string, indexSnapshot: PlateIndexEntry[]): Promise<Booking[]> => {
+      const q = rawInput.trim()
+      if (!q || indexSnapshot.length === 0) return []
+
+      const plateQ = normalizeLicensePlate(q)
+      const lowerQ = q.toLowerCase()
+
+      const candidates: string[] = []
+      const MAX_CANDIDATES = 50
+      for (const entry of indexSnapshot) {
+        const plateHit = plateQ.length >= 2 && entry.plate.includes(plateQ)
+        const apiHit = !plateHit && lowerQ.length >= 2 && entry.api && entry.api.includes(lowerQ)
+        const clientHit = !plateHit && !apiHit && lowerQ.length >= 2 && entry.client && entry.client.includes(lowerQ)
+        const emailHit =
+          !plateHit && !apiHit && !clientHit && lowerQ.length >= 2 && entry.email && entry.email.includes(lowerQ)
+        if (plateHit || apiHit || clientHit || emailHit) {
+          candidates.push(entry.id)
+          if (candidates.length >= MAX_CANDIDATES) break
+        }
+      }
+
+      if (candidates.length === 0) return []
+
+      // hidratare în batch-uri de 10 (limita Firestore pentru where documentId IN)
+      const bookingsRef = collection(db, "bookings")
+      const hydrated: Booking[] = []
+      for (let i = 0; i < candidates.length; i += 10) {
+        const chunk = candidates.slice(i, i + 10)
+        try {
+          const qChunk = query(bookingsRef, where(documentId(), "in", chunk))
+          const snap = await getDocs(qChunk)
+          snap.forEach((d) => hydrated.push({ id: d.id, ...(d.data() as any) } as Booking))
+        } catch (e) {
+          console.warn("hydrate chunk failed", e)
+        }
+      }
+      return hydrated
+    },
+    [],
+  )
+
+  // Debounce + execuție paralelă Part 1 + Part 2, merge cu dedupe.
+  useEffect(() => {
+    const term = searchTerm.trim()
+    if (term.length < 2) {
+      setGlobalSearchResults([])
+      setGlobalSearchLoading(false)
+      return
+    }
+
+    const reqId = ++globalSearchReqIdRef.current
+    setGlobalSearchLoading(true)
+    const timer = setTimeout(async () => {
+      try {
+        const [fromFirestore, fromIndex] = await Promise.all([
+          runFirestorePrefixSearch(term),
+          runLocalIndexSearch(term, plateIndex),
+        ])
+        if (reqId !== globalSearchReqIdRef.current) return // request mai nou a luat locul
+
+        const merged = new Map<string, Booking>()
+        for (const b of fromFirestore) merged.set(b.id, b)
+        for (const b of fromIndex) if (!merged.has(b.id)) merged.set(b.id, b)
+
+        // sortare: după createdAt desc dacă există
+        const sorted = Array.from(merged.values()).sort((a, b) => {
+          const aMs = (a.createdAt as any)?.toMillis?.() ?? 0
+          const bMs = (b.createdAt as any)?.toMillis?.() ?? 0
+          return bMs - aMs
+        })
+        setGlobalSearchResults(sorted)
+      } finally {
+        if (reqId === globalSearchReqIdRef.current) {
+          setGlobalSearchLoading(false)
+        }
+      }
+    }, 250)
+
+    return () => clearTimeout(timer)
+  }, [searchTerm, plateIndex, runFirestorePrefixSearch, runLocalIndexSearch])
 
   useEffect(() => {
     let filtered = bookings
@@ -1927,8 +2204,71 @@ function BookingsPageContent() {
 
   if (authLoading || isLoading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin" /> <p className="ml-2">Se încarcă rezervările...</p>
+      <div className="space-y-6">
+        {/* Titlu pagină */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-64" />
+            <Skeleton className="h-4 w-96" />
+          </div>
+          <Skeleton className="h-9 w-32" />
+        </div>
+
+        {/* Carduri de statistici */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, idx) => (
+            <Card key={`stat-skeleton-${idx}`}>
+              <CardHeader className="pb-2">
+                <Skeleton className="h-4 w-24" />
+              </CardHeader>
+              <CardContent className="space-y-2">
+                <Skeleton className="h-7 w-16" />
+                <Skeleton className="h-3 w-32" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {/* Tabs + bara filtre */}
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {Array.from({ length: 7 }).map((_, idx) => (
+              <Skeleton key={`tab-skeleton-${idx}`} className="h-9 w-24" />
+            ))}
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Skeleton className="h-9 flex-1" />
+            <Skeleton className="h-9 w-40" />
+            <Skeleton className="h-9 w-40" />
+          </div>
+        </div>
+
+        {/* Tabelul principal */}
+        <Card>
+          <CardHeader>
+            <Skeleton className="h-5 w-48" />
+            <Skeleton className="h-4 w-64" />
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {Array.from({ length: 6 }).map((_, idx) => (
+                <div key={`row-skeleton-${idx}`} className="flex items-center gap-4">
+                  <Skeleton className="h-5 w-20" />
+                  <Skeleton className="h-5 w-24" />
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-5 flex-1" />
+                  <Skeleton className="h-5 w-20" />
+                  <Skeleton className="h-8 w-8 rounded-md" />
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Se încarcă rezervările...
+            </div>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -2279,8 +2619,204 @@ function BookingsPageContent() {
                 Resetează
               </Button>
             )}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void loadPlateIndex({ force: true })}
+                    disabled={plateIndexLoading}
+                    className="h-9 w-9"
+                    aria-label="Resincronizează indexul pentru căutarea globală"
+                  >
+                    {plateIndexLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className="text-xs">
+                    Resincronizează indexul pentru căutare globală
+                    {plateIndexLoadedAt
+                      ? ` (ultima: ${formatDateFn(new Date(plateIndexLoadedAt), "HH:mm:ss")})`
+                      : ""}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
+
+        {/* Banner informativ când încărcarea listei a atins limita (1000 documente) */}
+        {bookingsHitLimit && (
+          <Alert className="border-amber-300 bg-amber-50 text-amber-900">
+            <Info className="h-4 w-4" />
+            <AlertTitle className="text-amber-900">Interval mare — lista este plafonată</AlertTitle>
+            <AlertDescription className="text-amber-800">
+              Am încărcat cele mai recente 1000 de rezervări create în intervalul selectat.
+              Dacă nu găsești o rezervare specifică, scrie numărul / API / client în bara de căutare —
+              cautarea globală merge în toată baza, indiferent de interval.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Secțiune „Rezultate globale” — vizibilă când user-ul caută ceva */}
+        {searchTerm.trim().length >= 2 && (
+          <Card className="border-blue-200 bg-blue-50/30">
+            <CardHeader className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <CardTitle className="text-base text-blue-900">
+                  Rezultate globale (indiferent de interval)
+                </CardTitle>
+                <CardDescription>
+                  Caută în toată baza de date după număr, API, client sau email. Acoperă și rezervările
+                  din afara intervalului „Creată la” selectat.
+                </CardDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                {globalSearchLoading ? (
+                  <Badge variant="outline" className="bg-white">
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" /> caută...
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-white">
+                    {globalSearchResults.length} rezultat{globalSearchResults.length === 1 ? "" : "e"}
+                  </Badge>
+                )}
+                {plateIndexLoading && (
+                  <Badge variant="outline" className="bg-white">
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" /> index se încarcă
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {globalSearchLoading && globalSearchResults.length === 0 ? (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Nr. API / ID</TableHead>
+                        <TableHead>Nr. Înmatriculare</TableHead>
+                        <TableHead>Client</TableHead>
+                        <TableHead>Perioada</TableHead>
+                        <TableHead>Creată la</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Acțiuni</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {Array.from({ length: 3 }).map((_, idx) => (
+                        <TableRow key={`global-skeleton-${idx}`}>
+                          <TableCell>
+                            <Skeleton className="h-4 w-20" />
+                          </TableCell>
+                          <TableCell>
+                            <Skeleton className="h-4 w-24" />
+                          </TableCell>
+                          <TableCell>
+                            <Skeleton className="h-4 w-32" />
+                          </TableCell>
+                          <TableCell>
+                            <Skeleton className="h-4 w-40" />
+                          </TableCell>
+                          <TableCell>
+                            <Skeleton className="h-4 w-28" />
+                          </TableCell>
+                          <TableCell>
+                            <Skeleton className="h-5 w-20 rounded-full" />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Skeleton className="ml-auto h-8 w-24" />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : globalSearchResults.length === 0 && !globalSearchLoading ? (
+                <div className="py-4 text-center text-sm text-gray-500">
+                  Niciun rezultat global pentru „{searchTerm}”.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Nr. API / ID</TableHead>
+                        <TableHead>Nr. Înmatriculare</TableHead>
+                        <TableHead>Client</TableHead>
+                        <TableHead>Perioada</TableHead>
+                        <TableHead>Creată la</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Acțiuni</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {globalSearchResults.slice(0, 25).map((booking) => (
+                        <TableRow key={`global-${booking.id}`}>
+                          <TableCell className="font-medium">
+                            {booking.apiBookingNumber || booking.id.substring(0, 6)}
+                          </TableCell>
+                          <TableCell>{booking.licensePlate}</TableCell>
+                          <TableCell>{booking.clientName || "N/A"}</TableCell>
+                          <TableCell>
+                            {booking.startDate && booking.endDate ? (
+                              <span className="text-xs text-gray-800">
+                                {formatDateFn(parseISO(booking.startDate), "dd MMM", { locale: ro })}{" "}
+                                {booking.startTime || "--:--"} →{" "}
+                                {formatDateFn(parseISO(booking.endDate), "dd MMM", { locale: ro })}{" "}
+                                {booking.endTime || "--:--"}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {booking.createdAt
+                              ? formatDateFn(booking.createdAt.toDate(), "dd MMM yyyy, HH:mm", {
+                                  locale: ro,
+                                })
+                              : "N/A"}
+                          </TableCell>
+                          <TableCell>{getStatusBadge(String(booking.status || ""), booking)}</TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleViewBooking(booking)}
+                            >
+                              <Eye className="mr-2 h-4 w-4" /> Deschide
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                      {globalSearchLoading && (
+                        <TableRow>
+                          <TableCell colSpan={7} className="py-2">
+                            <div className="flex items-center gap-2 text-xs text-blue-700">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              Se actualizează rezultatele...
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                  {globalSearchResults.length > 25 && (
+                    <div className="mt-2 text-xs text-gray-500">
+                      Afișez primele 25 din {globalSearchResults.length} rezultate. Rafinează căutarea
+                      pentru a restrânge lista.
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
