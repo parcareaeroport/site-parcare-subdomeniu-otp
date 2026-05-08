@@ -2700,7 +2700,7 @@ function BookingsPageContent() {
                   Rezultate globale (indiferent de interval)
                 </CardTitle>
                 <CardDescription>
-                  Caută în toată baza de date după număr, API, client sau email. Acoperă și rezervările
+                  Caută în toată baza de date după număr, client sau email. Acoperă și rezervările
                   din afara intervalului „Creată la” selectat.
                 </CardDescription>
               </div>
