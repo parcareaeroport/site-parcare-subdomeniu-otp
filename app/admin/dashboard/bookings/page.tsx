@@ -308,9 +308,10 @@ function BookingsPageContent() {
   // Paginare pentru tabelul de rezervări
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
+  const [globalSearchPage, setGlobalSearchPage] = useState(1)
 
   // Căutare globală (după număr / API / id / client / email),
-  // independentă de intervalul "Creată la" și de limita de 1000.
+  // independentă de intervalul "Creată la".
   // Două canale:
   //  (1) prefix direct în Firestore (instant)
   //  (2) index local "subțire" cu toate placutele (substring oriunde)
@@ -327,7 +328,6 @@ function BookingsPageContent() {
   const [plateIndex, setPlateIndex] = useState<PlateIndexEntry[]>([])
   const [plateIndexLoading, setPlateIndexLoading] = useState(false)
   const [plateIndexLoadedAt, setPlateIndexLoadedAt] = useState<number | null>(null)
-  const [bookingsHitLimit, setBookingsHitLimit] = useState(false)
   const globalSearchReqIdRef = useRef(0)
 
   // Prag anulare „Plată la Parcare” (minute) – din config/reservationSettings
@@ -556,26 +556,40 @@ function BookingsPageContent() {
         // We include all bookings whose createdAt is within the selected [from..to] (whole days).
         const fromTs = Timestamp.fromDate(startOfDay(fromDate))
         const toTs = Timestamp.fromDate(endOfDay(toDate))
-        const qCreated = query(
-          bookingsCollectionRef,
-          where("createdAt", ">=", fromTs),
-          where("createdAt", "<=", toTs),
-          orderBy("createdAt", "desc"),
-          limit(1000),
-        )
         const now = new Date()
         const nowTs = now.getTime()
 
-        const dataCreated = await getDocs(qCreated)
-        // Dacă Firestore returnează exact limita, probabil că există mai multe rezervări
-        // în interval care au fost tăiate. Afișăm un banner.
-        setBookingsHitLimit(dataCreated.size >= 1000)
         const combinedDocsMap = new Map<string, any>()
         const pushDocSnap = (docSnap: any) => {
           if (!docSnap) return
           combinedDocsMap.set(docSnap.id, { id: docSnap.id, ...docSnap.data() })
         }
-        dataCreated.docs.forEach(pushDocSnap)
+
+        const FETCH_PAGE_SIZE = 500
+        let cursor: any = null
+        while (true) {
+          const qCreated = cursor
+            ? query(
+                bookingsCollectionRef,
+                where("createdAt", ">=", fromTs),
+                where("createdAt", "<=", toTs),
+                orderBy("createdAt", "desc"),
+                startAfter(cursor),
+                limit(FETCH_PAGE_SIZE),
+              )
+            : query(
+                bookingsCollectionRef,
+                where("createdAt", ">=", fromTs),
+                where("createdAt", "<=", toTs),
+                orderBy("createdAt", "desc"),
+                limit(FETCH_PAGE_SIZE),
+              )
+          const dataCreated = await getDocs(qCreated)
+          if (dataCreated.empty) break
+          dataCreated.docs.forEach(pushDocSnap)
+          if (dataCreated.size < FETCH_PAGE_SIZE) break
+          cursor = dataCreated.docs[dataCreated.docs.length - 1]
+        }
 
         const combined = Array.from(combinedDocsMap.values())
 
@@ -713,9 +727,7 @@ function BookingsPageContent() {
         const items: PlateIndexEntry[] = []
         const INDEX_PAGE_SIZE = 500
         let cursor: any = null
-        // safety cap ca să nu blocăm totul dacă există zeci de mii; putem relaxa mai târziu
-        const MAX_DOCS = 100000
-        while (items.length < MAX_DOCS) {
+        while (true) {
           const qPage = cursor
             ? query(
                 bookingsCollectionRef,
@@ -803,7 +815,6 @@ function BookingsPageContent() {
         where("licensePlate", ">=", plateQ),
         where("licensePlate", "<=", plateQ + "\uf8ff"),
         orderBy("licensePlate"),
-        limit(25),
       )
       tasks.push(
         getDocs(qPlate)
@@ -818,7 +829,6 @@ function BookingsPageContent() {
         where("apiBookingNumber", ">=", q),
         where("apiBookingNumber", "<=", q + "\uf8ff"),
         orderBy("apiBookingNumber"),
-        limit(25),
       )
       tasks.push(
         getDocs(qApi)
@@ -855,7 +865,6 @@ function BookingsPageContent() {
       const lowerQ = q.toLowerCase()
 
       const candidates: string[] = []
-      const MAX_CANDIDATES = 50
       for (const entry of indexSnapshot) {
         const plateHit = plateQ.length >= 2 && entry.plate.includes(plateQ)
         const apiHit = !plateHit && lowerQ.length >= 2 && entry.api && entry.api.includes(lowerQ)
@@ -864,7 +873,6 @@ function BookingsPageContent() {
           !plateHit && !apiHit && !clientHit && lowerQ.length >= 2 && entry.email && entry.email.includes(lowerQ)
         if (plateHit || apiHit || clientHit || emailHit) {
           candidates.push(entry.id)
-          if (candidates.length >= MAX_CANDIDATES) break
         }
       }
 
@@ -894,6 +902,7 @@ function BookingsPageContent() {
     if (term.length < 2) {
       setGlobalSearchResults([])
       setGlobalSearchLoading(false)
+      setGlobalSearchPage(1)
       return
     }
 
@@ -918,6 +927,7 @@ function BookingsPageContent() {
           return bMs - aMs
         })
         setGlobalSearchResults(sorted)
+        setGlobalSearchPage(1)
       } finally {
         if (reqId === globalSearchReqIdRef.current) {
           setGlobalSearchLoading(false)
@@ -2202,6 +2212,17 @@ function BookingsPageContent() {
     return getPaymentStatusBadge(isPaid ? "paid" : "not_paid")
   }
 
+  const GLOBAL_SEARCH_PAGE_SIZE = 25
+  const globalSearchTotalPages = Math.max(
+    1,
+    Math.ceil(globalSearchResults.length / GLOBAL_SEARCH_PAGE_SIZE),
+  )
+  const safeGlobalSearchPage = Math.min(globalSearchPage, globalSearchTotalPages)
+  const paginatedGlobalSearchResults = globalSearchResults.slice(
+    (safeGlobalSearchPage - 1) * GLOBAL_SEARCH_PAGE_SIZE,
+    safeGlobalSearchPage * GLOBAL_SEARCH_PAGE_SIZE,
+  )
+
   if (authLoading || isLoading) {
     return (
       <div className="space-y-6">
@@ -2650,19 +2671,6 @@ function BookingsPageContent() {
           </div>
         </div>
 
-        {/* Banner informativ când încărcarea listei a atins limita (1000 documente) */}
-        {bookingsHitLimit && (
-          <Alert className="border-amber-300 bg-amber-50 text-amber-900">
-            <Info className="h-4 w-4" />
-            <AlertTitle className="text-amber-900">Interval mare — lista este plafonată</AlertTitle>
-            <AlertDescription className="text-amber-800">
-              Am încărcat cele mai recente 1000 de rezervări create în intervalul selectat.
-              Dacă nu găsești o rezervare specifică, scrie numărul / API / client în bara de căutare —
-              cautarea globală merge în toată baza, indiferent de interval.
-            </AlertDescription>
-          </Alert>
-        )}
-
         {/* Secțiune „Rezultate globale” — vizibilă când user-ul caută ceva */}
         {searchTerm.trim().length >= 2 && (
           <Card className="border-blue-200 bg-blue-50/30">
@@ -2756,7 +2764,7 @@ function BookingsPageContent() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {globalSearchResults.slice(0, 25).map((booking) => (
+                      {paginatedGlobalSearchResults.map((booking) => (
                         <TableRow key={`global-${booking.id}`}>
                           <TableCell className="font-medium">
                             {booking.apiBookingNumber || booking.id.substring(0, 6)}
@@ -2806,10 +2814,37 @@ function BookingsPageContent() {
                       )}
                     </TableBody>
                   </Table>
-                  {globalSearchResults.length > 25 && (
-                    <div className="mt-2 text-xs text-gray-500">
-                      Afișez primele 25 din {globalSearchResults.length} rezultate. Rafinează căutarea
-                      pentru a restrânge lista.
+                  {globalSearchResults.length > GLOBAL_SEARCH_PAGE_SIZE && (
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-xs text-gray-500">
+                        Afișezi{" "}
+                        {(safeGlobalSearchPage - 1) * GLOBAL_SEARCH_PAGE_SIZE + 1} -{" "}
+                        {Math.min(safeGlobalSearchPage * GLOBAL_SEARCH_PAGE_SIZE, globalSearchResults.length)}{" "}
+                        din {globalSearchResults.length} rezultate globale
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setGlobalSearchPage((p) => Math.max(1, p - 1))}
+                          disabled={safeGlobalSearchPage === 1}
+                        >
+                          Anterioară
+                        </Button>
+                        <span className="text-xs text-gray-600">
+                          Pagina {safeGlobalSearchPage} din {globalSearchTotalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            setGlobalSearchPage((p) => Math.min(globalSearchTotalPages, p + 1))
+                          }
+                          disabled={safeGlobalSearchPage >= globalSearchTotalPages}
+                        >
+                          Următoare
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </div>
