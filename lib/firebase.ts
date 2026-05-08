@@ -2,6 +2,9 @@ import { initializeApp, getApps, getApp, type FirebaseApp } from "firebase/app"
 import { getAuth, type Auth } from "firebase/auth"
 import { getFirestore, type Firestore } from "firebase/firestore"
 
+const verboseFirebaseLogs =
+  process.env.NODE_ENV !== "production" && process.env.FIREBASE_VERBOSE_LOGS === "1"
+
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
@@ -11,11 +14,12 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
 }
 
-// Log direct pentru a verifica variabila de mediu - doar în development
-if (process.env.NODE_ENV === 'development') {
-console.log("[lib/firebase.ts] Raw NEXT_PUBLIC_FIREBASE_API_KEY:", process.env.NEXT_PUBLIC_FIREBASE_API_KEY)
+if (verboseFirebaseLogs) {
+  console.log("[lib/firebase.ts] Constructed firebaseConfig:", {
+    ...firebaseConfig,
+    apiKey: firebaseConfig.apiKey ? "[set]" : "[missing]",
+  })
 }
-console.log("[lib/firebase.ts] Constructed firebaseConfig:", firebaseConfig)
 
 let app: FirebaseApp
 let authInstance: Auth
@@ -31,22 +35,22 @@ if (!firebaseConfig.apiKey) {
 
 try {
   if (!getApps().length) {
-    console.log("[lib/firebase.ts] Initializing Firebase app...")
+    if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Initializing Firebase app...")
     app = initializeApp(firebaseConfig)
-    console.log("[lib/firebase.ts] Firebase app initialized.")
+    if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Firebase app initialized.")
   } else {
-    console.log("[lib/firebase.ts] Getting existing Firebase app...")
+    if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Getting existing Firebase app...")
     app = getApp()
-    console.log("[lib/firebase.ts] Existing Firebase app retrieved.")
+    if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Existing Firebase app retrieved.")
   }
 
-  console.log("[lib/firebase.ts] Getting Auth instance...")
+  if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Getting Auth instance...")
   authInstance = getAuth(app)
-  console.log("[lib/firebase.ts] Auth instance retrieved.")
+  if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Auth instance retrieved.")
 
-  console.log("[lib/firebase.ts] Getting Firestore instance...")
+  if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Getting Firestore instance...")
   db = getFirestore(app)
-  console.log("[lib/firebase.ts] Firestore instance retrieved.")
+  if (verboseFirebaseLogs) console.log("[lib/firebase.ts] Firestore instance retrieved.")
 } catch (error) {
   console.error("[lib/firebase.ts] CRITICAL ERROR during Firebase initialization:", error)
   // Asigură-te că variabilele sunt exportate chiar și în caz de eroare,

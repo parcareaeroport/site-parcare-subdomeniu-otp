@@ -2,8 +2,7 @@
 
 import { z } from "zod"
 // Adăugăm Firestore pentru salvarea completă a datelor
-import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, getDoc, setDoc, query, where, getDocs } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { addDoc, collection, db, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, updateDoc, where } from "@/lib/server-firestore"
 // Importăm serviciile pentru QR și email
 import { generateMultiparkQR } from "@/lib/qr-generator"
 import { sendBookingConfirmationEmail } from "@/lib/email-service"

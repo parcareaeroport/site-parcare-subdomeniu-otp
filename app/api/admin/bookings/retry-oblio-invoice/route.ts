@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
-import { db } from "@/lib/firebase"
-import { doc, getDoc, increment, serverTimestamp, updateDoc } from "firebase/firestore"
+import { FieldValue } from "firebase-admin/firestore"
+import { adminDb } from "@/lib/firebase-admin"
 import { generateOblioInvoice } from "@/lib/oblio-integration"
 import { classifyOblioError, recordOblioFailure } from "@/lib/oblio-alerting"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
@@ -49,9 +49,9 @@ export async function POST(req: Request) {
       )
     }
 
-    bookingRef = doc(db, "bookings", bookingId)
-    const bookingSnap = await getDoc(bookingRef)
-    if (!bookingSnap.exists()) {
+    bookingRef = adminDb.collection("bookings").doc(bookingId)
+    const bookingSnap = await bookingRef.get()
+    if (!bookingSnap.exists) {
       return NextResponse.json(
         { success: false, error: "Booking not found", errorKind: "invalid_state" },
         { status: 404 },
@@ -73,12 +73,12 @@ export async function POST(req: Request) {
 
     invoiceBookingId = bookingData?.apiBookingNumber ? String(bookingData.apiBookingNumber) : bookingId
 
-    await updateDoc(bookingRef, {
+    await bookingRef.update({
       "oblio.status": "pending",
-      "oblio.lastAttemptAt": serverTimestamp(),
-      "oblio.attempts": increment(1),
+      "oblio.lastAttemptAt": FieldValue.serverTimestamp(),
+      "oblio.attempts": FieldValue.increment(1),
       "oblio.lastSource": "manual",
-      "oblio.lastUpdatedAt": serverTimestamp(),
+      "oblio.lastUpdatedAt": FieldValue.serverTimestamp(),
     })
 
     const oblioInvoiceData = {
@@ -110,14 +110,14 @@ export async function POST(req: Request) {
     const invoiceResult: any = await Promise.race([oblioPromise, timeoutPromise])
 
     if (invoiceResult?.success) {
-      await updateDoc(bookingRef, {
+      await bookingRef.update({
         "oblio.status": "success",
         "oblio.invoiceNumber": invoiceResult.invoiceNumber || null,
         "oblio.invoiceUrl": invoiceResult.invoiceUrl || null,
         "oblio.lastError": null,
-        "oblio.lastSuccessAt": serverTimestamp(),
+        "oblio.lastSuccessAt": FieldValue.serverTimestamp(),
         "oblio.lastSource": "manual",
-        "oblio.lastUpdatedAt": serverTimestamp(),
+        "oblio.lastUpdatedAt": FieldValue.serverTimestamp(),
       })
 
       return NextResponse.json({
@@ -130,12 +130,12 @@ export async function POST(req: Request) {
     const errorMessage = String(invoiceResult?.error || "Oblio invoice failed")
     const errorKind = classifyOblioError(errorMessage)
 
-    await updateDoc(bookingRef, {
+    await bookingRef.update({
       "oblio.status": "failed",
       "oblio.lastError": errorMessage,
-      "oblio.lastFailureAt": serverTimestamp(),
+      "oblio.lastFailureAt": FieldValue.serverTimestamp(),
       "oblio.lastSource": "manual",
-      "oblio.lastUpdatedAt": serverTimestamp(),
+      "oblio.lastUpdatedAt": FieldValue.serverTimestamp(),
     })
 
     await recordOblioFailure({
@@ -153,12 +153,12 @@ export async function POST(req: Request) {
 
     if (bookingRef) {
       try {
-        await updateDoc(bookingRef, {
+        await bookingRef.update({
           "oblio.status": "failed",
           "oblio.lastError": errorMessage,
-          "oblio.lastFailureAt": serverTimestamp(),
+          "oblio.lastFailureAt": FieldValue.serverTimestamp(),
           "oblio.lastSource": "manual",
-          "oblio.lastUpdatedAt": serverTimestamp(),
+          "oblio.lastUpdatedAt": FieldValue.serverTimestamp(),
         })
       } catch (trackingError) {
         console.error("Failed to persist manual Oblio retry error", trackingError)

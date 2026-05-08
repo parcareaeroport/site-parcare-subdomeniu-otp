@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createBookingWithFirestore } from "@/app/actions/booking-actions";
 import { normalizeLicensePlate } from "@/lib/utils";
-import { addDoc, collection, serverTimestamp } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { addDoc, collection, db, serverTimestamp } from "@/lib/server-firestore";
 
 type PaymentStatus = "paid" | "pending" | "n/a";
 
@@ -364,5 +363,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
 

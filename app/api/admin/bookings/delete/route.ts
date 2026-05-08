@@ -1,14 +1,8 @@
 import { NextResponse } from "next/server"
-import { db } from "@/lib/firebase"
+import { FieldValue } from "firebase-admin/firestore"
+import { adminDb } from "@/lib/firebase-admin"
 import { cancelBooking as cancelParkingApiBooking } from "@/app/actions/booking-actions"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
-import {
-  doc,
-  increment,
-  getDoc,
-  runTransaction,
-  serverTimestamp,
-} from "firebase/firestore"
 
 export async function POST(req: Request) {
   const authResult = await authorizeAdminRequest(req, ["admin"])
@@ -23,17 +17,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing bookingId" }, { status: 400 })
     }
 
-    const bookingRef = doc(db, "bookings", bookingId)
-    const occupancyRef = doc(db, "config", "parkingLive")
-    const archiveRef = doc(db, "deleted_bookings", bookingId)
+    const bookingRef = adminDb.collection("bookings").doc(bookingId)
+    const occupancyRef = adminDb.collection("config").doc("parkingLive")
+    const archiveRef = adminDb.collection("deleted_bookings").doc(bookingId)
 
     const now = new Date()
     const nowIso = now.toISOString()
     const nowDate = nowIso.split("T")[0]
     const nowTime = now.toTimeString().slice(0, 5)
 
-    const bookingSnap = await getDoc(bookingRef)
-    if (!bookingSnap.exists()) {
+    const bookingSnap = await bookingRef.get()
+    if (!bookingSnap.exists) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 })
     }
 
@@ -55,9 +49,9 @@ export async function POST(req: Request) {
       multiparkCancelled = true
     }
 
-    const result = await runTransaction(db, async (tx) => {
+    const result = await adminDb.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef)
-      if (!bookingSnap.exists()) {
+      if (!bookingSnap.exists) {
         return { ok: false as const, status: 404 as const, message: "Booking not found" }
       }
 
@@ -94,7 +88,7 @@ export async function POST(req: Request) {
             return data?.durationMinutes ?? 0
           }
         })(),
-        deletedAt: serverTimestamp(),
+        deletedAt: FieldValue.serverTimestamp(),
         deletedReason: "admin_delete",
       }
 
@@ -108,10 +102,10 @@ export async function POST(req: Request) {
       )
 
       if (shouldDecrement) {
-        tx.set(occupancyRef, { lastUpdated: serverTimestamp() }, { merge: true })
+        tx.set(occupancyRef, { lastUpdated: FieldValue.serverTimestamp() }, { merge: true })
         tx.update(occupancyRef, {
-          occupiedCount: increment(-1),
-          lastUpdated: serverTimestamp(),
+          occupiedCount: FieldValue.increment(-1),
+          lastUpdated: FieldValue.serverTimestamp(),
           lastChange: {
             type: "delete_booking_exit",
             bookingId,
@@ -140,5 +134,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Failed to delete booking" }, { status: 500 })
   }
 }
-
-

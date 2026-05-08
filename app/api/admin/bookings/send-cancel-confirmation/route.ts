@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import nodemailer from "nodemailer"
-import { db } from "@/lib/firebase"
-import { doc, getDoc } from "firebase/firestore"
+import { adminDb } from "@/lib/firebase-admin"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 
 type Body = {
@@ -99,8 +98,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing email config" }, { status: 500 })
     }
 
-    const snap = await getDoc(doc(db, "bookings", bookingId))
-    if (!snap.exists()) {
+    const snap = await adminDb.collection("bookings").doc(bookingId).get()
+    if (!snap.exists) {
       return NextResponse.json({ error: "Booking not found" }, { status: 404 })
     }
     const b: any = snap.data()
@@ -139,5 +138,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Failed to send cancel confirmation" }, { status: 500 })
   }
 }
-
 

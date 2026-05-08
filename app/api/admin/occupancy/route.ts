@@ -1,19 +1,7 @@
 import { NextResponse } from "next/server"
-import { db } from "@/lib/firebase"
+import { FieldValue, Timestamp } from "firebase-admin/firestore"
+import { adminDb } from "@/lib/firebase-admin"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  serverTimestamp,
-  setDoc,
-  where,
-  Timestamp,
-  updateDoc,
-  deleteField,
-} from "firebase/firestore"
 
 export async function GET(request: Request) {
   const authResult = await authorizeAdminRequest(request, ["admin", "employee"])
@@ -22,14 +10,13 @@ export async function GET(request: Request) {
   }
 
   try {
-    const settingsDoc = await getDoc(doc(db, "config", "reservationSettings"))
-    const maxLimit = settingsDoc.exists() ? Number(settingsDoc.data().maxTotalReservations || 0) : 0
+    const settingsDoc = await adminDb.collection("config").doc("reservationSettings").get()
+    const maxLimit = settingsDoc.exists ? Number((settingsDoc.data() as any)?.maxTotalReservations || 0) : 0
 
-    const bookingsRef = collection(db, "bookings")
+    const bookingsRef = adminDb.collection("bookings")
     // IMPORTANT: /admin/dashboard/ocupare must be strictly based on real LPR:
     // list ONLY bookings where lpr.isInside==true and count must match that list.
-    const qInside = query(bookingsRef, where("lpr.isInside", "==", true))
-    const snapInside = await getDocs(qInside)
+    const snapInside = await bookingsRef.where("lpr.isInside", "==", true).get()
     const occupiedCount = snapInside.size
     const docsForPlates = snapInside.docs
 
@@ -63,22 +50,20 @@ export async function POST(req: Request) {
   }
 
   try {
-    const ref = doc(db, "config", "parkingLive")
+    const ref = adminDb.collection("config").doc("parkingLive")
     const body = await req.json().catch(() => null)
     const action = body?.action || "reset"
 
     if (action === "recalculate") {
       // Recalculează contorul din realitatea LPR: câte booking-uri au lpr.isInside=true
-      const bookingsRef = collection(db, "bookings")
-      const q = query(bookingsRef, where("lpr.isInside", "==", true))
-      const snap = await getDocs(q)
+      const bookingsRef = adminDb.collection("bookings")
+      const snap = await bookingsRef.where("lpr.isInside", "==", true).get()
       const count = snap.size
 
-      await setDoc(
-        ref,
+      await ref.set(
         {
           occupiedCount: count,
-          lastUpdated: serverTimestamp(),
+          lastUpdated: FieldValue.serverTimestamp(),
           lastChange: {
             type: "recalculate_from_isInside",
             at: new Date().toISOString(),
@@ -93,11 +78,10 @@ export async function POST(req: Request) {
     }
 
     if (action === "reset") {
-      await setDoc(
-        ref,
+      await ref.set(
         {
           occupiedCount: 0,
-          lastUpdated: serverTimestamp(),
+          lastUpdated: FieldValue.serverTimestamp(),
           lastChange: {
             type: "reset_manual",
             at: new Date().toISOString(),
@@ -111,9 +95,8 @@ export async function POST(req: Request) {
 
     if (action === "set_all_outside") {
       // setează toate booking-urile cu lpr.isInside=true la false
-      const bookingsRef = collection(db, "bookings")
-      const q = query(bookingsRef, where("lpr.isInside", "==", true))
-      const snap = await getDocs(q)
+      const bookingsRef = adminDb.collection("bookings")
+      const snap = await bookingsRef.where("lpr.isInside", "==", true).get()
 
       const batch: any[] = []
       for (const docSnap of snap.docs) {
@@ -121,25 +104,23 @@ export async function POST(req: Request) {
       }
 
       for (const item of batch) {
-        await setDoc(
-          item.ref,
+        await item.ref.set(
           {
             lpr: {
               isInside: false,
-              departedAt: serverTimestamp(),
+              departedAt: FieldValue.serverTimestamp(),
               lastEventType: "exit",
             },
-            lastUpdated: serverTimestamp(),
+            lastUpdated: FieldValue.serverTimestamp(),
           },
           { merge: true },
         )
       }
 
-      await setDoc(
-        ref,
+      await ref.set(
         {
           occupiedCount: 0,
-          lastUpdated: serverTimestamp(),
+          lastUpdated: FieldValue.serverTimestamp(),
           lastChange: {
             type: "set_all_outside",
             at: new Date().toISOString(),
@@ -164,16 +145,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Invalid window" }, { status: 400 })
       }
 
-      const bookingsRef = collection(db, "bookings")
+      const bookingsRef = adminDb.collection("bookings")
       // IMPORTANT: keep query single-field indexed to avoid composite index errors (common source of 500s).
       // Query only by departedAt range (Timestamp), then filter in-memory by lastEventType/isInside.
-      const qRange = query(
-        bookingsRef,
-        where("lpr.departedAt", ">=", Timestamp.fromDate(from)),
-        where("lpr.departedAt", "<=", Timestamp.fromDate(to)),
-      )
+      const snap = await bookingsRef
+        .where("lpr.departedAt", ">=", Timestamp.fromDate(from))
+        .where("lpr.departedAt", "<=", Timestamp.fromDate(to))
+        .get()
       console.log("[occupancy.reverse_set_all_outside_window] start", { fromIso, toIso })
-      const snap = await getDocs(qRange)
       console.log("[occupancy.reverse_set_all_outside_window] candidates", { count: snap.size })
 
       let reversed = 0
@@ -193,24 +172,22 @@ export async function POST(req: Request) {
           skippedNotMatch += 1
           continue
         }
-        await updateDoc(docSnap.ref, {
+        await docSnap.ref.update({
           "lpr.isInside": true,
           "lpr.lastEventType": "entry",
-          "lpr.departedAt": deleteField(),
-          lastUpdated: serverTimestamp(),
+          "lpr.departedAt": FieldValue.delete(),
+          lastUpdated: FieldValue.serverTimestamp(),
         })
         reversed += 1
       }
 
       // Recalculate live counter after reversing (strictly from lpr.isInside==true)
-      const qInside = query(bookingsRef, where("lpr.isInside", "==", true))
-      const snapInside = await getDocs(qInside)
+      const snapInside = await bookingsRef.where("lpr.isInside", "==", true).get()
       const count = snapInside.size
-      await setDoc(
-        ref,
+      await ref.set(
         {
           occupiedCount: count,
-          lastUpdated: serverTimestamp(),
+          lastUpdated: FieldValue.serverTimestamp(),
           lastChange: {
             type: "reverse_set_all_outside_window",
             at: new Date().toISOString(),
@@ -253,14 +230,12 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Invalid window" }, { status: 400 })
       }
 
-      const bookingsRef = collection(db, "bookings")
-      const qRange = query(
-        bookingsRef,
-        where("lpr.departedAt", ">=", Timestamp.fromDate(from)),
-        where("lpr.departedAt", "<=", Timestamp.fromDate(to)),
-      )
+      const bookingsRef = adminDb.collection("bookings")
+      const snap = await bookingsRef
+        .where("lpr.departedAt", ">=", Timestamp.fromDate(from))
+        .where("lpr.departedAt", "<=", Timestamp.fromDate(to))
+        .get()
       console.log("[occupancy.reverse_set_all_outside_window_preview] start", { fromIso, toIso })
-      const snap = await getDocs(qRange)
 
       let willReverse = 0
       let skippedNotTimestamp = 0
@@ -312,4 +287,3 @@ export async function POST(req: Request) {
     )
   }
 }
-

@@ -1,5 +1,4 @@
-import { addDoc, collection, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, updateDoc, where } from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { addDoc, collection, db, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, updateDoc, where } from "@/lib/server-firestore"
 import { normalizeLicensePlate } from "@/lib/utils"
 
 type Nullable<T> = T | null
@@ -205,6 +204,8 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
   savedEventId: string
   matchedBookingId?: string
   eventType: LprEventType
+  degraded?: boolean
+  warning?: string
 }> {
   try {
     console.log('🟦 [LPR] handleLprEvent START', {
@@ -268,7 +269,12 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
     console.log('💾 [LPR] Event persisted', { lprEventId: saved.id })
   } catch (e) {
     console.error('❌ [LPR] Failed to persist LPR event', e)
-    throw e
+    return {
+      savedEventId: "degraded_no_persist",
+      eventType,
+      degraded: true,
+      warning: "persist_failed",
+    }
   }
 
   // If no plate, skip matching
@@ -433,6 +439,12 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
         }
       } catch (e) {
         console.error('❌ [LPR] Unmatched flow failed', e)
+        return {
+          savedEventId: saved.id,
+          eventType,
+          degraded: true,
+          warning: "unmatched_flow_failed",
+        }
       }
       return { savedEventId: saved.id, eventType }
     }
@@ -445,7 +457,12 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
     })
   } catch (e) {
     console.error('❌ [LPR] Booking match failed with exception', e)
-    return { savedEventId: saved.id, eventType }
+    return {
+      savedEventId: saved.id,
+      eventType,
+      degraded: true,
+      warning: "booking_match_failed",
+    }
   }
 
   // Update booking with LPR info
@@ -595,5 +612,4 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
   } catch {}
   return result
 }
-
 

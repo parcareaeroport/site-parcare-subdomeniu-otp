@@ -1,16 +1,5 @@
-import {
-  addDoc,
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-  where,
-} from "firebase/firestore"
-import { db } from "@/lib/firebase"
+import { FieldValue } from "firebase-admin/firestore"
+import { adminDb } from "@/lib/firebase-admin"
 
 export type OblioErrorKind = "timeout" | "auth_503" | "auth_other" | "invoice_error"
 export type OblioFailureSource = "auto" | "manual"
@@ -62,8 +51,8 @@ export async function recordOblioFailure(input: RecordOblioFailureInput): Promis
   const kind = input.errorKind || classifyOblioError(message)
 
   try {
-    await addDoc(collection(db, "oblio_alert_events"), {
-      createdAt: serverTimestamp(),
+    await adminDb.collection("oblio_alert_events").add({
+      createdAt: FieldValue.serverTimestamp(),
       eventAt: now,
       kind,
       bookingId: input.bookingId || null,
@@ -73,17 +62,16 @@ export async function recordOblioFailure(input: RecordOblioFailureInput): Promis
     })
 
     const windowStart = new Date(now.getTime() - ALERT_WINDOW_MINUTES * 60 * 1000)
-    const recentFailuresQuery = query(
-      collection(db, "oblio_alert_events"),
-      where("eventAt", ">=", windowStart),
-    )
-    const recentFailuresSnapshot = await getDocs(recentFailuresQuery)
+    const recentFailuresSnapshot = await adminDb
+      .collection("oblio_alert_events")
+      .where("eventAt", ">=", windowStart)
+      .get()
     const recentFailures = recentFailuresSnapshot.size
 
     if (recentFailures >= ALERT_THRESHOLD) {
-      const alertRef = doc(db, "ops_alerts", "oblio")
-      const existingAlert = await getDoc(alertRef)
-      const wasOpen = existingAlert.exists() && String((existingAlert.data() as any)?.status || "") === "open"
+      const alertRef = adminDb.collection("ops_alerts").doc("oblio")
+      const existingAlert = await alertRef.get()
+      const wasOpen = existingAlert.exists && String((existingAlert.data() as any)?.status || "") === "open"
 
       const payload: Record<string, any> = {
         status: "open",
@@ -95,14 +83,14 @@ export async function recordOblioFailure(input: RecordOblioFailureInput): Promis
         lastErrorSample: message,
         resolvedAt: null,
         resolveReason: null,
-        lastUpdated: serverTimestamp(),
+        lastUpdated: FieldValue.serverTimestamp(),
       }
 
       if (!wasOpen) {
-        payload.openedAt = serverTimestamp()
+        payload.openedAt = FieldValue.serverTimestamp()
       }
 
-      await setDoc(alertRef, payload, { merge: true })
+      await alertRef.set(payload, { merge: true })
       return { kind, recentFailures, alertOpened: !wasOpen }
     }
 
@@ -118,10 +106,10 @@ export async function autoResolveOblioAlert(nowInput: Date = new Date()): Promis
   reason: string
 }> {
   try {
-    const alertRef = doc(db, "ops_alerts", "oblio")
-    const alertSnap = await getDoc(alertRef)
+    const alertRef = adminDb.collection("ops_alerts").doc("oblio")
+    const alertSnap = await alertRef.get()
 
-    if (!alertSnap.exists()) {
+    if (!alertSnap.exists) {
       return { resolved: false, reason: "alert_missing" }
     }
 
@@ -140,11 +128,11 @@ export async function autoResolveOblioAlert(nowInput: Date = new Date()): Promis
       return { resolved: false, reason: "quiet_period_not_elapsed" }
     }
 
-    await updateDoc(alertRef, {
+    await alertRef.update({
       status: "resolved",
-      resolvedAt: serverTimestamp(),
+      resolvedAt: FieldValue.serverTimestamp(),
       resolveReason: "quiet_period_30m",
-      lastUpdated: serverTimestamp(),
+      lastUpdated: FieldValue.serverTimestamp(),
     })
 
     return { resolved: true, reason: "quiet_period_30m" }

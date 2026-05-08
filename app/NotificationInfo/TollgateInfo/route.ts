@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleLprEvent } from "@/lib/lpr-service";
 import { isTollgateWhitelistedPlate } from "@/lib/lpr-tollgate-whitelist";
-import { db } from "@/lib/firebase";
-import { doc, getDoc } from "firebase/firestore";
+import { db, doc, getDoc } from "@/lib/server-firestore";
 import { normalizeLicensePlate } from "@/lib/utils";
 
 type Nullable<T> = T | null;
@@ -136,8 +135,13 @@ export async function POST(req: NextRequest) {
     console.log('[LPR API] handleLprEvent result', result)
     return NextResponse.json({ status: "ok", ...result });
   } catch (e) {
-    console.error("Failed to handle LPR event:", e);
-    return new NextResponse("Internal Server Error", { status: 500 });
+    // Fail-open in production-intensive flow: avoid hard 500 loops from camera retries.
+    console.error("[LPR API] Failed to handle LPR event, returning degraded response:", e);
+    return NextResponse.json({
+      status: "ok",
+      degraded: true,
+      warning: "lpr_processing_failed",
+    });
   }
 
   return NextResponse.json({ status: "ok" });
