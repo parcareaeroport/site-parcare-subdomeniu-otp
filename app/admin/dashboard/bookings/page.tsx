@@ -541,6 +541,29 @@ function BookingsPageContent() {
     }
   }, [])
 
+  // Shared Firestore pagination helper used on Bookings page.
+  // IMPORTANT: this intentionally has NO hard cap on total docs.
+  // We iterate all pages to keep counts and totals correct on large intervals.
+  const fetchAllQueryPages = useCallback(
+    async (
+      buildQuery: (cursor: any | null) => any,
+      pageSize: number,
+    ) => {
+      const docs: any[] = []
+      let cursor: any = null
+      while (true) {
+        const qPage = buildQuery(cursor)
+        const snap = await getDocs(qPage)
+        if (snap.empty) break
+        docs.push(...snap.docs)
+        if (snap.size < pageSize) break
+        cursor = snap.docs[snap.docs.length - 1]
+      }
+      return docs
+    },
+    [],
+  )
+
   const fetchBookings = useCallback(
     async (range?: DateRange) => {
       setIsLoading(true)
@@ -566,30 +589,27 @@ function BookingsPageContent() {
         }
 
         const FETCH_PAGE_SIZE = 500
-        let cursor: any = null
-        while (true) {
-          const qCreated = cursor
-            ? query(
-                bookingsCollectionRef,
-                where("createdAt", ">=", fromTs),
-                where("createdAt", "<=", toTs),
-                orderBy("createdAt", "desc"),
-                startAfter(cursor),
-                limit(FETCH_PAGE_SIZE),
-              )
-            : query(
-                bookingsCollectionRef,
-                where("createdAt", ">=", fromTs),
-                where("createdAt", "<=", toTs),
-                orderBy("createdAt", "desc"),
-                limit(FETCH_PAGE_SIZE),
-              )
-          const dataCreated = await getDocs(qCreated)
-          if (dataCreated.empty) break
-          dataCreated.docs.forEach(pushDocSnap)
-          if (dataCreated.size < FETCH_PAGE_SIZE) break
-          cursor = dataCreated.docs[dataCreated.docs.length - 1]
-        }
+        const createdAtDocs = await fetchAllQueryPages(
+          (cursor) =>
+            cursor
+              ? query(
+                  bookingsCollectionRef,
+                  where("createdAt", ">=", fromTs),
+                  where("createdAt", "<=", toTs),
+                  orderBy("createdAt", "desc"),
+                  startAfter(cursor),
+                  limit(FETCH_PAGE_SIZE),
+                )
+              : query(
+                  bookingsCollectionRef,
+                  where("createdAt", ">=", fromTs),
+                  where("createdAt", "<=", toTs),
+                  orderBy("createdAt", "desc"),
+                  limit(FETCH_PAGE_SIZE),
+                ),
+          FETCH_PAGE_SIZE,
+        )
+        createdAtDocs.forEach(pushDocSnap)
 
         const combined = Array.from(combinedDocsMap.values())
 
@@ -678,7 +698,7 @@ function BookingsPageContent() {
         setIsLoading(false)
       }
     },
-    [dateRange.from, dateRange.to, toast, payOnSiteCancelMinutes],
+    [dateRange.from, dateRange.to, toast, payOnSiteCancelMinutes, fetchAllQueryPages],
   )
 
   useEffect(() => {
@@ -726,40 +746,39 @@ function BookingsPageContent() {
         const bookingsCollectionRef = collection(db, "bookings")
         const items: PlateIndexEntry[] = []
         const INDEX_PAGE_SIZE = 500
-        let cursor: any = null
-        while (true) {
-          const qPage = cursor
-            ? query(
-                bookingsCollectionRef,
-                orderBy("createdAt", "desc"),
-                startAfter(cursor),
-                limit(INDEX_PAGE_SIZE),
-              )
-            : query(
-                bookingsCollectionRef,
-                orderBy("createdAt", "desc"),
-                limit(INDEX_PAGE_SIZE),
-              )
-          const snap = await getDocs(qPage)
-          if (snap.empty) break
-          snap.forEach((d) => {
-            const raw: any = d.data()
-            const plate = normalizeLicensePlate(String(raw?.licensePlate || ""))
-            items.push({
-              id: d.id,
-              plate,
-              api: raw?.apiBookingNumber ? String(raw.apiBookingNumber).toLowerCase() : undefined,
-              client: raw?.clientName ? String(raw.clientName).toLowerCase() : undefined,
-              email: raw?.clientEmail ? String(raw.clientEmail).toLowerCase() : undefined,
-              createdAt:
-                typeof raw?.createdAt?.toMillis === "function"
-                  ? raw.createdAt.toMillis()
-                  : undefined,
-            })
+        // IMPORTANT: load full index (all pages), no hard cap, so global search
+        // is consistent with full-list fetch even on large history.
+        const indexDocs = await fetchAllQueryPages(
+          (cursor) =>
+            cursor
+              ? query(
+                  bookingsCollectionRef,
+                  orderBy("createdAt", "desc"),
+                  startAfter(cursor),
+                  limit(INDEX_PAGE_SIZE),
+                )
+              : query(
+                  bookingsCollectionRef,
+                  orderBy("createdAt", "desc"),
+                  limit(INDEX_PAGE_SIZE),
+                ),
+          INDEX_PAGE_SIZE,
+        )
+        indexDocs.forEach((d) => {
+          const raw: any = d.data()
+          const plate = normalizeLicensePlate(String(raw?.licensePlate || ""))
+          items.push({
+            id: d.id,
+            plate,
+            api: raw?.apiBookingNumber ? String(raw.apiBookingNumber).toLowerCase() : undefined,
+            client: raw?.clientName ? String(raw.clientName).toLowerCase() : undefined,
+            email: raw?.clientEmail ? String(raw.clientEmail).toLowerCase() : undefined,
+            createdAt:
+              typeof raw?.createdAt?.toMillis === "function"
+                ? raw.createdAt.toMillis()
+                : undefined,
           })
-          if (snap.size < INDEX_PAGE_SIZE) break
-          cursor = snap.docs[snap.docs.length - 1]
-        }
+        })
 
         setPlateIndex(items)
         const savedAt = Date.now()
@@ -780,7 +799,7 @@ function BookingsPageContent() {
         setPlateIndexLoading(false)
       }
     },
-    [],
+    [fetchAllQueryPages],
   )
 
   useEffect(() => {
@@ -790,6 +809,7 @@ function BookingsPageContent() {
   }, [authLoading, user, loadPlateIndex])
 
   // Part 1 — prefix direct în Firestore pe licensePlate / apiBookingNumber
+  // IMPORTANT: no hard limit here; fetch all prefix matches for consistency.
   // + fallback getDoc(id) când input-ul arată ca un ID Firestore.
   const runFirestorePrefixSearch = useCallback(async (rawInput: string): Promise<Booking[]> => {
     const q = rawInput.trim()
@@ -1090,7 +1110,7 @@ function BookingsPageContent() {
   }
 
   // IMPORTANT: keep cards in sync with the table filters (tab + search + date range).
-  // filteredBookings is exactly what the table uses (before pagination).
+  // filteredBookings is the full filtered dataset (before UI pagination), not a capped subset.
   const statsBookings = filteredBookings
 
   const isLostBooking = (b: Booking) => {
