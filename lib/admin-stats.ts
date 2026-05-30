@@ -132,6 +132,80 @@ function coerceMoney(value: any): number | undefined {
   return undefined
 }
 
+interface PriceTierEntry {
+  days: number
+  standardPrice: number
+  discountedPrice?: number
+}
+
+let _cachedPriceTiers: PriceTierEntry[] | null = null
+
+async function loadPriceTiers(): Promise<PriceTierEntry[]> {
+  if (_cachedPriceTiers) return _cachedPriceTiers
+  try {
+    const snap = await getDocs(query(collection(db, 'prices'), orderBy('days')))
+    const tiers: PriceTierEntry[] = []
+    snap.forEach(d => {
+      const data: any = d.data()
+      const sp = Number(data.standardPrice || 0)
+      const dp = data.discountedPrice ? Number(data.discountedPrice) : undefined
+      const red = data.reducereAplicata !== undefined ? Number(data.reducereAplicata) : undefined
+      const derived = sp > 0 && typeof red === 'number' && !Number.isNaN(red) ? Math.max(0, sp - red) : undefined
+      const finalDp = (typeof dp === 'number' && !Number.isNaN(dp) && dp > 0)
+        ? dp
+        : (typeof derived === 'number' && derived > 0) ? derived : undefined
+      if (Number(data.days || 0) > 0 && sp > 0) {
+        tiers.push({ days: Number(data.days), standardPrice: sp, discountedPrice: finalDp })
+      }
+    })
+    tiers.sort((a, b) => a.days - b.days)
+    _cachedPriceTiers = tiers
+    return tiers
+  } catch (e) {
+    console.error('Error loading price tiers:', e)
+    return []
+  }
+}
+
+function computeDurationDaysFromBooking(booking: any): number {
+  const startDate = (booking.startDate || '').trim()
+  if (!startDate) return 1
+  const endDate = (booking.endDate || '').trim() || startDate
+  const startTime = (booking.startTime || '').trim()
+  const endTime = (booking.endTime || '').trim()
+  if (startDate && startTime && endDate && endTime) {
+    const s = new Date(`${startDate}T${startTime}:00`)
+    const e = new Date(`${endDate}T${endTime}:00`)
+    if (!Number.isNaN(s.getTime()) && !Number.isNaN(e.getTime()) && e.getTime() > s.getTime()) {
+      return Math.max(1, Math.ceil((e.getTime() - s.getTime()) / (24 * 60 * 60 * 1000)))
+    }
+  }
+  try {
+    const s = new Date(startDate)
+    const e = new Date(endDate)
+    if (!Number.isNaN(s.getTime()) && !Number.isNaN(e.getTime())) {
+      return Math.max(1, Math.floor((e.getTime() - s.getTime()) / (24 * 60 * 60 * 1000)) + 1)
+    }
+  } catch { /* fallback */ }
+  return 1
+}
+
+function computePriceFromTiers(days: number, tiers: PriceTierEntry[]): number {
+  if (!days || days <= 0 || tiers.length === 0) return 0
+  const exact = tiers.find(p => p.days === days)
+  const match = exact || tiers.find(p => p.days >= days) || tiers[tiers.length - 1]
+  if (!match) return 0
+  const val = match.discountedPrice ?? match.standardPrice
+  return typeof val === 'number' && Number.isFinite(val) ? val : 0
+}
+
+function resolveBookingAmount(booking: any, tiers: PriceTierEntry[]): number {
+  const amount = coerceMoney(booking.amount) ?? 0
+  if (amount > 0) return amount
+  const days = computeDurationDaysFromBooking(booking)
+  return computePriceFromTiers(days, tiers)
+}
+
 /**
  * Obține statisticile principale pentru dashboard
  */
@@ -161,9 +235,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
       where('createdAt', '<=', Timestamp.fromDate(lastYearEnd))
     )
 
-    const [currentYearSnap, lastYearSnap] = await Promise.all([
+    const [currentYearSnap, lastYearSnap, priceTiers] = await Promise.all([
       getDocs(currentYearQuery),
-      getDocs(lastYearQuery)
+      getDocs(lastYearQuery),
+      loadPriceTiers()
     ])
 
     // Calculează statisticile pentru anul curent
@@ -174,7 +249,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 
     currentYearSnap.forEach(doc => {
       const booking = doc.data()
-      totalRevenue += booking.amount || 0
+      totalRevenue += resolveBookingAmount(booking, priceTiers)
       totalBookings++
       if (booking.clientEmail) {
         uniqueClients.add(booking.clientEmail)
@@ -191,7 +266,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
 
     lastYearSnap.forEach(doc => {
       const booking = doc.data()
-      lastYearRevenue += booking.amount || 0
+      lastYearRevenue += resolveBookingAmount(booking, priceTiers)
       lastYearBookings++
       if (booking.clientEmail) {
         lastYearClients.add(booking.clientEmail)
@@ -283,7 +358,7 @@ export async function getMonthlyRevenueData(): Promise<MonthlyStats[]> {
       where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed_pay_on_site'])
     )
 
-    const snapshot = await getDocs(q)
+    const [snapshot, priceTiers] = await Promise.all([getDocs(q), loadPriceTiers()])
     
     console.log(`📊 Monthly revenue query found ${snapshot.size} bookings with confirmed status for year ${currentYear}`)
     
@@ -297,7 +372,7 @@ export async function getMonthlyRevenueData(): Promise<MonthlyStats[]> {
       const booking = doc.data()
       const date = booking.createdAt.toDate()
       const monthIndex = date.getMonth()
-      const amount = booking.amount || 0
+      const amount = resolveBookingAmount(booking, priceTiers)
       monthlyData[monthIndex].value += amount
       totalRevenue += amount
     })
@@ -595,7 +670,7 @@ export async function getRecentBookings(): Promise<RecentBooking[]> {
       limit(5)
     )
 
-    const snapshot = await getDocs(q)
+    const [snapshot, priceTiers] = await Promise.all([getDocs(q), loadPriceTiers()])
     const recentBookings: RecentBooking[] = []
 
     snapshot.forEach(doc => {
@@ -607,7 +682,7 @@ export async function getRecentBookings(): Promise<RecentBooking[]> {
         startDate: booking.startDate || '',
         endDate: booking.endDate || '',
         status: booking.status || 'pending',
-        amount: booking.amount || 0
+        amount: resolveBookingAmount(booking, priceTiers)
       })
     })
 
