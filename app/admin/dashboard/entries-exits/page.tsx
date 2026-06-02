@@ -30,7 +30,7 @@ type EnrichedRow = DailyEntryExit & {
   isOnlinePaid?: boolean
 }
 
-const LATE_FEE_PER_DAY = 30 // lei / zi întârziere (online)
+const LATE_FEE_PER_DAY = 40 // lei / zi întârziere (online)
 const ONLINE_GRACE_MINUTES = 60 // 1h bonus la ultima zi (online)
 
 const DEBUG_ROW_DETAILS = process.env.NEXT_PUBLIC_ADMIN_ROW_DEBUG === "true"
@@ -2117,7 +2117,7 @@ export default function EntriesExitsPage() {
                         <div>
                           - <span className="font-semibold">Dacă e Online achitat:</span>{" "}
                           taxarea pornește la pragul financiar `max(endTime, start + zile*24h) + 60 min`,
-                          cu 30 lei/zi (rotunjit în sus), dar listarea la întârziate rămâne operațională.
+                          cu 40 lei/zi (rotunjit în sus), dar listarea la întârziate rămâne operațională.
                         </div>
                       </>
                     ) : (
