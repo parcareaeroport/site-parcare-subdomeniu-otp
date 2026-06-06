@@ -55,6 +55,7 @@ import { cancelBooking as cancelParkingApiBooking, cleanupExpiredBookings, creat
 import { recoverSpecificBooking } from "@/app/actions/booking-recovery" // Recovery pentru rezervări eșuate
 import { TimePickerDemo } from "@/components/time-picker"
 import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
+import { getLprPresenceState } from "@/lib/lpr-presence"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 import { Clock, XCircle } from "lucide-react"
@@ -981,7 +982,7 @@ function BookingsPageContent() {
         // Ocupate = prezente (conform aceleiași reguli ca și contorul de Ocupare din tabel)
         filtered = filtered.filter((b) => {
           const lpr: any = (b as any)?.lpr || {}
-          if (lpr?.isInside === true) return true
+          if (getLprPresenceState({ lpr }).isEffectivelyInside) return true
           if (lpr?.departedAt) return false
           if (lpr?.arrivedAt && !lpr?.departedAt) return true
           // Fără info LPR => considerăm prezent (încă nu avem ieșire confirmată)
@@ -991,7 +992,7 @@ function BookingsPageContent() {
         // Ieșite = restul (negarea regulii de "Ocupate")
         filtered = filtered.filter((b) => {
           const lpr: any = (b as any)?.lpr || {}
-          if (lpr?.isInside === true) return false
+          if (getLprPresenceState({ lpr }).isEffectivelyInside) return false
           if (lpr?.departedAt) return true
           if (lpr?.arrivedAt && !lpr?.departedAt) return false
           return false
@@ -1245,7 +1246,7 @@ function BookingsPageContent() {
       if (!snap.exists()) throw new Error("Booking not found")
 
       const data: any = snap.data()
-      const wasInside = data?.lpr?.isInside === true
+      const wasInside = getLprPresenceState({ lpr: data?.lpr }).isEffectivelyInside
       const occupancyIncrementedFlag = data?.occupancyIncremented === true
       const occupancyDecrementedFlag = data?.occupancyDecremented === true
       const shouldDecrement = wasInside && occupancyIncrementedFlag && !occupancyDecrementedFlag

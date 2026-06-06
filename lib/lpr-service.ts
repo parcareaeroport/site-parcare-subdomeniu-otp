@@ -1,4 +1,5 @@
 import { addDoc, collection, db, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, updateDoc, where } from "@/lib/server-firestore"
+import { getLprPresenceState } from "@/lib/lpr-presence"
 import { normalizeLicensePlate } from "@/lib/utils"
 
 type Nullable<T> = T | null
@@ -113,7 +114,7 @@ async function findMatchingActiveBookingByPlate(
     // Never match against unmatched_lpr placeholders.
     if (data.status === "unmatched_lpr") return
 
-    const lprInside = data?.lpr?.isInside === true
+    const lprInside = getLprPresenceState({ lpr: data?.lpr }).isEffectivelyInside
     // Prefer bookings that align with the event direction:
     // - entry: prefer not already inside
     // - exit: prefer already inside
@@ -473,7 +474,7 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
   try {
     const bookingSnap = await getDoc(bookingRef)
     const currentLpr = bookingSnap.exists() ? (bookingSnap.data() as any).lpr || {} : {}
-    wasInside = currentLpr.isInside === true
+    wasInside = getLprPresenceState({ lpr: currentLpr }).isEffectivelyInside
     occupancyIncrementedFlag = bookingSnap.exists() ? (bookingSnap.data() as any).occupancyIncremented === true : false
     occupancyDecrementedFlag = bookingSnap.exists() ? (bookingSnap.data() as any).occupancyDecremented === true : false
     const lprUpdate: Record<string, any> = {
@@ -493,9 +494,10 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
           : null
       lprUpdate["lpr.arrivedAt"] = existingArrived || eventTime.toISOString()
       lprUpdate["lpr.isInside"] = true
-      if (!occupancyIncrementedFlag) {
+      if (!occupancyIncrementedFlag || occupancyDecrementedFlag) {
         lprUpdate["occupancyIncremented"] = true
         lprUpdate["occupancyIncrementedAt"] = serverTimestamp()
+        lprUpdate["occupancyDecremented"] = false
       }
     } else if (eventType === "exit") {
       // Ensure we always store a stable ISO string (UI expects string; old data might be Timestamp)
@@ -550,7 +552,7 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
       console.error('❌ [LPR] Failed ensuring parkingLive doc', e)
     }
     // Idempotency: only adjust if state changes
-    if (eventType === "entry" && !wasInside && !occupancyIncrementedFlag) {
+    if (eventType === "entry" && !wasInside && (!occupancyIncrementedFlag || occupancyDecrementedFlag)) {
       try {
         console.log('➕ [LPR] Increment occupiedCount (entry)', { bookingId: matched.id })
         await updateDoc(occupancyDocRef, {
@@ -612,4 +614,3 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
   } catch {}
   return result
 }
-

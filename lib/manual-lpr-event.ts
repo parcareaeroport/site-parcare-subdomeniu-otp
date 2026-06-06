@@ -9,6 +9,7 @@ import {
   setDoc,
   updateDoc,
 } from "firebase/firestore"
+import { getLprPresenceState } from "@/lib/lpr-presence"
 
 export type ManualLprEventType = "entry" | "exit"
 
@@ -50,7 +51,7 @@ export async function writeManualLprEvent(input: ManualLprEventInput): Promise<{
   const booking: any = bookingSnap.data() || {}
   const currentLpr: any = booking.lpr || {}
 
-  const wasInside = currentLpr.isInside === true
+  const wasInside = getLprPresenceState({ lpr: currentLpr }).isEffectivelyInside
   const occupancyIncrementedFlag = booking.occupancyIncremented === true
   const occupancyDecrementedFlag = booking.occupancyDecremented === true
 
@@ -100,9 +101,10 @@ export async function writeManualLprEvent(input: ManualLprEventInput): Promise<{
   if (input.eventType === "entry") {
     lprUpdate["lpr.arrivedAt"] = input.eventTimeIsoZ
     lprUpdate["lpr.isInside"] = true
-    if (!occupancyIncrementedFlag) {
+    if (!occupancyIncrementedFlag || occupancyDecrementedFlag) {
       lprUpdate["occupancyIncremented"] = true
       lprUpdate["occupancyIncrementedAt"] = serverTimestamp()
+      lprUpdate["occupancyDecremented"] = false
     }
   } else {
     lprUpdate["lpr.departedAt"] = input.eventTimeIsoZ
@@ -136,7 +138,7 @@ export async function writeManualLprEvent(input: ManualLprEventInput): Promise<{
 
   if (input.eventType === "entry") {
     // Only adjust if state changes and occupancy wasn't already counted
-    if (!wasInside && !occupancyIncrementedFlag) {
+    if (!wasInside && (!occupancyIncrementedFlag || occupancyDecrementedFlag)) {
       await updateDoc(occupancyRef, {
         occupiedCount: increment(1),
         lastUpdated: serverTimestamp(),
@@ -173,5 +175,4 @@ export async function writeManualLprEvent(input: ManualLprEventInput): Promise<{
 
   return { lprEventId: lprEventRef.id, gateEventId: gateEventRef.id, occupancyChanged }
 }
-
 

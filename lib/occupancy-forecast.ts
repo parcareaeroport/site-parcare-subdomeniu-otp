@@ -1,5 +1,6 @@
 import { collection, getDocs, limit, orderBy, query, where } from "firebase/firestore"
 import { db } from "@/lib/firebase"
+import { getLprPresenceState } from "@/lib/lpr-presence"
 
 export type DailyForecastRow = {
   date: string // YYYY-MM-DD
@@ -165,7 +166,7 @@ export async function fetchForecastBookingsForDay(input: {
     if (startDate > dayKey) return
     if (isExcludedStatus(b?.status)) return
 
-    const isInside = b?.lpr?.isInside === true
+    const isInside = getLprPresenceState({ lpr: b?.lpr }).isEffectivelyInside
 
     items.push({
       id: docSnap.id,
@@ -208,6 +209,7 @@ export async function fetchInsideNowVehicles(input?: {
   const items: InsideNowVehicle[] = []
   snap.forEach((docSnap) => {
     const b: any = docSnap.data()
+    if (!getLprPresenceState({ lpr: b?.lpr }).isEffectivelyInside) return
     items.push({
       id: docSnap.id,
       licensePlate: String(b?.licensePlate || "N/A"),
@@ -228,5 +230,4 @@ export async function fetchInsideNowVehicles(input?: {
   items.sort((a, b) => a.licensePlate.localeCompare(b.licensePlate))
   return { items, maybeTruncated }
 }
-
 

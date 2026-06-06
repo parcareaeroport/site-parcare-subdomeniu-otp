@@ -1,5 +1,6 @@
 import { db } from './firebase'
 import { collection, query, where, getDocs, orderBy, limit, Timestamp, doc, updateDoc, increment, serverTimestamp, getDoc } from 'firebase/firestore'
+import { getLprPresenceState } from '@/lib/lpr-presence'
 
 // Interfețe pentru tipurile de date
 export interface MonthlyStats {
@@ -397,13 +398,14 @@ export async function getPresentVehicles(): Promise<{
   try {
     const now = Date.now()
     const bookingsRef = collection(db, 'bookings')
-    // Doar cele cu lpr.isInside == true
+    // Doar cele prezente efectiv conform LPR; ignoră isInside blocat pe true după exit.
     const q = query(bookingsRef, where('lpr.isInside', '==', true))
     const snap = await getDocs(q)
     const items: PresentVehicle[] = []
     let delayedCount = 0
     snap.forEach(docSnap => {
       const b: any = docSnap.data()
+      if (!getLprPresenceState({ lpr: b?.lpr }).isEffectivelyInside) return
       const endTs = b.endDate && b.endTime ? new Date(`${b.endDate}T${b.endTime}:00`).getTime() : NaN
       const delayed = Number.isFinite(endTs) && endTs < now
       if (delayed) delayedCount++

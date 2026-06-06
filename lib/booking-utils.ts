@@ -1,5 +1,6 @@
 import { collection, query, where, getDocs, doc, updateDoc, serverTimestamp, increment } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { getLprPresenceState } from '@/lib/lpr-presence'
 import { normalizeLicensePlate } from '@/lib/utils'
 
 /**
@@ -220,7 +221,7 @@ export async function checkAvailability(
       const nowTs = Date.now()
       candidatesSnap.forEach(docSnap => {
         const b: any = docSnap.data()
-        if (b?.lpr?.isInside === true) {
+        if (getLprPresenceState({ lpr: b?.lpr }).isEffectivelyInside) {
           if (b.endDate && b.endTime) {
             const endTs = new Date(`${b.endDate}T${b.endTime}:00`).getTime()
             if (!Number.isNaN(endTs) && endTs < nowTs) {

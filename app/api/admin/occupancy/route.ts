@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
+import { getLprPresenceState } from "@/lib/lpr-presence"
 
 export async function GET(request: Request) {
   const authResult = await authorizeAdminRequest(request, ["admin", "employee"])
@@ -14,11 +15,14 @@ export async function GET(request: Request) {
     const maxLimit = settingsDoc.exists ? Number((settingsDoc.data() as any)?.maxTotalReservations || 0) : 0
 
     const bookingsRef = adminDb.collection("bookings")
-    // IMPORTANT: /admin/dashboard/ocupare must be strictly based on real LPR:
-    // list ONLY bookings where lpr.isInside==true and count must match that list.
+    // IMPORTANT: /admin/dashboard/ocupare must be based on effective LPR state.
+    // Legacy/failed writes can leave isInside=true after an exit event; those must not count.
     const snapInside = await bookingsRef.where("lpr.isInside", "==", true).get()
-    const occupiedCount = snapInside.size
-    const docsForPlates = snapInside.docs
+    const docsForPlates = snapInside.docs.filter((d: any) => {
+      const b = d.data() as any
+      return getLprPresenceState({ lpr: b?.lpr }).isEffectivelyInside
+    })
+    const occupiedCount = docsForPlates.length
 
     const plates = docsForPlates.map((d: any) => {
       const b = d.data() as any
@@ -55,10 +59,33 @@ export async function POST(req: Request) {
     const action = body?.action || "reset"
 
     if (action === "recalculate") {
-      // Recalculează contorul din realitatea LPR: câte booking-uri au lpr.isInside=true
+      // Recalculează contorul din realitatea LPR efectivă, nu doar din boolean-ul isInside.
       const bookingsRef = adminDb.collection("bookings")
       const snap = await bookingsRef.where("lpr.isInside", "==", true).get()
-      const count = snap.size
+      const effectivelyInsideDocs: any[] = []
+      const staleInsideDocs: any[] = []
+      for (const docSnap of snap.docs) {
+        const data: any = docSnap.data() || {}
+        const presence = getLprPresenceState({ lpr: data?.lpr })
+        if (presence.isEffectivelyInside) {
+          effectivelyInsideDocs.push(docSnap)
+        } else {
+          staleInsideDocs.push(docSnap)
+        }
+      }
+
+      for (const docSnap of staleInsideDocs) {
+        await docSnap.ref.update({
+          "lpr.isInside": false,
+          lastUpdated: FieldValue.serverTimestamp(),
+          occupancyConsistencyRepair: {
+            repairedAt: FieldValue.serverTimestamp(),
+            reason: "isInside_true_but_lpr_exit_state",
+          },
+        })
+      }
+
+      const count = effectivelyInsideDocs.length
 
       await ref.set(
         {
@@ -67,14 +94,15 @@ export async function POST(req: Request) {
           lastChange: {
             type: "recalculate_from_isInside",
             at: new Date().toISOString(),
-            note: "Recalculat din bookings where lpr.isInside=true",
+            note: "Recalculat din starea LPR efectivă; documentele inconsistente au fost marcate outside",
             count,
+            repairedStaleInside: staleInsideDocs.length,
           },
         },
         { merge: true },
       )
 
-      return NextResponse.json({ success: true, occupiedCount: count })
+      return NextResponse.json({ success: true, occupiedCount: count, repairedStaleInside: staleInsideDocs.length })
     }
 
     if (action === "reset") {
@@ -181,9 +209,12 @@ export async function POST(req: Request) {
         reversed += 1
       }
 
-      // Recalculate live counter after reversing (strictly from lpr.isInside==true)
+      // Recalculate live counter after reversing from effective LPR state.
       const snapInside = await bookingsRef.where("lpr.isInside", "==", true).get()
-      const count = snapInside.size
+      const count = snapInside.docs.filter((docSnap: any) => {
+        const data: any = docSnap.data() || {}
+        return getLprPresenceState({ lpr: data?.lpr }).isEffectivelyInside
+      }).length
       await ref.set(
         {
           occupiedCount: count,
