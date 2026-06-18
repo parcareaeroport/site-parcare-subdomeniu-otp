@@ -130,6 +130,10 @@ interface Booking {
   
   // Metadata sistem
   source?: "webhook" | "test_mode" | "manual" | "pay_on_site" | "lpr"
+  bookingOrigin?: string
+  userId?: string
+  paymentProvider?: "stripe" | "netopia"
+  channel?: "mobile"
   createdAt: Timestamp // Firestore Timestamp
   lastUpdated?: Timestamp
   expiredAt?: Timestamp // Când a fost marcată ca expirată
@@ -1007,6 +1011,8 @@ function BookingsPageContent() {
       } else if (statusFilter === "unmatched_lpr") {
         // Match the LPR card definition: both unmatched placeholders and completed LPR-no-reservation rows.
         filtered = filtered.filter((b) => isLprNoReservation(b))
+      } else if (statusFilter === "mobile_app") {
+        filtered = filtered.filter((b) => b.bookingOrigin === "mobile-app")
       } else {
         filtered = filtered.filter((b) => b.status === statusFilter)
       }
@@ -2615,6 +2621,9 @@ function BookingsPageContent() {
       
           <TabsTrigger value="unmatched_lpr" onClick={() => setStatusFilter("unmatched_lpr")}>
             <span className="text-purple-700">Fără rezervare (LPR)</span>
+          </TabsTrigger>
+          <TabsTrigger value="mobile_app" onClick={() => setStatusFilter("mobile_app")}>
+            Mobile App
           </TabsTrigger>
         </TabsList>
 

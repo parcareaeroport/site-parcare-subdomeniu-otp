@@ -88,6 +88,9 @@ interface CompleteBookingData {
   status: "confirmed_paid" | "confirmed_test" | "api_error" | "cancelled_by_admin" | "cancelled_by_api" | "confirmed_pay_on_site"
   source: "webhook" | "test_mode" | "manual" | "pay_on_site"
   bookingOrigin?: string
+  userId?: string
+  paymentProvider?: "stripe" | "netopia"
+  channel?: "mobile"
   
   // Metadata
   createdAt: any // serverTimestamp
@@ -642,6 +645,8 @@ export async function createBookingWithFirestore(
     days?: number
     source?: "webhook" | "test_mode" | "manual" | "pay_on_site"
     bookingOrigin?: string
+    userId?: string
+    paymentProvider?: "stripe" | "netopia"
     // Date pentru facturare și adresă
     company?: string
     companyVAT?: string
@@ -675,22 +680,23 @@ export async function createBookingWithFirestore(
     
     let apiResult: any
     
-    // Pentru pay on site: NU merge la Multipark, se procesează doar local
-    if (additionalData?.source === "pay_on_site") {
-      debugLogs.push(`💰 PAY ON SITE: Skipping Multipark API - no booking number will be generated`)
+    // Pentru pay on site și test_mode: NU merge la Multipark, se procesează doar local
+    if (additionalData?.source === "pay_on_site" || additionalData?.source === "test_mode") {
+      const sourceLabel = additionalData.source === "test_mode" ? "TEST MODE" : "PAY ON SITE"
+      debugLogs.push(`💰 ${sourceLabel}: Skipping Multipark API - no booking number will be generated`)
       
       // Mock un rezultat de succes fără a apela Multipark - NU generăm booking number fals
       apiResult = {
         success: true,
-        message: "Rezervare pay on site creată cu succes (procesare locală)",
-        bookingNumber: undefined, // Nu mai generăm numere false!
-        apiPayload: "N/A - Pay on site (local processing)",
-        apiResponse: "N/A - Pay on site (local processing)"
+        message: `Rezervare ${sourceLabel.toLowerCase()} creată cu succes (procesare locală)`,
+        bookingNumber: undefined,
+        apiPayload: `N/A - ${sourceLabel} (local processing)`,
+        apiResponse: `N/A - ${sourceLabel} (local processing)`
       }
       
-      debugLogs.push(`📞 PAY ON SITE: LOCAL SUCCESS - ${apiResult.message}`)
+      debugLogs.push(`📞 ${sourceLabel}: LOCAL SUCCESS - ${apiResult.message}`)
     } else {
-      // Pentru toate celelalte: merge la Multipark normal (webhook, test_mode, manual)
+      // Pentru toate celelalte: merge la Multipark normal (webhook, manual)
       apiResult = await createBooking(formData)
       debugLogs.push(`📞 MULTIPARK API: ${apiResult.success ? "SUCCESS" : "FAILED"} - ${apiResult.message}`)
     }
@@ -792,8 +798,8 @@ export async function createBookingWithFirestore(
          new Date(`${formData.get("startDate")}T${normalizeTimeHHmm(formData.get("startTime") as string)}:00`).getTime()) / (1000 * 60)
       ),
       multiparkDurationMinutes: (() => {
-        // Calculează minutele rotunjite pentru Multipark (doar dacă nu e pay-on-site)
-        if (additionalData?.source === "pay_on_site") return undefined
+        // Calculează minutele rotunjite pentru Multipark (doar dacă nu e pay-on-site/test_mode)
+        if (additionalData?.source === "pay_on_site" || additionalData?.source === "test_mode") return undefined
         const realMinutes = Math.round(
           (new Date(`${formData.get("endDate")}T${normalizeTimeHHmm(formData.get("endTime") as string)}:00`).getTime() - 
            new Date(`${formData.get("startDate")}T${normalizeTimeHHmm(formData.get("startTime") as string)}:00`).getTime()) / (1000 * 60)
@@ -825,6 +831,9 @@ export async function createBookingWithFirestore(
         : "api_error",
       source: additionalData?.source || "manual",
       bookingOrigin: additionalData?.bookingOrigin,
+      userId: additionalData?.userId,
+      paymentProvider: additionalData?.paymentProvider,
+      channel: additionalData?.bookingOrigin === "mobile-app" ? "mobile" : undefined,
       
       // Metadata
       createdAt: serverTimestamp()
@@ -864,7 +873,7 @@ export async function createBookingWithFirestore(
       // Dacă rezervarea a reușit și avem email client, trimite email prin API endpoint
       // Pentru pay-on-site nu avem apiBookingNumber, dar tot trimitem email
       if (apiResult.success && completeBookingData.clientEmail && 
-          (completeBookingData.apiBookingNumber || completeBookingData.source === "pay_on_site")) {
+          (completeBookingData.apiBookingNumber || completeBookingData.source === "pay_on_site" || completeBookingData.source === "test_mode")) {
         // Log diferit pentru pay-on-site (fără booking number) vs normal (cu booking number)
         const bookingReference = completeBookingData.apiBookingNumber || `${completeBookingData.source}-${completeBookingData.licensePlate}`
         debugLogs.push(`📧 Starting email processing for ${bookingReference}`)
@@ -936,7 +945,7 @@ export async function createBookingWithFirestore(
         if (!completeBookingData.clientEmail) {
           debugLogs.push(`⚠️ No email provided, skipping email notification`)
         }
-        if (!completeBookingData.apiBookingNumber && completeBookingData.source !== "pay_on_site") {
+        if (!completeBookingData.apiBookingNumber && completeBookingData.source !== "pay_on_site" && completeBookingData.source !== "test_mode") {
           debugLogs.push(`⚠️ No booking number, skipping QR generation`)
         }
         if (!apiResult.success) {
@@ -949,6 +958,23 @@ export async function createBookingWithFirestore(
       
       // Generează factură OBLIO automată pentru TOATE rezervările plătite ȘI în test mode
       if (additionalData?.paymentStatus === 'paid' || additionalData?.source === 'webhook' || additionalData?.source === 'test_mode') {
+        // Pentru test_mode, marcam Oblio ca skipped fara apel real (evitam facturi de test in productie Oblio)
+        if (additionalData?.source === 'test_mode') {
+          debugLogs.push(`🧾 Oblio skipped: test_mode`)
+          console.log(`🧾 Oblio skipped for booking (test_mode) - firestoreId=${firestoreResult.firestoreId}`)
+          if (bookingDocRef) {
+            try {
+              await updateDoc(bookingDocRef, {
+                "oblio.status": "skipped",
+                "oblio.skipReason": "test_mode",
+                "oblio.lastSource": "auto",
+                "oblio.lastUpdatedAt": serverTimestamp(),
+              })
+            } catch (oblioTrackingError) {
+              console.error("⚠️ Failed to set Oblio skipped status in Firestore:", oblioTrackingError)
+            }
+          }
+        } else {
         try {
           const invoiceBookingId = completeBookingData.apiBookingNumber || firestoreResult.firestoreId
 
@@ -1071,6 +1097,7 @@ export async function createBookingWithFirestore(
           console.error('⚠️ Factura Oblio a fost omisă - rezervarea continuă normal')
           // Nu oprim procesul pentru erori la facturare - rezervarea trebuie să continue
         }
+        } // end else (non-test_mode)
       } else {
         console.log("ℹ️ Factură Oblio nu se generează - rezervare fără plată")
       }

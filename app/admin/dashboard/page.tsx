@@ -20,6 +20,7 @@ import {
 import { Calendar, Car, CreditCard, Users, RefreshCw } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ReservationLimitManager } from "@/components/admin/reservation-limit-manager"
+import { MobileAppSettingsManager } from "@/components/admin/mobile-app-settings-manager"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 import {
   getDashboardStats,
@@ -208,7 +209,7 @@ export default function DashboardPage() {
 
       <ReservationLimitManager />
 
- 
+      <MobileAppSettingsManager />
 
       <Tabs defaultValue="revenue" className="space-y-4">
         <TabsList>

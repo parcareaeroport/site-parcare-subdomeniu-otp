@@ -2,6 +2,7 @@ import Stripe from "stripe"
 import { NextResponse } from "next/server"
 import { headers } from "next/headers"
 import { createBookingWithFirestore } from "@/app/actions/booking-actions" // Folosim versiunea extinsă
+import { MOBILE_BOOKING_ORIGIN } from "@/lib/mobile-booking-mapper"
 
 
 // Inițializăm clientul Stripe cu cheia secretă
@@ -68,12 +69,19 @@ export async function POST(req: Request) {
     // Verificăm dacă acest webhook trebuie să proceseze evenimentul
     const sourceUrl = bookingMetadata?.sourceUrl || ""
     const currentAppUrl = process.env.NEXT_PUBLIC_APP_URL || ""
+    const isMobilePayment = sourceUrl === MOBILE_BOOKING_ORIGIN
     
     console.log(`🔍 [${webhookProcessId}] ===== SOURCE VALIDATION =====`)
     console.log(`🔍 [${webhookProcessId}] Payment source URL: ${sourceUrl}`)
     console.log(`🔍 [${webhookProcessId}] Current app URL: ${currentAppUrl}`)
+    console.log(`🔍 [${webhookProcessId}] Is mobile payment: ${isMobilePayment}`)
     
-    if (sourceUrl && currentAppUrl && sourceUrl !== currentAppUrl) {
+    if (
+      sourceUrl &&
+      currentAppUrl &&
+      sourceUrl !== currentAppUrl &&
+      !isMobilePayment
+    ) {
       console.log(`⏭️ [${webhookProcessId}] ===== SKIPPING PROCESSING =====`)
       console.log(`⏭️ [${webhookProcessId}] Payment was made from different domain: ${sourceUrl}`)
       console.log(`⏭️ [${webhookProcessId}] This webhook is for: ${currentAppUrl}`)
@@ -120,14 +128,22 @@ export async function POST(req: Request) {
       const formData = new FormData()
       formData.append("licensePlate", bookingMetadata.licensePlate)
       
-      // Extragem data și ora din startDate și endDate (format: YYYY-MM-DDTHH:mm:00)
-      const startDateParts = bookingMetadata.startDate.split('T')
-      const endDateParts = bookingMetadata.endDate.split('T')
+      // Extragem data și ora din metadata (mobile trimite startTime/endTime separate)
+      const startDateRaw = bookingMetadata.startDate || ""
+      const endDateRaw = bookingMetadata.endDate || ""
+      const startDateParts = startDateRaw.split("T")
+      const endDateParts = endDateRaw.split("T")
       
-      formData.append("startDate", startDateParts[0]) // YYYY-MM-DD
-      formData.append("startTime", startDateParts[1]?.slice(0, 5) || "08:00") // HH:mm
-      formData.append("endDate", endDateParts[0]) // YYYY-MM-DD  
-      formData.append("endTime", endDateParts[1]?.slice(0, 5) || "08:00") // HH:mm
+      formData.append("startDate", startDateParts[0])
+      formData.append(
+        "startTime",
+        bookingMetadata.startTime || startDateParts[1]?.slice(0, 5) || "08:00"
+      )
+      formData.append("endDate", endDateParts[0])
+      formData.append(
+        "endTime",
+        bookingMetadata.endTime || endDateParts[1]?.slice(0, 5) || "08:00"
+      )
 
       if (bookingMetadata.customerName) {
         formData.append("clientName", bookingMetadata.customerName)
@@ -136,7 +152,9 @@ export async function POST(req: Request) {
       // Calculăm zilele și suma din metadata sau din diferența de date
       const startDate = new Date(bookingMetadata.startDate)
       const endDate = new Date(bookingMetadata.endDate)
-      const days = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) || 1
+      const days = bookingMetadata.days
+        ? parseInt(String(bookingMetadata.days), 10) || 1
+        : Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) || 1
       const amount = paymentIntent.amount / 100 // Stripe folosește cenți
 
       console.log(`🏗️ [${webhookProcessId}] Booking data prepared:`)
@@ -157,11 +175,20 @@ export async function POST(req: Request) {
       const bookingResult = await createBookingWithFirestore(formData, {
         clientEmail: bookingMetadata.customerEmail,
         clientPhone: bookingMetadata.customerPhone || undefined,
+        numberOfPersons: bookingMetadata.numberOfPersons
+          ? parseInt(String(bookingMetadata.numberOfPersons), 10) || 1
+          : undefined,
         paymentIntentId: paymentIntent.id,
         paymentStatus: "paid",
         amount: amount,
         days: days,
         source: "webhook",
+        bookingOrigin: isMobilePayment
+          ? MOBILE_BOOKING_ORIGIN
+          : bookingMetadata.bookingOrigin || undefined,
+        userId: bookingMetadata.userId || undefined,
+        paymentProvider:
+          bookingMetadata.paymentProvider === "netopia" ? "netopia" : "stripe",
         // Date pentru facturare și adresă din metadata
         company: bookingMetadata.company || undefined,
         companyVAT: bookingMetadata.companyVAT || undefined,
