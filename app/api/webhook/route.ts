@@ -155,7 +155,13 @@ export async function POST(req: Request) {
       const days = bookingMetadata.days
         ? parseInt(String(bookingMetadata.days), 10) || 1
         : Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) || 1
-      const amount = paymentIntent.amount / 100 // Stripe folosește cenți
+      const chargedAmount = paymentIntent.amount / 100 // Stripe folosește cenți
+      const creditAppliedAmount = bookingMetadata.creditAppliedAmount
+        ? parseFloat(String(bookingMetadata.creditAppliedAmount)) || 0
+        : 0
+      const amount = bookingMetadata.totalBookingAmount
+        ? parseFloat(String(bookingMetadata.totalBookingAmount)) || chargedAmount
+        : chargedAmount
 
       console.log(`🏗️ [${webhookProcessId}] Booking data prepared:`)
       console.log(`🏗️ [${webhookProcessId}]   License Plate: ${bookingMetadata.licensePlate}`)
@@ -205,6 +211,8 @@ export async function POST(req: Request) {
         termsAccepted: bookingMetadata.termsAccepted ? bookingMetadata.termsAccepted === 'true' : undefined,
         loyaltyFreeDayApplied: bookingMetadata.loyaltyFreeDayApplied === 'true',
         profileIsGuest: bookingMetadata.profileIsGuest === 'true',
+        creditAppliedAmount,
+        creditAppliedSource: "mobile_booking_credit",
       })
       
       const bookingDuration = Date.now() - bookingStartTime

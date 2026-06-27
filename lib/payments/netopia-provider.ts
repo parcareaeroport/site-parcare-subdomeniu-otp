@@ -13,6 +13,9 @@ export type NetopiaPaymentSessionOptions = {
   realAmount?: number
   chargedAmount?: number
   paymentTestMode?: boolean
+  paymentType?: "booking_create" | "booking_modification_difference"
+  pendingPaymentExtra?: Record<string, unknown>
+  description?: string
 }
 
 export type NetopiaPaymentSessionResult = {
@@ -66,6 +69,7 @@ export async function createMobileNetopiaPaymentSession(
   const realAmount = options?.realAmount ?? amount
   const chargedAmount = options?.chargedAmount ?? amount
   const paymentTestMode = !!options?.paymentTestMode
+  const paymentType = options?.paymentType || "booking_create"
   console.info("[netopia-provider] Config resolved", {
     hasApiKey: !!apiKey,
     hasPosSignature: !!posSignature,
@@ -128,7 +132,7 @@ export async function createMobileNetopiaPaymentSession(
       posSignature,
       dateTime: new Date().toISOString(),
       orderID: orderId,
-      description: `Rezervare parcare OTP Parking – ${payload.startDate} → ${payload.endDate}`,
+      description: options?.description || `Rezervare parcare OTP Parking – ${payload.startDate} → ${payload.endDate}`,
       amount: chargedAmount,
       currency: "RON",
       billing: {
@@ -227,6 +231,7 @@ export async function createMobileNetopiaPaymentSession(
   })
 
   await setDoc(doc(db, "pendingPayments", orderId), {
+    ...(options?.pendingPaymentExtra ? sanitizeFirestoreValue(options.pendingPaymentExtra) : {}),
     orderId,
     ntpID,
     userId: ctx.userId,
@@ -238,6 +243,7 @@ export async function createMobileNetopiaPaymentSession(
     status: "pending",
     provider: "netopia",
     paymentProvider: "netopia",
+    paymentType,
     paymentTestMode,
     bookingPayload: bookingPayloadForStorage,
     loyaltyFreeDayApplied: !!ctx.loyaltyFreeDayApplied,

@@ -37,6 +37,8 @@ export type MobileBookingContext = {
   paymentProvider?: MobilePaymentProvider
   paymentIntentId?: string
   loyaltyFreeDayApplied?: boolean
+  creditAppliedAmount?: number
+  totalBookingAmount?: number
 }
 
 export function validateMobileBookingPayload(
@@ -251,6 +253,12 @@ export function buildStripeMetadataFromMobilePayload(
   }
   if (ctx.loyaltyFreeDayApplied) {
     metadata.loyaltyFreeDayApplied = "true"
+  }
+  if (ctx.creditAppliedAmount && ctx.creditAppliedAmount > 0) {
+    metadata.creditAppliedAmount = String(ctx.creditAppliedAmount)
+  }
+  if (ctx.totalBookingAmount !== undefined) {
+    metadata.totalBookingAmount = String(ctx.totalBookingAmount)
   }
   if (ctx.isGuest) {
     metadata.profileIsGuest = "true"

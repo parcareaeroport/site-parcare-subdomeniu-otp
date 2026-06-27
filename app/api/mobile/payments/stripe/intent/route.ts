@@ -10,6 +10,7 @@ import { resolveActivePaymentProvider } from "@/lib/payments/payment-provider"
 import { createMobileStripePaymentIntent } from "@/lib/payments/stripe-provider"
 import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { validateMobileBookingWindow } from "@/lib/mobile-booking-window"
+import { getUserCreditBalance } from "@/lib/user-credits"
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
@@ -99,6 +100,20 @@ export async function POST(request: Request) {
     if (!parsedAmount || parsedAmount < 0) {
       return mobileJsonResponse({ success: false, error: "Invalid amount" }, 400)
     }
+    const availableCredit = await getUserCreditBalance(auth.user.uid)
+    const creditAppliedAmount = Math.min(parsedAmount, Math.max(0, availableCredit))
+    const amountToCharge = Math.round((parsedAmount - creditAppliedAmount) * 100) / 100
+
+    if (amountToCharge <= 0) {
+      return mobileJsonResponse(
+        {
+          success: false,
+          error: "Rezervarea este acoperită integral de credit. Folosește plata NETOPIA sau contactează suportul.",
+          creditAppliedAmount,
+        },
+        400
+      )
+    }
 
     const resolvedOrderId =
       typeof orderId === "string" && orderId.trim()
@@ -112,8 +127,10 @@ export async function POST(request: Request) {
         isGuest: auth.user.isGuest,
         paymentProvider: "stripe",
         loyaltyFreeDayApplied: loyaltyPricing.applied,
+        creditAppliedAmount,
+        totalBookingAmount: parsedAmount,
       },
-      parsedAmount,
+      amountToCharge,
       resolvedOrderId
     )
 
@@ -123,7 +140,9 @@ export async function POST(request: Request) {
       clientSecret: stripeResult.clientSecret,
       paymentIntentId: stripeResult.paymentIntentId,
       orderId: resolvedOrderId,
-      amount: parsedAmount,
+      amount: amountToCharge,
+      realAmount: parsedAmount,
+      creditAppliedAmount,
       loyaltyFreeDayApplied: loyaltyPricing.applied,
     })
   } catch (error) {

@@ -9,6 +9,7 @@ import { sendBookingConfirmationEmail } from "@/lib/email-service"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { recordOblioFailure } from "@/lib/oblio-alerting"
 import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
+import { consumeUserCredit } from "@/lib/user-credits"
 
 // Define validation schema for the form data
 const bookingFormSchema = z.object({
@@ -95,6 +96,8 @@ interface CompleteBookingData {
   paymentTestRealAmount?: number
   paymentTestChargedAmount?: number
   paymentOrderId?: string
+  creditAppliedAmount?: number
+  creditAppliedSource?: string
   channel?: "mobile"
   
   // Loialitate
@@ -660,6 +663,8 @@ export async function createBookingWithFirestore(
     paymentTestRealAmount?: number
     paymentTestChargedAmount?: number
     paymentOrderId?: string
+    creditAppliedAmount?: number
+    creditAppliedSource?: string
     // Date pentru facturare și adresă
     company?: string
     companyVAT?: string
@@ -855,6 +860,8 @@ export async function createBookingWithFirestore(
       paymentTestRealAmount: additionalData?.paymentTestRealAmount,
       paymentTestChargedAmount: additionalData?.paymentTestChargedAmount,
       paymentOrderId: additionalData?.paymentOrderId,
+      creditAppliedAmount: additionalData?.creditAppliedAmount,
+      creditAppliedSource: additionalData?.creditAppliedSource,
       
       // Date plată
       paymentIntentId: additionalData?.paymentIntentId,
@@ -1010,6 +1017,30 @@ export async function createBookingWithFirestore(
       }
 
       console.log("✅ Rezervare confirmată:", firestoreResult.firestoreId)
+      const bookingDocRef = firestoreResult.firestoreId ? doc(db, "bookings", firestoreResult.firestoreId) : null
+
+      if (additionalData?.creditAppliedAmount && additionalData.creditAppliedAmount > 0 && additionalData?.userId) {
+        try {
+          await consumeUserCredit({
+            userId: additionalData.userId,
+            amount: additionalData.creditAppliedAmount,
+            source: additionalData.creditAppliedSource || "booking_payment_credit",
+            bookingId: firestoreResult.firestoreId,
+            orderId: additionalData.paymentOrderId || additionalData.paymentIntentId,
+            message: "Credit aplicat automat la rezervare mobilă.",
+          })
+          debugLogs.push(`💳 Credit consumed: ${additionalData.creditAppliedAmount} RON`)
+        } catch (creditError) {
+          console.error("⚠️ Credit consume failed after booking success:", creditError)
+          if (bookingDocRef) {
+            await updateDoc(bookingDocRef, {
+              creditConsumeStatus: "failed",
+              creditConsumeError: creditError instanceof Error ? creditError.message : String(creditError),
+              lastUpdated: serverTimestamp(),
+            })
+          }
+        }
+      }
 
       try {
         const { processLoyaltyForCompletedMobileBooking } = await import("@/lib/loyalty-program")
@@ -1027,8 +1058,6 @@ export async function createBookingWithFirestore(
         console.warn("[createBookingWithFirestore] Loyalty processing failed (non-critical):", loyaltyError)
       }
 
-      const bookingDocRef = firestoreResult.firestoreId ? doc(db, "bookings", firestoreResult.firestoreId) : null
-      
       // Generează factură OBLIO automată pentru TOATE rezervările plătite ȘI în test mode
       if (additionalData?.paymentStatus === 'paid' || additionalData?.source === 'webhook' || additionalData?.source === 'test_mode') {
         // Pentru test_mode, marcam Oblio ca skipped fara apel real (evitam facturi de test in productie Oblio)

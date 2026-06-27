@@ -1,9 +1,12 @@
 import { getMobileAppSettings } from "@/lib/mobile-app-settings"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import {
+  mapMobilePayloadToFormData,
+  MOBILE_BOOKING_ORIGIN,
   validateMobileBookingPayload,
   type MobileBookingPayload,
 } from "@/lib/mobile-booking-mapper"
+import { createBookingWithFirestore } from "@/app/actions/booking-actions"
 import { applyLoyaltyPricingToMobilePayload } from "@/lib/mobile-loyalty-pricing"
 import type { NetopiaPaymentMethod } from "@/lib/mobile-netopia-types"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
@@ -13,6 +16,7 @@ import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
 import { getNetopiaForcedTestConfig } from "@/lib/payments/netopia-test-mode"
 import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { validateMobileBookingWindow } from "@/lib/mobile-booking-window"
+import { getUserCreditBalance } from "@/lib/user-credits"
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
@@ -167,9 +171,14 @@ export async function POST(request: Request) {
         ? orderId.trim()
         : `mobile_netopia_${auth.user.uid}_${Date.now()}`
     const forcedTestConfig = getNetopiaForcedTestConfig()
+    const availableCredit = forcedTestConfig.enabled ? 0 : await getUserCreditBalance(auth.user.uid)
+    const creditAppliedAmount = forcedTestConfig.enabled
+      ? 0
+      : Math.min(parsedAmount, Math.max(0, availableCredit))
+    const amountAfterCredit = Math.round((parsedAmount - creditAppliedAmount) * 100) / 100
     const effectiveChargedAmount = forcedTestConfig.enabled
       ? forcedTestConfig.amount
-      : parsedAmount
+      : amountAfterCredit
 
     const resolvedPaymentMethod: NetopiaPaymentMethod =
       paymentMethod === "google_pay" || paymentMethod === "apple_pay"
@@ -188,6 +197,8 @@ export async function POST(request: Request) {
       extra: {
         isGuest: auth.user.isGuest,
         paymentMethod: resolvedPaymentMethod,
+        availableCredit,
+        creditAppliedAmount,
       },
     })
 
@@ -209,10 +220,68 @@ export async function POST(request: Request) {
       })
     }
 
+    if (effectiveChargedAmount <= 0) {
+      console.info("[netopia-init] Booking fully covered by credit, creating without external payment", {
+        orderId: resolvedOrderId,
+        userId: auth.user.uid,
+        realAmount: parsedAmount,
+        creditAppliedAmount,
+      })
+      const formData = mapMobilePayloadToFormData(payload)
+      const bookingResult = await createBookingWithFirestore(formData, {
+        clientEmail: payload.email,
+        clientPhone: payload.phone,
+        numberOfPersons: payload.numberOfPersons ?? 1,
+        paymentStatus: "paid",
+        source: "webhook",
+        bookingOrigin: MOBILE_BOOKING_ORIGIN,
+        userId: auth.user.uid,
+        profileIsGuest: auth.user.isGuest,
+        paymentProvider: "netopia",
+        paymentOrderId: resolvedOrderId,
+        paymentIntentId: resolvedOrderId,
+        amount: parsedAmount,
+        days: payload.days,
+        address: payload.address,
+        city: payload.city,
+        county: payload.county,
+        postalCode: payload.postalCode,
+        country: payload.country,
+        needInvoice: payload.needInvoice,
+        company: payload.needInvoice ? payload.company || undefined : undefined,
+        companyVAT: payload.needInvoice ? payload.companyVAT || undefined : undefined,
+        companyReg: payload.needInvoice ? payload.companyReg || undefined : undefined,
+        companyAddress: payload.needInvoice ? payload.companyAddress || undefined : undefined,
+        orderNotes: payload.orderNotes,
+        termsAccepted: true,
+        loyaltyFreeDayApplied: loyaltyPricing.applied,
+        creditAppliedAmount,
+        creditAppliedSource: "mobile_booking_credit",
+      })
+
+      if (!bookingResult.success) {
+        return mobileJsonResponse({ success: false, error: bookingResult.message || "Booking creation failed" }, 400)
+      }
+
+      return mobileJsonResponse({
+        success: true,
+        provider: "netopia",
+        status: "paid",
+        orderId: resolvedOrderId,
+        amount: 0,
+        realAmount: parsedAmount,
+        creditAppliedAmount,
+        bookingId: bookingResult.firestoreId,
+        bookingNumber: bookingResult.bookingNumber || undefined,
+        loyaltyFreeDayApplied: loyaltyPricing.applied,
+      })
+    }
+
     console.info("[netopia-init] Creating Netopia session", {
       orderId: resolvedOrderId,
       amount: effectiveChargedAmount,
       realAmount: parsedAmount,
+      creditAppliedAmount,
       paymentTestMode: forcedTestConfig.enabled,
       paymentMethod: resolvedPaymentMethod,
     })
@@ -234,6 +303,11 @@ export async function POST(request: Request) {
         realAmount: parsedAmount,
         chargedAmount: effectiveChargedAmount,
         paymentTestMode: forcedTestConfig.enabled,
+        pendingPaymentExtra: {
+          paymentType: "booking_create",
+          creditAppliedAmount,
+          creditAvailableAtInit: availableCredit,
+        },
       }
     )
     console.info("[netopia-init] Netopia session created", {
@@ -257,6 +331,7 @@ export async function POST(request: Request) {
       orderId: resolvedOrderId,
       amount: session.chargedAmount,
       realAmount: session.realAmount,
+      creditAppliedAmount,
       paymentTestMode: session.paymentTestMode,
       loyaltyFreeDayApplied: loyaltyPricing.applied,
     })

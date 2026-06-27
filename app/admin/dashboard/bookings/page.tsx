@@ -134,6 +134,25 @@ interface Booking {
   userId?: string
   paymentProvider?: "stripe" | "netopia"
   channel?: "mobile"
+  activeModificationRequestId?: string | null
+  activeModificationRequest?: {
+    id?: string
+    status?: string
+    amountToPay?: number
+    creditAmount?: number
+    difference?: number
+    refundRequiredAmount?: number
+    finalValues?: {
+      startDate?: string
+      startTime?: string
+      endDate?: string
+      endTime?: string
+      licensePlate?: string
+    }
+  } | null
+  lastModificationRequestId?: string | null
+  lastPriceDifference?: number
+  lastMultiparkUpdateStatus?: string
   createdAt: Timestamp // Firestore Timestamp
   lastUpdated?: Timestamp
   expiredAt?: Timestamp // Când a fost marcată ca expirată
@@ -225,6 +244,7 @@ function BookingsPageContent() {
 
   // Manual LPR event (admin fallback): write as if it came from LPR API (lpr_events + gateEvents + booking lpr.*)
   const [isManualLprDialogOpen, setIsManualLprDialogOpen] = useState(false)
+  const [modificationActionLoading, setModificationActionLoading] = useState<string | null>(null)
   const [manualLprBooking, setManualLprBooking] = useState<Booking | null>(null)
   const [manualLprEventType, setManualLprEventType] = useState<"entry" | "exit">("entry")
   const [manualLprDate, setManualLprDate] = useState(() => formatInputDate(new Date()))
@@ -1251,6 +1271,66 @@ function BookingsPageContent() {
 
   const shouldCancelInMultipark = (booking?: Booking | null) =>
     Boolean(booking?.apiBookingNumber) && booking?.source !== "pay_on_site"
+
+  const runModificationAction = async (
+    booking: Booking,
+    action: "approve" | "reject" | "retry",
+    body?: Record<string, unknown>,
+  ) => {
+    const requestId = booking.activeModificationRequestId || booking.activeModificationRequest?.id
+    if (!requestId) {
+      toast({
+        title: "Cerere lipsă",
+        description: "Rezervarea nu are o cerere de modificare activă.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    setModificationActionLoading(`${action}:${requestId}`)
+    try {
+      const res = await adminAuthorizedFetch(`/api/admin/bookings/modification-requests/${requestId}/${action}`, user, {
+        method: "POST",
+        body: JSON.stringify(body || {}),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
+
+      const status = json?.status || (action === "reject" ? "rejected" : "completed")
+      toast({
+        title:
+          action === "approve"
+            ? "Cerere aprobată"
+            : action === "reject"
+              ? "Cerere respinsă"
+              : "Reîncercare finalizată",
+        description:
+          status === "awaiting_difference_payment"
+            ? "Clientul trebuie să plătească diferența înainte de aplicarea modificării."
+            : "Statusul cererii a fost actualizat.",
+      })
+
+      setSelectedBooking((prev) =>
+        prev && prev.id === booking.id
+          ? {
+              ...prev,
+              activeModificationRequest: prev.activeModificationRequest
+                ? { ...prev.activeModificationRequest, status }
+                : prev.activeModificationRequest,
+            }
+          : prev
+      )
+      fetchBookings()
+    } catch (e) {
+      toast({
+        title: "Eroare modificare",
+        description: e instanceof Error ? e.message : "Acțiunea nu a putut fi executată.",
+        variant: "destructive",
+      })
+    } finally {
+      setModificationActionLoading(null)
+    }
+  }
 
   const handleMarkOutside = async (booking: Booking) => {
     setMarkingExitId(booking.id)
@@ -3783,6 +3863,84 @@ function BookingsPageContent() {
                     </p>
                   )}
                 </div>
+
+                {selectedBooking.activeModificationRequest && (
+                  <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
+                    <h3 className="mb-2 font-medium text-amber-900">Cerere modificare activă</h3>
+                    <div className="space-y-1 text-amber-950">
+                      <p>
+                        <strong>Status:</strong> {selectedBooking.activeModificationRequest.status || "-"}
+                      </p>
+                      {selectedBooking.activeModificationRequest.finalValues && (
+                        <>
+                          <p>
+                            <strong>Perioadă nouă:</strong>{" "}
+                            {selectedBooking.activeModificationRequest.finalValues.startDate || "-"}{" "}
+                            {selectedBooking.activeModificationRequest.finalValues.startTime || "--:--"} →{" "}
+                            {selectedBooking.activeModificationRequest.finalValues.endDate || "-"}{" "}
+                            {selectedBooking.activeModificationRequest.finalValues.endTime || "--:--"}
+                          </p>
+                          <p>
+                            <strong>Mașină nouă:</strong>{" "}
+                            {selectedBooking.activeModificationRequest.finalValues.licensePlate || "-"}
+                          </p>
+                        </>
+                      )}
+                      <p>
+                        <strong>Diferență:</strong>{" "}
+                        {Number(selectedBooking.activeModificationRequest.difference || 0).toFixed(2)} RON
+                      </p>
+                      <p>
+                        <strong>De plată:</strong>{" "}
+                        {Number(selectedBooking.activeModificationRequest.amountToPay || 0).toFixed(2)} RON
+                      </p>
+                      <p>
+                        <strong>Credit client:</strong>{" "}
+                        {Number(selectedBooking.activeModificationRequest.creditAmount || 0).toFixed(2)} RON
+                      </p>
+                      {selectedBooking.activeModificationRequest.refundRequiredAmount ? (
+                        <p className="font-semibold text-red-700">
+                          Refund manual necesar: {Number(selectedBooking.activeModificationRequest.refundRequiredAmount).toFixed(2)} RON
+                        </p>
+                      ) : null}
+                    </div>
+                    {isAdmin && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {selectedBooking.activeModificationRequest.status === "pending_admin_review" && (
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={() => runModificationAction(selectedBooking, "approve")}
+                              disabled={Boolean(modificationActionLoading)}
+                            >
+                              {modificationActionLoading?.startsWith("approve:") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                              Aprobă
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => runModificationAction(selectedBooking, "reject", { reason: "Respins din admin" })}
+                              disabled={Boolean(modificationActionLoading)}
+                            >
+                              Respinge
+                            </Button>
+                          </>
+                        )}
+                        {selectedBooking.activeModificationRequest.status === "failed" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => runModificationAction(selectedBooking, "retry")}
+                            disabled={Boolean(modificationActionLoading)}
+                          >
+                            {modificationActionLoading?.startsWith("retry:") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            Reîncearcă aplicarea
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="min-w-0">
                 <h3 className="text-lg font-medium mb-2 text-gray-800">Informații Client</h3>

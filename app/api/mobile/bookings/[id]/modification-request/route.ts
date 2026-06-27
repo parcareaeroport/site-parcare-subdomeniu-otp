@@ -7,7 +7,8 @@ import {
 import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { resolveMobileBookingQuote } from "@/lib/booking-pricing"
 import { getMobileUserProfile } from "@/lib/mobile-user-service"
-import { db, doc, getDoc, serverTimestamp, updateDoc } from "@/lib/server-firestore"
+import { recordBookingModificationAuditEvent } from "@/lib/booking-modification-audit"
+import { addDoc, collection, db, doc, getDoc, serverTimestamp, updateDoc } from "@/lib/server-firestore"
 
 const MODIFICATION_MIN_LEAD_MS = 24 * 60 * 60 * 1000
 
@@ -61,22 +62,49 @@ export async function POST(
 ) {
   const auth = await verifyMobileUser(request)
   if (!auth.ok) return auth.response
+  let bookingIdForLog: string | null = null
 
   try {
     const { id } = await params
+    bookingIdForLog = id
     const snap = await getDoc(doc(db, "bookings", id))
 
     if (!snap.exists()) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "booking_not_found",
+      })
       return mobileJsonResponse({ success: false, error: "Booking not found" }, 404)
     }
 
     const booking = (snap.data() || {}) as Record<string, unknown>
+    console.info("[booking-modification] modification_request_received", {
+      bookingId: id,
+      userId: auth.user.uid,
+      userEmail: auth.user.email || null,
+      apiBookingNumber: booking.apiBookingNumber || booking.bookingNumber || null,
+      currentStatus: booking.status || null,
+      source: booking.source || null,
+      bookingOrigin: booking.bookingOrigin || null,
+    })
 
     if (!isBookingOwner(booking, auth.user.uid, auth.user.email)) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "forbidden",
+      })
       return mobileJsonResponse({ success: false, error: "Forbidden" }, 403)
     }
 
     if (booking.modificationRequested === true) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "existing_active_request",
+        activeModificationRequestId: booking.activeModificationRequestId || null,
+      })
       return mobileJsonResponse(
         { success: false, error: "Există deja o cerere de modificare în curs pentru această rezervare." },
         409
@@ -93,17 +121,49 @@ export async function POST(
       newLicensePlate: asString(body.newLicensePlate)?.toUpperCase(),
       note: asString(body.note),
     }
+    console.info("[booking-modification] modification_request_payload_parsed", {
+      bookingId: id,
+      userId: auth.user.uid,
+      requestedFields: {
+        hasNewStartDate: Boolean(requested.newStartDate),
+        hasNewStartTime: Boolean(requested.newStartTime),
+        hasNewEndDate: Boolean(requested.newEndDate),
+        hasNewEndTime: Boolean(requested.newEndTime),
+        hasNewLicensePlate: Boolean(requested.newLicensePlate),
+        hasNote: Boolean(requested.note),
+      },
+    })
 
     if (requested.newStartDate && !isValidDate(requested.newStartDate)) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "invalid_start_date",
+      })
       return mobileJsonResponse({ success: false, error: "Format dată intrare invalid (YYYY-MM-DD)" }, 400)
     }
     if (requested.newEndDate && !isValidDate(requested.newEndDate)) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "invalid_end_date",
+      })
       return mobileJsonResponse({ success: false, error: "Format dată ieșire invalid (YYYY-MM-DD)" }, 400)
     }
     if (requested.newStartTime && !isValidTime(requested.newStartTime)) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "invalid_start_time",
+      })
       return mobileJsonResponse({ success: false, error: "Format oră intrare invalid (HH:MM)" }, 400)
     }
     if (requested.newEndTime && !isValidTime(requested.newEndTime)) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "invalid_end_time",
+      })
       return mobileJsonResponse({ success: false, error: "Format oră ieșire invalid (HH:MM)" }, 400)
     }
     const currentStartDate = String(booking.startDate || "")
@@ -113,10 +173,22 @@ export async function POST(
     const currentStartMs = parseDateTime(currentStartDate, currentStartTime)
 
     if (currentStartMs === null) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "invalid_current_start",
+      })
       return mobileJsonResponse({ success: false, error: "Rezervarea are data de intrare invalidă." }, 400)
     }
 
     if (currentStartMs - Date.now() < MODIFICATION_MIN_LEAD_MS) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "lead_time_less_than_24h",
+        currentStartDate,
+        currentStartTime,
+      })
       return mobileJsonResponse(
         { success: false, error: "Rezervarea poate fi modificată doar cu minimum 24h înainte de intrare." },
         403
@@ -141,6 +213,15 @@ export async function POST(
       const startMs = parseDateTime(finalStartDate, finalStartTime)
       const endMs = parseDateTime(finalEndDate, finalEndTime)
       if (startMs !== null && endMs !== null && endMs <= startMs) {
+        console.warn("[booking-modification] modification_request_failed", {
+          bookingId: id,
+          userId: auth.user.uid,
+          reason: "invalid_new_interval",
+          finalStartDate,
+          finalStartTime,
+          finalEndDate,
+          finalEndTime,
+        })
         return mobileJsonResponse(
           { success: false, error: "Data/ora de ieșire trebuie să fie după cea de intrare" },
           400
@@ -156,6 +237,15 @@ export async function POST(
       )
 
       if (!availability.available) {
+        console.warn("[booking-modification] modification_request_failed", {
+          bookingId: id,
+          userId: auth.user.uid,
+          reason: "availability_unavailable",
+          finalStartDate,
+          finalStartTime,
+          finalEndDate,
+          finalEndTime,
+        })
         return mobileJsonResponse(
           {
             success: false,
@@ -177,6 +267,16 @@ export async function POST(
     )
 
     if (duplicateCheck.exists) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "duplicate_license_plate",
+        licensePlate: finalLicensePlate,
+        finalStartDate,
+        finalStartTime,
+        finalEndDate,
+        finalEndTime,
+      })
       return mobileJsonResponse(
         {
           success: false,
@@ -197,6 +297,11 @@ export async function POST(
       !!(requested.note && requested.note.trim())
 
     if (!hasAnyChange) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "no_changes",
+      })
       return mobileJsonResponse({ success: false, error: "Niciun câmp modificat" }, 400)
     }
 
@@ -226,13 +331,111 @@ export async function POST(
         ? newQuote.atParkingTotal
         : newQuote.onlineTotal
     const priceDifference = roundMoney(newAmount - currentAmount)
+    const amountToPay = priceDifference > 0 ? priceDifference : 0
+    const creditAmount = priceDifference < 0 ? Math.abs(priceDifference) : 0
+    console.info("[booking-modification] modification_quote_resolved", {
+      bookingId: id,
+      userId: auth.user.uid,
+      apiBookingNumber: booking.apiBookingNumber || booking.bookingNumber || null,
+      currentAmount,
+      newAmount,
+      difference: priceDifference,
+      amountToPay,
+      creditAmount,
+      billableDays: newQuote.days,
+    })
 
     if (!email) {
+      console.warn("[booking-modification] modification_request_failed", {
+        bookingId: id,
+        userId: auth.user.uid,
+        reason: "missing_email",
+      })
       return mobileJsonResponse({ success: false, error: "Email utilizator lipsă" }, 400)
     }
 
+    const modificationRef = await addDoc(collection(db, "bookingModificationRequests"), {
+      bookingId: snap.id,
+      userId: auth.user.uid,
+      userEmail: email,
+      status: "pending_admin_review",
+      requestedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      source: "mobile-app",
+      currentSnapshot: {
+        startDate: currentStartDate,
+        startTime: currentStartTime,
+        endDate: currentEndDate,
+        endTime: currentEndTime,
+        licensePlate,
+        amount: currentAmount,
+        apiBookingNumber: booking.apiBookingNumber || null,
+        source: booking.source || null,
+        paymentProvider: booking.paymentProvider || null,
+      },
+      requested,
+      finalValues: {
+        startDate: finalStartDate,
+        startTime: finalStartTime,
+        endDate: finalEndDate,
+        endTime: finalEndTime,
+        licensePlate: finalLicensePlate,
+      },
+      currentAmount,
+      newAmount,
+      difference: priceDifference,
+      amountToPay,
+      creditAmount,
+      billableDays: newQuote.days,
+    })
+    console.info("[booking-modification] modification_request_created", {
+      bookingId: id,
+      modificationRequestId: modificationRef.id,
+      userId: auth.user.uid,
+      apiBookingNumber: booking.apiBookingNumber || booking.bookingNumber || null,
+      currentAmount,
+      newAmount,
+      difference: priceDifference,
+      amountToPay,
+      creditAmount,
+    })
+    await recordBookingModificationAuditEvent(modificationRef.id, "request_created", "info", {
+      bookingId: id,
+      apiBookingNumber: String(booking.apiBookingNumber || booking.bookingNumber || "") || null,
+      userId: auth.user.uid,
+      amountToPay,
+      creditAmount,
+      difference: priceDifference,
+      message: "Clientul a trimis cererea de modificare din aplicația mobilă.",
+      extra: {
+        requested,
+        finalValues: {
+          startDate: finalStartDate,
+          startTime: finalStartTime,
+          endDate: finalEndDate,
+          endTime: finalEndTime,
+          licensePlate: finalLicensePlate,
+        },
+      },
+    })
+
     await updateDoc(snap.ref, {
       modificationRequested: true,
+      activeModificationRequestId: modificationRef.id,
+      activeModificationRequest: {
+        id: modificationRef.id,
+        status: "pending_admin_review",
+        amountToPay,
+        creditAmount,
+        difference: priceDifference,
+        finalValues: {
+          startDate: finalStartDate,
+          startTime: finalStartTime,
+          endDate: finalEndDate,
+          endTime: finalEndTime,
+          licensePlate: finalLicensePlate,
+        },
+      },
       modificationRequestedAt: serverTimestamp(),
       modificationRequestPayload: requested,
       modificationPriceImpact: {
@@ -270,10 +473,23 @@ export async function POST(
         billableDays: newQuote.days,
       },
     })
+    console.info("[booking-modification] modification_request_email_sent", {
+      bookingId: id,
+      modificationRequestId: modificationRef.id,
+      userId: auth.user.uid,
+      messageId: result.messageId || null,
+      message: result.message || null,
+    })
 
-    return mobileJsonResponse({ success: true, ...result })
+    return mobileJsonResponse({ success: true, modificationRequestId: modificationRef.id, ...result })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
+    console.error("[booking-modification] modification_request_exception", {
+      bookingId: bookingIdForLog,
+      userId: auth.user.uid,
+      message,
+      stack: error instanceof Error ? error.stack : undefined,
+    })
     const status = message.includes("obligatorii") || message.includes("modificat") ? 400 : 500
     return mobileJsonResponse({ success: false, error: message }, status)
   }

@@ -5,6 +5,8 @@ import {
   type MobileBookingPayload,
 } from "@/lib/mobile-booking-mapper"
 import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
+import { applyBookingModificationRequest } from "@/lib/booking-modifications"
+import { recordBookingModificationAuditEvent } from "@/lib/booking-modification-audit"
 import { db, doc, getDoc, updateDoc, serverTimestamp } from "@/lib/server-firestore"
 
 export const dynamic = "force-dynamic"
@@ -87,6 +89,9 @@ export async function POST(request: Request) {
       status: string
       provider?: string
       paymentTestMode?: boolean
+      paymentType?: "booking_create" | "booking_modification_difference"
+      modificationRequestId?: string
+      creditAppliedAmount?: number
       bookingPayload: MobileBookingPayload
       loyaltyFreeDayApplied: boolean
       bookingId?: string
@@ -139,6 +144,122 @@ export async function POST(request: Request) {
       return Response.json({ errorCode: 0, message: "OK – payment failed" }, { status: 200 })
     }
 
+    if (pending.paymentType === "booking_modification_difference") {
+      console.info("[netopia-ipn] modification_difference_ipn_received", {
+        orderId: orderID,
+        ntpID,
+        userId: pending.userId,
+        bookingId: pending.bookingId,
+        modificationRequestId: pending.modificationRequestId,
+        chargedAmount,
+        paymentStatus,
+        errorCode,
+      })
+      await recordBookingModificationAuditEvent(pending.modificationRequestId, "payment_received", "success", {
+        bookingId: pending.bookingId || null,
+        userId: pending.userId,
+        orderId: orderID,
+        amountToPay: chargedAmount,
+        message: "NETOPIA a confirmat plata diferenței pentru modificare.",
+        extra: {
+          ntpID,
+          paymentStatus,
+          errorCode,
+        },
+      })
+
+      if (!pending.modificationRequestId) {
+        await updateDoc(pendingRef, {
+          status: "booking_failed_refund_required",
+          ntpID: ntpID || pending.ntpID,
+          netopiaStatus: paymentStatus,
+          netopiaErrorCode: errorCode ?? null,
+          bookingSuccess: false,
+          bookingError: "Missing modificationRequestId for paid modification difference",
+          refundRequired: true,
+          updatedAt: serverTimestamp(),
+        })
+        console.error("[netopia-ipn] modification_difference_payment_paid_missing_request", {
+          orderId: orderID,
+          ntpID,
+          bookingId: pending.bookingId || null,
+          userId: pending.userId,
+          chargedAmount,
+        })
+        return Response.json({ errorCode: 0, message: "OK – missing modification request" }, { status: 200 })
+      }
+
+      console.info("[netopia-ipn] modification_difference_payment_paid", {
+        orderId: orderID,
+        ntpID,
+        userId: pending.userId,
+        bookingId: pending.bookingId,
+        modificationRequestId: pending.modificationRequestId,
+        chargedAmount,
+      })
+      const applyResult = await applyBookingModificationRequest(pending.modificationRequestId, {
+        reason: "difference_payment_paid",
+        paymentOrderId: orderID,
+      })
+      console.info("[netopia-ipn] modification_difference_apply_result", {
+        orderId: orderID,
+        ntpID,
+        userId: pending.userId,
+        bookingId: pending.bookingId || applyResult.bookingId || null,
+        modificationRequestId: pending.modificationRequestId,
+        success: applyResult.success,
+        status: applyResult.status,
+        message: applyResult.success ? "Modification applied" : applyResult.message || "Modification apply failed",
+        refundRequired: !applyResult.success,
+        chargedAmount,
+      })
+      await recordBookingModificationAuditEvent(
+        pending.modificationRequestId,
+        applyResult.success ? "payment_apply_completed" : "refund_required",
+        applyResult.success ? "success" : "failed",
+        {
+          bookingId: pending.bookingId || applyResult.bookingId || null,
+          userId: pending.userId,
+          orderId: orderID,
+          amountToPay: chargedAmount,
+          message: applyResult.success
+            ? "Modificarea a fost aplicată după plata diferenței."
+            : applyResult.message || "Modificarea nu a putut fi aplicată după plata diferenței.",
+          extra: {
+            ntpID,
+            status: applyResult.status,
+            refundRequired: !applyResult.success,
+          },
+        }
+      )
+
+      await updateDoc(
+        pendingRef,
+        withoutUndefined({
+          status: applyResult.success ? "paid" : "booking_failed_refund_required",
+          ntpID: ntpID || pending.ntpID,
+          netopiaStatus: paymentStatus,
+          netopiaErrorCode: errorCode ?? null,
+          bookingId: pending.bookingId || applyResult.bookingId || null,
+          bookingSuccess: applyResult.success,
+          bookingError: applyResult.success ? undefined : applyResult.message || "Modification apply failed after paid difference",
+          refundRequired: applyResult.success ? undefined : true,
+          updatedAt: serverTimestamp(),
+        })
+      )
+
+      console.info("[netopia-ipn] Modification difference IPN finalized", {
+        orderId: orderID,
+        ntpID: ntpID || pending.ntpID,
+        modificationRequestId: pending.modificationRequestId,
+        bookingId: pending.bookingId || applyResult.bookingId || null,
+        success: applyResult.success,
+        chargedAmount,
+      })
+
+      return Response.json({ errorCode: 0, message: "OK" }, { status: 200 })
+    }
+
     const payload = pending.bookingPayload
     console.info("[netopia-ipn] Starting booking creation from IPN", {
       orderId: orderID,
@@ -172,7 +293,7 @@ export async function POST(request: Request) {
       paymentProvider: "netopia",
       paymentOrderId: orderID,
       paymentIntentId: ntpID || orderID,
-      amount: chargedAmount,
+      amount: pending.paymentTestMode ? chargedAmount : realAmount,
       days: payload.days,
       address: payload.address,
       city: payload.city,
@@ -190,6 +311,8 @@ export async function POST(request: Request) {
       paymentTestMode: !!pending.paymentTestMode,
       paymentTestRealAmount: realAmount,
       paymentTestChargedAmount: chargedAmount,
+      creditAppliedAmount: Number(pending.creditAppliedAmount || 0),
+      creditAppliedSource: "mobile_booking_credit",
     })
 
     await updateDoc(

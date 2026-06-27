@@ -54,6 +54,10 @@ export async function GET(
         paymentProvider: data.paymentProvider,
         source: data.source,
         createdAt: data.createdAt,
+        activeModificationRequestId: data.activeModificationRequestId,
+        activeModificationRequest: data.activeModificationRequest,
+        lastModificationRequestId: data.lastModificationRequestId,
+        lastPriceDifference: data.lastPriceDifference,
         qrUrl: apiBookingNumber ? buildSignedQrUrl(apiBookingNumber) : undefined,
       },
     })

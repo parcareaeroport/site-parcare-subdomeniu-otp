@@ -75,6 +75,8 @@ export async function GET(request: Request) {
       bookingSuccess?: boolean
       bookingError?: string
       refundRequired?: boolean
+      paymentType?: string
+      modificationRequestId?: string
     }
 
     if (data.bookingSuccess && data.bookingId) {
@@ -90,6 +92,8 @@ export async function GET(request: Request) {
         orderId,
         bookingId: data.bookingId,
         bookingNumber: data.bookingNumber || undefined,
+        paymentType: data.paymentType || undefined,
+        modificationRequestId: data.modificationRequestId || undefined,
       })
     }
 
@@ -175,6 +179,8 @@ export async function GET(request: Request) {
       orderId,
       bookingId: data.bookingId || undefined,
       bookingNumber: data.bookingNumber || undefined,
+      paymentType: data.paymentType || undefined,
+      modificationRequestId: data.modificationRequestId || undefined,
       error: data.bookingError || undefined,
       refundRequired: data.refundRequired || undefined,
     })
