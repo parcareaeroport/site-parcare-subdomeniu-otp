@@ -314,6 +314,8 @@ function BookingsPageContent() {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(25)
   const [globalSearchPage, setGlobalSearchPage] = useState(1)
+  const isSelectedBookingMobileApp =
+    selectedBooking?.bookingOrigin === "mobile-app" || selectedBooking?.channel === "mobile"
 
   // Căutare globală (după număr / API / id / client / email),
   // independentă de intervalul "Creată la".
@@ -3609,18 +3611,33 @@ function BookingsPageContent() {
       </Dialog>
 
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[90vh] w-[calc(100vw-2rem)] max-w-6xl flex-col overflow-hidden p-0">
+          <DialogHeader className="border-b px-6 py-4 pr-12">
             <DialogTitle>Detalii Rezervare</DialogTitle>
           </DialogHeader>
           {selectedBooking && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
-              <div>
+            <>
+            <div className="overflow-y-auto px-6 py-4">
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+              <div className="min-w-0">
                 <h3 className="text-lg font-medium mb-2 text-gray-800">Informații Rezervare</h3>
-                <div className="space-y-1 text-sm">
-                  <p>
+                <div className="space-y-1 text-sm break-words">
+                  <p className="break-all">
                     <strong>ID Firestore:</strong> {selectedBooking.id}
                   </p>
+                  <p>
+                    <strong>Canal rezervare:</strong>{" "}
+                    {isSelectedBookingMobileApp ? (
+                      <Badge className="bg-sky-100 text-sky-700 border-sky-300">Aplicația mobilă</Badge>
+                    ) : (
+                      <span className="text-gray-600">Website / Admin</span>
+                    )}
+                  </p>
+                  {selectedBooking.paymentProvider && (
+                    <p>
+                      <strong>Provider plată:</strong> {selectedBooking.paymentProvider.toUpperCase()}
+                    </p>
+                  )}
                   {/* Pentru pay-on-site nu afișăm numărul de rezervare API (nu există în Multipark) */}
                   {!isPayOnSiteBooking(selectedBooking) && (
                     <p>
@@ -3744,9 +3761,9 @@ function BookingsPageContent() {
                   )}
                 </div>
               </div>
-              <div>
+              <div className="min-w-0">
                 <h3 className="text-lg font-medium mb-2 text-gray-800">Informații Client</h3>
-                <div className="space-y-1 text-sm">
+                <div className="space-y-1 text-sm break-words">
                   <p>
                     <strong>Nume:</strong> {selectedBooking.clientName || "N/A"}
                   </p>
@@ -3998,8 +4015,9 @@ function BookingsPageContent() {
                 </div>
               </div>
             </div>
-          )}
-          <DialogFooter>
+            </div>
+            <div className="border-t px-6 py-4">
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
             {/* Buton pentru trimiterea email-ului din dialog */}
             {selectedBooking && selectedBooking.clientEmail && (selectedBooking.apiBookingNumber || isPayOnSiteBooking(selectedBooking)) && (
               <Button
@@ -4009,7 +4027,7 @@ function BookingsPageContent() {
                   handleSendEmail(selectedBooking)
                 }}
                 disabled={isSendingEmail}
-                className="text-blue-600 border-blue-600 hover:bg-blue-50 hover:text-blue-700"
+                className="w-full border-blue-600 text-blue-600 hover:bg-blue-50 hover:text-blue-700 sm:w-auto"
               >
                 {isSendingEmail && sendingEmailBookingId === selectedBooking.id ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -4025,7 +4043,7 @@ function BookingsPageContent() {
                 variant="outline"
                 onClick={() => handleRetryOblioInvoice(selectedBooking)}
                 disabled={retryingOblioBookingId === selectedBooking.id}
-                className="text-amber-700 border-amber-500 hover:bg-amber-50 hover:text-amber-800"
+                className="w-full border-amber-500 text-amber-700 hover:bg-amber-50 hover:text-amber-800 sm:w-auto"
               >
                 {retryingOblioBookingId === selectedBooking.id ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -4048,6 +4066,7 @@ function BookingsPageContent() {
                     setIsCancelDialogOpen(true)
                   }}
                   disabled={isCancellingLocalBooking}
+                  className="w-full sm:w-auto"
                 >
                   {isCancellingLocalBooking ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -4069,15 +4088,19 @@ function BookingsPageContent() {
                     setIsEditPlateDialogOpen(true)
                   }}
                   disabled={savingPlate}
+                  className="w-full sm:w-auto"
                 >
                   <Pencil className="mr-2 h-4 w-4" />
                   Modifică nr.
                 </Button>
               )}
-            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setIsViewDialogOpen(false)} className="w-full sm:w-auto">
               Închide
             </Button>
-          </DialogFooter>
+              </div>
+            </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
