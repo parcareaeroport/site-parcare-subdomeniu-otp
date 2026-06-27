@@ -12,6 +12,10 @@ export async function GET(request: Request) {
   const orderId = searchParams.get("orderId") || ""
 
   const deepLink = `${DEEP_LINK_SCHEME}?orderId=${encodeURIComponent(orderId)}`
+  console.info("[netopia-redirect] GET redirect requested", {
+    orderId,
+    deepLink,
+  })
 
   return new Response(null, {
     status: 302,
@@ -24,6 +28,10 @@ export async function POST(request: Request) {
   const orderId = searchParams.get("orderId") || ""
 
   const deepLink = `${DEEP_LINK_SCHEME}?orderId=${encodeURIComponent(orderId)}`
+  console.info("[netopia-redirect] POST redirect requested", {
+    orderId,
+    deepLink,
+  })
 
   return new Response(
     `<!DOCTYPE html>

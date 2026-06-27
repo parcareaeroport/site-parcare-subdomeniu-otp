@@ -52,6 +52,12 @@ export async function POST(request: Request) {
     const orderID = order?.orderID || ""
     const paymentStatus = payment?.status
     const errorCode = error?.code?.toString()
+    console.info("[netopia-ipn] IPN payload parsed", {
+      orderId: orderID,
+      ntpID,
+      paymentStatus,
+      errorCode,
+    })
 
     if (!orderID && !ntpID) {
       console.warn("[netopia-ipn] No orderID or ntpID in IPN body")
@@ -107,6 +113,12 @@ export async function POST(request: Request) {
     const paid = isPaymentSuccessful(paymentStatus, errorCode)
 
     if (!paid) {
+      console.warn("[netopia-ipn] Payment marked as failed", {
+        orderId: orderID,
+        ntpID,
+        paymentStatus,
+        errorCode,
+      })
       await updateDoc(pendingRef, {
         status: "failed",
         netopiaStatus: paymentStatus,
@@ -118,6 +130,14 @@ export async function POST(request: Request) {
     }
 
     const payload = pending.bookingPayload
+    console.info("[netopia-ipn] Starting booking creation from IPN", {
+      orderId: orderID,
+      ntpID,
+      userId: pending.userId,
+      paymentTestMode: !!pending.paymentTestMode,
+      chargedAmount,
+      realAmount,
+    })
     const formData = mapMobilePayloadToFormData(payload)
     await recordPaymentAuditEvent(orderID, "booking_started", {
       status: "info",
@@ -175,6 +195,13 @@ export async function POST(request: Request) {
         : null,
       bookingSuccess: bookingResult.success,
       updatedAt: serverTimestamp(),
+    })
+    console.info("[netopia-ipn] Pending payment updated after booking", {
+      orderId: orderID,
+      ntpID: ntpID || pending.ntpID,
+      bookingSuccess: bookingResult.success,
+      bookingId: bookingResult.firestoreId,
+      bookingNumber: bookingResult.bookingNumber || null,
     })
 
     await recordPaymentAuditEvent(orderID, bookingResult.success ? "booking_completed" : "booking_failed", {
