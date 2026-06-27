@@ -11,6 +11,8 @@ import { resolveActivePaymentProvider } from "@/lib/payments/payment-provider"
 import { createMobileNetopiaPaymentSession } from "@/lib/payments/netopia-provider"
 import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
 import { getNetopiaForcedTestConfig } from "@/lib/payments/netopia-test-mode"
+import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
+import { validateMobileBookingWindow } from "@/lib/mobile-booking-window"
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
@@ -77,6 +79,64 @@ export async function POST(request: Request) {
     }
 
     let payload = validated.data
+    const windowValidation = validateMobileBookingWindow({
+      startDate: payload.startDate,
+      startTime: payload.startTime,
+      endDate: payload.endDate,
+      endTime: payload.endTime,
+    })
+
+    if (!windowValidation.ok) {
+      console.warn("[netopia-init] Booking window blocked before payment", {
+        userId: auth.user.uid,
+        code: windowValidation.code,
+        licensePlate: payload.licensePlate,
+        startDate: payload.startDate,
+        startTime: payload.startTime,
+        endDate: payload.endDate,
+        endTime: payload.endTime,
+      })
+      return mobileJsonResponse(
+        {
+          success: false,
+          error: windowValidation.message,
+          code: windowValidation.code,
+        },
+        400
+      )
+    }
+
+    const duplicateCheck = await checkExistingReservationByLicensePlate(
+      payload.licensePlate,
+      payload.startDate,
+      payload.endDate,
+      payload.startTime,
+      payload.endTime
+    )
+
+    if (duplicateCheck.exists) {
+      console.warn("[netopia-init] Duplicate reservation blocked before payment", {
+        userId: auth.user.uid,
+        licensePlate: payload.licensePlate,
+        startDate: payload.startDate,
+        startTime: payload.startTime,
+        endDate: payload.endDate,
+        endTime: payload.endTime,
+        existingBookingId: duplicateCheck.existingBooking?.id,
+        existingBookingNumber: duplicateCheck.existingBooking?.apiBookingNumber,
+      })
+      return mobileJsonResponse(
+        {
+          success: false,
+          error: "Există deja o rezervare activă pentru acest număr de înmatriculare în perioada selectată.",
+          code: "DUPLICATE_LICENSE_PLATE_PERIOD",
+          duplicateReservation: true,
+          existingBooking: duplicateCheck.existingBooking,
+        },
+        409
+      )
+    }
+
     const profileCol = auth.user.isGuest ? ("guests" as const) : ("users" as const)
     const loyaltyPricing = await applyLoyaltyPricingToMobilePayload(
       payload,

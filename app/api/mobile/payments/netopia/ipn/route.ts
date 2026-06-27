@@ -18,6 +18,10 @@ function isPaymentSuccessful(status: number | undefined, errorCode: string | und
   return false
 }
 
+function withoutUndefined<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, entryValue]) => entryValue !== undefined)) as T
+}
+
 export async function OPTIONS() {
   return new Response(null, {
     status: 204,
@@ -106,7 +110,11 @@ export async function POST(request: Request) {
       },
     })
 
-    if (pending.status === "paid" || pending.status === "completed") {
+    if (
+      pending.status === "paid" ||
+      pending.status === "completed" ||
+      pending.status === "booking_failed_refund_required"
+    ) {
       return Response.json({ errorCode: 0, message: "Already processed" }, { status: 200 })
     }
 
@@ -121,8 +129,10 @@ export async function POST(request: Request) {
       })
       await updateDoc(pendingRef, {
         status: "failed",
-        netopiaStatus: paymentStatus,
-        netopiaErrorCode: errorCode,
+        ...withoutUndefined({
+          netopiaStatus: paymentStatus,
+          netopiaErrorCode: errorCode ?? null,
+        }),
         netopiaErrorMessage: error?.message || "",
         updatedAt: serverTimestamp(),
       })
@@ -182,20 +192,22 @@ export async function POST(request: Request) {
       paymentTestChargedAmount: chargedAmount,
     })
 
-    await updateDoc(pendingRef, {
-      status: "paid",
-      ntpID: ntpID || pending.ntpID,
-      netopiaStatus: paymentStatus,
-      netopiaErrorCode: errorCode,
-      bookingId: bookingResult.success
-        ? bookingResult.firestoreId || null
-        : null,
-      bookingNumber: bookingResult.success
-        ? bookingResult.bookingNumber || null
-        : null,
-      bookingSuccess: bookingResult.success,
-      updatedAt: serverTimestamp(),
-    })
+    await updateDoc(
+      pendingRef,
+      withoutUndefined({
+        status: bookingResult.success ? "paid" : "booking_failed_refund_required",
+        ntpID: ntpID || pending.ntpID,
+        netopiaStatus: paymentStatus,
+        netopiaErrorCode: errorCode ?? null,
+        bookingId: bookingResult.success ? bookingResult.firestoreId || null : null,
+        bookingNumber: bookingResult.success ? bookingResult.bookingNumber || null : null,
+        bookingSuccess: bookingResult.success,
+        bookingError: bookingResult.success ? undefined : bookingResult.message || "Booking creation failed after paid Netopia payment",
+        duplicateReservation: bookingResult.success ? undefined : !!(bookingResult as any).duplicateReservation,
+        refundRequired: bookingResult.success ? undefined : true,
+        updatedAt: serverTimestamp(),
+      })
+    )
     console.info("[netopia-ipn] Pending payment updated after booking", {
       orderId: orderID,
       ntpID: ntpID || pending.ntpID,
@@ -224,6 +236,17 @@ export async function POST(request: Request) {
         `bookingSuccess=${bookingResult.success}, ` +
         `bookingNumber=${bookingResult.bookingNumber || "N/A"}`
     )
+    console.info("[netopia-ipn] IPN fully finalized", {
+      orderId: orderID,
+      ntpID: ntpID || pending.ntpID,
+      bookingSuccess: bookingResult.success,
+      bookingId: bookingResult.firestoreId || null,
+      bookingNumber: bookingResult.bookingNumber || null,
+      pendingPaymentStatus: bookingResult.success ? "paid" : "booking_failed_refund_required",
+      paymentTestMode: !!pending.paymentTestMode,
+      chargedAmount,
+      realAmount,
+    })
 
     return Response.json({ errorCode: 0, message: "OK" }, { status: 200 })
   } catch (err) {

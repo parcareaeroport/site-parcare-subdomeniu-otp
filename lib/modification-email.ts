@@ -15,7 +15,6 @@ export type ModificationRequested = {
   newEndDate?: string
   newEndTime?: string
   newLicensePlate?: string
-  newNumberOfPersons?: number
   note?: string
 }
 
@@ -27,6 +26,12 @@ export type ModificationEmailData = {
   bookingNumber: string
   current: ModificationCurrent
   requested: ModificationRequested
+  priceImpact?: {
+    currentAmount: number
+    newAmount: number
+    difference: number
+    billableDays: number
+  }
 }
 
 function createEmailTransporter() {
@@ -65,16 +70,17 @@ function generateModificationEmailHTML(data: ModificationEmailData): string {
     diffRow("Data ieșire", current.endDate, requested.newEndDate),
     diffRow("Ora ieșire", current.endTime, requested.newEndTime),
     diffRow("Nr. înmatriculare", current.licensePlate, requested.newLicensePlate),
-    diffRow(
-      "Persoane transfer",
-      String(current.numberOfPersons ?? "—"),
-      requested.newNumberOfPersons !== undefined
-        ? String(requested.newNumberOfPersons)
-        : undefined
-    ),
   ]
     .filter(Boolean)
     .join("\n")
+  const priceImpact = data.priceImpact
+  const pricePolicy = priceImpact
+    ? priceImpact.difference > 0
+      ? `Clientul trebuie să achite diferența de ${priceImpact.difference.toFixed(2)} lei înainte de confirmarea modificării.`
+      : priceImpact.difference < 0
+        ? `Valoarea scade cu ${Math.abs(priceImpact.difference).toFixed(2)} lei; diferența rămâne avans pentru o rezervare viitoare.`
+        : "Nu există diferență de preț."
+    : ""
 
   return `
     <!DOCTYPE html>
@@ -144,11 +150,23 @@ function generateModificationEmailHTML(data: ModificationEmailData): string {
             ? `<h2>Notă client</h2><div class="note-box">${note.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</div>`
             : ""}
 
+          ${priceImpact
+            ? `<h2>Impact preț</h2>
+              <table class="details-table">
+                <tr><th>Valoare actuală</th><td colspan="2">${priceImpact.currentAmount.toFixed(2)} lei</td></tr>
+                <tr><th>Valoare estimată nouă</th><td colspan="2">${priceImpact.newAmount.toFixed(2)} lei</td></tr>
+                <tr><th>Diferență</th><td colspan="2"><strong>${priceImpact.difference.toFixed(2)} lei</strong></td></tr>
+                <tr><th>Zile taxabile nou</th><td colspan="2">${priceImpact.billableDays}</td></tr>
+                <tr><th>Regulă</th><td colspan="2">${pricePolicy}</td></tr>
+              </table>`
+            : ""}
+
           <div class="highlight">
             <strong>Acțiuni recomandate:</strong><br>
             • Verificați disponibilitatea pentru noile date<br>
+            • Aplicați regula de preț: diferență de încasat sau avans pentru rezervare viitoare<br>
             • Contactați clientul pentru confirmare<br>
-            • Actualizați manual rezervarea în Multipark și în admin
+            • Clarificați cu Alin dacă modificarea se face direct în Multipark sau prin anulare + rezervare nouă
           </div>
         </div>
 
@@ -178,7 +196,6 @@ export function validateModificationEmailData(
     !!requested.newEndDate ||
     !!requested.newEndTime ||
     !!requested.newLicensePlate ||
-    requested.newNumberOfPersons !== undefined ||
     !!(requested.note && requested.note.trim())
   if (!hasAnyChange) {
     return "Niciun câmp modificat"

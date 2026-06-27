@@ -4,8 +4,12 @@ import {
   sendModificationRequestEmail,
   type ModificationRequested,
 } from "@/lib/modification-email"
+import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
+import { resolveMobileBookingQuote } from "@/lib/booking-pricing"
 import { getMobileUserProfile } from "@/lib/mobile-user-service"
 import { db, doc, getDoc, serverTimestamp, updateDoc } from "@/lib/server-firestore"
+
+const MODIFICATION_MIN_LEAD_MS = 24 * 60 * 60 * 1000
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
@@ -47,6 +51,10 @@ function parseDateTime(date: string, time: string): number | null {
   return Number.isNaN(t) ? null : t
 }
 
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -83,10 +91,6 @@ export async function POST(
       newEndDate: asString(body.newEndDate),
       newEndTime: asString(body.newEndTime),
       newLicensePlate: asString(body.newLicensePlate)?.toUpperCase(),
-      newNumberOfPersons:
-        body.newNumberOfPersons !== undefined && body.newNumberOfPersons !== null
-          ? Number(body.newNumberOfPersons)
-          : undefined,
       note: asString(body.note),
     }
 
@@ -102,20 +106,22 @@ export async function POST(
     if (requested.newEndTime && !isValidTime(requested.newEndTime)) {
       return mobileJsonResponse({ success: false, error: "Format oră ieșire invalid (HH:MM)" }, 400)
     }
-    if (
-      requested.newNumberOfPersons !== undefined &&
-      (!Number.isFinite(requested.newNumberOfPersons) || requested.newNumberOfPersons <= 0)
-    ) {
-      return mobileJsonResponse(
-        { success: false, error: "Număr persoane invalid" },
-        400
-      )
-    }
-
     const currentStartDate = String(booking.startDate || "")
     const currentStartTime = String(booking.startTime || "")
     const currentEndDate = String(booking.endDate || "")
     const currentEndTime = String(booking.endTime || "")
+    const currentStartMs = parseDateTime(currentStartDate, currentStartTime)
+
+    if (currentStartMs === null) {
+      return mobileJsonResponse({ success: false, error: "Rezervarea are data de intrare invalidă." }, 400)
+    }
+
+    if (currentStartMs - Date.now() < MODIFICATION_MIN_LEAD_MS) {
+      return mobileJsonResponse(
+        { success: false, error: "Rezervarea poate fi modificată doar cu minimum 24h înainte de intrare." },
+        403
+      )
+    }
 
     const finalStartDate = requested.newStartDate || currentStartDate
     const finalStartTime = requested.newStartTime || currentStartTime
@@ -140,6 +146,46 @@ export async function POST(
           400
         )
       }
+
+      const availability = await checkAvailability(
+        finalStartDate,
+        finalStartTime,
+        finalEndDate,
+        finalEndTime,
+        { excludeBookingId: id }
+      )
+
+      if (!availability.available) {
+        return mobileJsonResponse(
+          {
+            success: false,
+            error: "Nu sunt locuri disponibile pentru noua perioadă. Poți solicita anularea rezervării.",
+          },
+          409
+        )
+      }
+    }
+
+    const finalLicensePlate = requested.newLicensePlate || String(booking.licensePlate || "")
+    const duplicateCheck = await checkExistingReservationByLicensePlate(
+      finalLicensePlate,
+      finalStartDate,
+      finalEndDate,
+      finalStartTime,
+      finalEndTime,
+      { excludeBookingId: id }
+    )
+
+    if (duplicateCheck.exists) {
+      return mobileJsonResponse(
+        {
+          success: false,
+          error: "Există deja o rezervare activă pentru această mașină în noua perioadă.",
+          duplicateReservation: true,
+          existingBooking: duplicateCheck.existingBooking,
+        },
+        409
+      )
     }
 
     const hasAnyChange =
@@ -148,7 +194,6 @@ export async function POST(
       !!requested.newEndDate ||
       !!requested.newEndTime ||
       !!requested.newLicensePlate ||
-      requested.newNumberOfPersons !== undefined ||
       !!(requested.note && requested.note.trim())
 
     if (!hasAnyChange) {
@@ -168,6 +213,19 @@ export async function POST(
       booking.numberOfPersons !== undefined && booking.numberOfPersons !== null
         ? Number(booking.numberOfPersons)
         : "—"
+    const currentAmount = Number(booking.amount || 0) || 0
+    const newQuote = await resolveMobileBookingQuote({
+      startDate: finalStartDate,
+      startTime: finalStartTime,
+      endDate: finalEndDate,
+      endTime: finalEndTime,
+    })
+    const newAmount =
+      String(booking.paymentMethod || "").toLowerCase() === "at_parking" ||
+      String(booking.source || "") === "pay_on_site"
+        ? newQuote.atParkingTotal
+        : newQuote.onlineTotal
+    const priceDifference = roundMoney(newAmount - currentAmount)
 
     if (!email) {
       return mobileJsonResponse({ success: false, error: "Email utilizator lipsă" }, 400)
@@ -177,6 +235,17 @@ export async function POST(
       modificationRequested: true,
       modificationRequestedAt: serverTimestamp(),
       modificationRequestPayload: requested,
+      modificationPriceImpact: {
+        currentAmount,
+        newAmount,
+        difference: priceDifference,
+        policy:
+          priceDifference > 0
+            ? "Clientul achită diferența înainte de confirmarea modificării."
+            : priceDifference < 0
+              ? "Diferența rămâne avans pentru o rezervare viitoare."
+              : "Fără diferență de preț.",
+      },
     })
 
     const result = await sendModificationRequestEmail({
@@ -194,6 +263,12 @@ export async function POST(
         numberOfPersons,
       },
       requested,
+      priceImpact: {
+        currentAmount,
+        newAmount,
+        difference: priceDifference,
+        billableDays: newQuote.days,
+      },
     })
 
     return mobileJsonResponse({ success: true, ...result })

@@ -169,7 +169,8 @@ export async function checkAvailability(
   startDate: string,
   startTime: string,
   endDate: string,
-  endTime: string
+  endTime: string,
+  options?: { excludeBookingId?: string }
 ): Promise<{
   available: boolean
   conflictingBookings: number
@@ -184,7 +185,8 @@ export async function checkAvailability(
       start: newStartDateTime.toISOString(),
       end: newEndDateTime.toISOString(),
       period: `${startDate} ${startTime} → ${endDate} ${endTime}`,
-      durationHours: ((newEndDateTime.getTime() - newStartDateTime.getTime()) / (1000 * 60 * 60)).toFixed(1)
+      durationHours: ((newEndDateTime.getTime() - newStartDateTime.getTime()) / (1000 * 60 * 60)).toFixed(1),
+      excludeBookingId: options?.excludeBookingId
     })
     
     // Încarcă setările din Firestore pentru a obține numărul maxim real
@@ -220,6 +222,7 @@ export async function checkAvailability(
       const candidatesSnap = await getDocs(candidatesQuery)
       const nowTs = Date.now()
       candidatesSnap.forEach(docSnap => {
+        if (options?.excludeBookingId && docSnap.id === options.excludeBookingId) return
         const b: any = docSnap.data()
         if (getLprPresenceState({ lpr: b?.lpr }).isEffectivelyInside) {
           if (b.endDate && b.endTime) {
@@ -323,6 +326,9 @@ export async function checkAvailability(
     // Calculează și rezervările care se suprapun direct cu noua rezervare
     snapshot.forEach((docSnapshot) => {
       const booking = docSnapshot.data()
+      if (options?.excludeBookingId && docSnapshot.id === options.excludeBookingId) {
+        return
+      }
       
       const existingStartDateTime = new Date(`${booking.startDate}T${booking.startTime}:00`)
       const existingEndDateTime = new Date(`${booking.endDate}T${booking.endTime}:00`)
@@ -476,7 +482,8 @@ export async function checkExistingReservationByLicensePlate(
   newStartDate: string,
   newEndDate: string,
   newStartTime: string,
-  newEndTime: string
+  newEndTime: string,
+  options?: { excludeBookingId?: string }
 ): Promise<{
   exists: boolean
   existingBooking?: {
@@ -530,6 +537,9 @@ export async function checkExistingReservationByLicensePlate(
     
     for (const docSnapshot of snapshot.docs) {
       const booking = docSnapshot.data()
+      if (options?.excludeBookingId && docSnapshot.id === options.excludeBookingId) {
+        continue
+      }
       
       // Normalizează numărul de înmatriculare din DB pentru comparație
       const normalizedDbLicensePlate = normalizeLicensePlate(booking.licensePlate || '')

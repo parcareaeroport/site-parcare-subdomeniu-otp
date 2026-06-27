@@ -73,6 +73,8 @@ export async function GET(request: Request) {
       bookingId?: string
       bookingNumber?: string
       bookingSuccess?: boolean
+      bookingError?: string
+      refundRequired?: boolean
     }
 
     if (data.bookingSuccess && data.bookingId) {
@@ -154,7 +156,7 @@ export async function GET(request: Request) {
     const status =
       data.status === "paid" || data.status === "completed"
         ? "paid"
-        : data.status === "failed"
+        : data.status === "failed" || data.status === "booking_failed_refund_required"
           ? "failed"
           : "pending"
 
@@ -165,6 +167,7 @@ export async function GET(request: Request) {
       bookingId: data.bookingId,
       bookingNumber: data.bookingNumber,
       bookingSuccess: data.bookingSuccess,
+      refundRequired: data.refundRequired,
     })
     return mobileJsonResponse({
       success: true,
@@ -172,6 +175,8 @@ export async function GET(request: Request) {
       orderId,
       bookingId: data.bookingId || undefined,
       bookingNumber: data.bookingNumber || undefined,
+      error: data.bookingError || undefined,
+      refundRequired: data.refundRequired || undefined,
     })
   } catch (error) {
     console.error("[netopia-status] Error during verification", {

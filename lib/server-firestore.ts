@@ -20,6 +20,31 @@ type SetDocOptions = {
 
 export const db = adminDb
 
+function sanitizeFirestoreValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => sanitizeFirestoreValue(entry))
+      .filter((entry) => entry !== undefined) as T
+  }
+
+  if (value && typeof value === "object") {
+    const proto = Object.getPrototypeOf(value)
+    const isPlainObject = proto === Object.prototype || proto === null
+
+    if (!isPlainObject) {
+      return value
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .map(([key, entryValue]) => [key, sanitizeFirestoreValue(entryValue)])
+
+    return Object.fromEntries(entries) as T
+  }
+
+  return value
+}
+
 export function serverTimestamp() {
   return FieldValue.serverTimestamp()
 }
@@ -97,14 +122,15 @@ export async function addDoc(ref: any, data: any) {
 }
 
 export async function setDoc(ref: any, data: any, options?: SetDocOptions) {
+  const sanitized = sanitizeFirestoreValue(data)
   if (options?.merge) {
-    return await ref.set(data, { merge: true })
+    return await ref.set(sanitized, { merge: true })
   }
-  return await ref.set(data)
+  return await ref.set(sanitized)
 }
 
 export async function updateDoc(ref: any, data: any) {
-  return await ref.update(data)
+  return await ref.update(sanitizeFirestoreValue(data))
 }
 
 export async function runTransaction<T>(

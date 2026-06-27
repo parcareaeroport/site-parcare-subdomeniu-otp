@@ -234,16 +234,18 @@ export async function awardLoyaltyAfterBooking(
   try {
     await runTransaction(db, async (tx) => {
       const snap = (await tx.get(ref)) as unknown as {
-        exists(): boolean
+        exists?: boolean | (() => boolean)
         data(): { loyalty?: LoyaltyState }
       }
-      const existing = snap.exists()
+      const snapExists =
+        typeof snap.exists === "function" ? snap.exists() : Boolean(snap.exists)
+      const existing = snapExists
         ? normalizeLoyaltyState(snap.data().loyalty)
         : normalizeLoyaltyState(null)
 
       const nextLoyalty = advanceLoyaltyAfterBooking(existing, config)
 
-      if (snap.exists()) {
+      if (snapExists) {
         tx.update(ref, { loyalty: nextLoyalty, updatedAt: new Date() })
       } else {
         tx.set(ref, {

@@ -5,6 +5,8 @@ import {
 } from "@/lib/mobile-booking-mapper"
 import { applyLoyaltyPricingToMobilePayload } from "@/lib/mobile-loyalty-pricing"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
+import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
+import { validateMobileBookingWindow } from "@/lib/mobile-booking-window"
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
@@ -22,6 +24,45 @@ export async function POST(request: Request) {
     }
 
     let payload = validated.data
+    const windowValidation = validateMobileBookingWindow({
+      startDate: payload.startDate,
+      startTime: payload.startTime,
+      endDate: payload.endDate,
+      endTime: payload.endTime,
+    })
+
+    if (!windowValidation.ok) {
+      return mobileJsonResponse(
+        {
+          success: false,
+          error: windowValidation.message,
+          code: windowValidation.code,
+        },
+        400
+      )
+    }
+
+    const duplicateCheck = await checkExistingReservationByLicensePlate(
+      payload.licensePlate,
+      payload.startDate,
+      payload.endDate,
+      payload.startTime,
+      payload.endTime
+    )
+
+    if (duplicateCheck.exists) {
+      return mobileJsonResponse(
+        {
+          success: false,
+          error: "Există deja o rezervare activă pentru acest număr de înmatriculare în perioada selectată.",
+          code: "DUPLICATE_LICENSE_PLATE_PERIOD",
+          duplicateReservation: true,
+          existingBooking: duplicateCheck.existingBooking,
+        },
+        409
+      )
+    }
+
     if (auth.user.email && !payload.email) {
       payload.email = auth.user.email
     }
