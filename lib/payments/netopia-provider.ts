@@ -19,6 +19,24 @@ export type NetopiaPaymentSessionResult = {
   status: "pending" | "requires_action" | "paid" | "failed"
 }
 
+function sanitizeFirestoreValue<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeFirestoreValue(item))
+      .filter((item) => item !== undefined) as T
+  }
+
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .map(([key, entryValue]) => [key, sanitizeFirestoreValue(entryValue)])
+
+    return Object.fromEntries(entries) as T
+  }
+
+  return value
+}
+
 function getNetopiaConfig() {
   const apiKey = process.env.NETOPIA_API_KEY
   const posSignature = process.env.NETOPIA_POS_SIGNATURE
@@ -162,6 +180,10 @@ export async function createMobileNetopiaPaymentSession(
     paymentData?.payment?.ntpID?.toString() ||
     paymentData?.ntpID?.toString() ||
     ""
+  const bookingPayloadForStorage = sanitizeFirestoreValue({
+    ...payload,
+    postalCode: payload.postalCode || "000000",
+  })
 
   await setDoc(doc(db, "pendingPayments", orderId), {
     orderId,
@@ -172,7 +194,7 @@ export async function createMobileNetopiaPaymentSession(
     currency: "RON",
     status: "pending",
     paymentProvider: "netopia",
-    bookingPayload: payload,
+    bookingPayload: bookingPayloadForStorage,
     loyaltyFreeDayApplied: !!ctx.loyaltyFreeDayApplied,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
