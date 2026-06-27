@@ -8,6 +8,12 @@ type WhereConstraint = {
   value: any
 }
 
+type OrderByConstraint = {
+  kind: "orderBy"
+  fieldPath: string | FieldPath
+  directionStr?: FirebaseFirestore.OrderByDirection
+}
+
 type SetDocOptions = {
   merge?: boolean
 }
@@ -49,11 +55,24 @@ export function where(
   }
 }
 
-export function query(base: any, ...constraints: WhereConstraint[]) {
+export function orderBy(
+  fieldPath: string,
+  directionStr: FirebaseFirestore.OrderByDirection = "asc"
+): OrderByConstraint {
+  return {
+    kind: "orderBy",
+    fieldPath: fieldPath === "__name__" ? FieldPath.documentId() : fieldPath,
+    directionStr,
+  }
+}
+
+export function query(base: any, ...constraints: Array<WhereConstraint | OrderByConstraint>) {
   let q = base
   for (const constraint of constraints) {
     if (constraint?.kind === "where") {
       q = q.where(constraint.fieldPath as any, constraint.opStr, constraint.value)
+    } else if (constraint?.kind === "orderBy") {
+      q = q.orderBy(constraint.fieldPath as any, constraint.directionStr)
     }
   }
   return q
@@ -86,4 +105,11 @@ export async function setDoc(ref: any, data: any, options?: SetDocOptions) {
 
 export async function updateDoc(ref: any, data: any) {
   return await ref.update(data)
+}
+
+export async function runTransaction<T>(
+  firestore: FirebaseFirestore.Firestore,
+  updateFunction: (transaction: FirebaseFirestore.Transaction) => Promise<T>
+): Promise<T> {
+  return await firestore.runTransaction(updateFunction)
 }

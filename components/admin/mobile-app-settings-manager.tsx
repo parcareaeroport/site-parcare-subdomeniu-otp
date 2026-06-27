@@ -11,7 +11,7 @@ import { Loader2, Save, Smartphone, Gift, CreditCard } from "lucide-react"
 import { db } from "@/lib/firebase"
 import { doc, setDoc, onSnapshot } from "firebase/firestore"
 import { useToast } from "@/components/ui/use-toast"
-import { DEFAULT_LOYALTY_PROGRAM } from "@/lib/mobile-app-settings"
+import { DEFAULT_LOYALTY_PROGRAM } from "@/lib/mobile-app-settings.shared"
 
 type AppUpdateForm = {
   enabled: boolean

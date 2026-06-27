@@ -190,9 +190,12 @@ export async function redeemFreeDayIfEligible(
 
   try {
     const applied = await runTransaction(db, async (tx) => {
-      const snap = await tx.get(ref)
+      const snap = (await tx.get(ref)) as unknown as {
+        exists(): boolean
+        data(): { loyalty?: LoyaltyState }
+      }
       if (!snap.exists()) return false
-      const loyalty = normalizeLoyaltyState((snap.data() as { loyalty?: LoyaltyState }).loyalty)
+      const loyalty = normalizeLoyaltyState(snap.data().loyalty)
       if (loyalty.freeDaysAvailable <= 0) return false
 
       tx.update(ref, {
@@ -230,9 +233,12 @@ export async function awardLoyaltyAfterBooking(
 
   try {
     await runTransaction(db, async (tx) => {
-      const snap = await tx.get(ref)
+      const snap = (await tx.get(ref)) as unknown as {
+        exists(): boolean
+        data(): { loyalty?: LoyaltyState }
+      }
       const existing = snap.exists()
-        ? normalizeLoyaltyState((snap.data() as { loyalty?: LoyaltyState }).loyalty)
+        ? normalizeLoyaltyState(snap.data().loyalty)
         : normalizeLoyaltyState(null)
 
       const nextLoyalty = advanceLoyaltyAfterBooking(existing, config)

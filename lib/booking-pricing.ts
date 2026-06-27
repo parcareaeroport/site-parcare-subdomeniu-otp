@@ -215,7 +215,7 @@ export async function loadPriceTiersFromFirestore(): Promise<PriceTier[]> {
   try {
     const snap = await getDocs(query(collection(db, "prices"), orderBy("days")))
     const tiers: PriceTier[] = []
-    snap.forEach((docSnap) => {
+    snap.forEach((docSnap: { data(): Record<string, unknown> }) => {
       const tier = normalizePriceTier(docSnap.data() as Record<string, unknown>)
       if (tier) tiers.push(tier)
     })
