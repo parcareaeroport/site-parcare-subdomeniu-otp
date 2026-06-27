@@ -5,6 +5,8 @@ import {
   MOBILE_BOOKING_ORIGIN,
   validateMobileBookingPayload,
 } from "@/lib/mobile-booking-mapper"
+import { applyLoyaltyPricingToMobilePayload } from "@/lib/mobile-loyalty-pricing"
+import { getMobileAppSettings } from "@/lib/mobile-app-settings"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 
 export async function OPTIONS() {
@@ -16,16 +18,36 @@ export async function POST(request: Request) {
   if (!auth.ok) return auth.response
 
   try {
+    const settings = await getMobileAppSettings()
+    if (!settings.testPaymentEnabled) {
+      return mobileJsonResponse(
+        {
+          success: false,
+          error: "Plata test este dezactivată. Contactează administratorul.",
+        },
+        403
+      )
+    }
+
     const body = await request.json()
     const validated = validateMobileBookingPayload(body)
     if (!validated.ok) {
       return mobileJsonResponse({ success: false, error: validated.error }, 400)
     }
 
-    const payload = validated.data
+    let payload = validated.data
     if (auth.user.email && !payload.email) {
       payload.email = auth.user.email
     }
+
+    const profileCol = auth.user.isGuest ? ("guests" as const) : ("users" as const)
+    const loyaltyPricing = await applyLoyaltyPricingToMobilePayload(
+      payload,
+      auth.user.uid,
+      profileCol,
+      "online"
+    )
+    payload = loyaltyPricing.payload
 
     const formData = mapMobilePayloadToFormData(payload)
 
@@ -37,6 +59,7 @@ export async function POST(request: Request) {
       source: "test_mode",
       bookingOrigin: MOBILE_BOOKING_ORIGIN,
       userId: auth.user.uid,
+      profileIsGuest: auth.user.isGuest,
       paymentProvider: undefined,
       amount: payload.amount,
       days: payload.days,
@@ -52,6 +75,7 @@ export async function POST(request: Request) {
       companyAddress: payload.needInvoice ? payload.companyAddress || undefined : undefined,
       orderNotes: payload.orderNotes,
       termsAccepted: true,
+      loyaltyFreeDayApplied: loyaltyPricing.applied,
     })
 
     return mobileJsonResponse(result, result.success ? 200 : 400)

@@ -7,6 +7,7 @@ import { CalendarIcon, Clock, Loader2, AlertTriangle, XCircle, MapPin, Navigatio
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useToast } from "@/components/ui/use-toast"
+import { computeBookingTotal, normalizePriceTier, resolvePriceTier } from "@/lib/booking-pricing"
 import { format, addDays, isBefore, isEqual } from "date-fns"
 import { ro } from "date-fns/locale"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -163,19 +164,17 @@ export default function ReservationForm() {
     const { days } = calculateDaysAndDuration()
     if (days === 0 || priceTiers.length === 0) return 0
 
-    const bestMatch = priceTiers.find((tier) => tier.days === days)
+    const tiers = priceTiers
+      .map((tier) =>
+        normalizePriceTier({
+          days: tier.days,
+          standardPrice: tier.standardPrice,
+          discountPercentage: tier.discountPercentage,
+        })
+      )
+      .filter((tier): tier is NonNullable<typeof tier> => tier !== null)
 
-    if (bestMatch) {
-      const finalPrice = bestMatch.standardPrice * (1 - bestMatch.discountPercentage / 100)
-      return finalPrice
-    } else {
-      const oneDayPriceTier = priceTiers.find((tier) => tier.days === 1)
-      if (oneDayPriceTier) {
-        const finalPricePerDay = oneDayPriceTier.standardPrice * (1 - oneDayPriceTier.discountPercentage / 100)
-        return finalPricePerDay * days
-      }
-      return days * 50 // Fallback
-    }
+    return computeBookingTotal(days, tiers, "online")
   }
 
   const handleStartDateChange = (date: Date | undefined) => {
@@ -548,8 +547,19 @@ export default function ReservationForm() {
         return
       }
 
-      const priceDetailsMatch = priceTiers.find((p) => p.days === days)
-      const oneDayPriceTierMatch = priceTiers.find((p) => p.days === 1)
+      const tiers = priceTiers
+        .map((tier) =>
+          normalizePriceTier({
+            days: tier.days,
+            standardPrice: tier.standardPrice,
+            discountPercentage: tier.discountPercentage,
+          })
+        )
+        .filter((tier): tier is NonNullable<typeof tier> => tier !== null)
+      const resolvedTier = resolvePriceTier(days, tiers)
+      const priceDetailsMatch = resolvedTier
+        ? priceTiers.find((p) => p.days === resolvedTier.days)
+        : undefined
 
       let priceDetailsPayload: any = {
         calculatedAtBooking: true,
@@ -565,15 +575,7 @@ export default function ReservationForm() {
           standardPriceTier: priceDetailsMatch.standardPrice,
           discountPercentageTier: priceDetailsMatch.discountPercentage,
           calculatedAtBooking: true,
-          isFallback: false,
-        }
-      } else if (oneDayPriceTierMatch) {
-        priceDetailsPayload = {
-          daysTier: oneDayPriceTierMatch.days,
-          standardPriceTier: oneDayPriceTierMatch.standardPrice,
-          discountPercentageTier: oneDayPriceTierMatch.discountPercentage,
-          calculatedAtBooking: true,
-          isFallback: true,
+          isFallback: resolvedTier?.days !== days,
         }
       }
 

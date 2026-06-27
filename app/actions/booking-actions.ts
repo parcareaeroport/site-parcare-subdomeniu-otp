@@ -92,6 +92,10 @@ interface CompleteBookingData {
   paymentProvider?: "stripe" | "netopia"
   channel?: "mobile"
   
+  // Loialitate
+  loyaltyFreeDayApplied?: boolean
+  loyaltyFreeDaysUsed?: number
+  
   // Metadata
   createdAt: any // serverTimestamp
   lastUpdated?: any
@@ -661,6 +665,8 @@ export async function createBookingWithFirestore(
     orderNotes?: string
     // Termeni și condiții
     termsAccepted?: boolean
+    loyaltyFreeDayApplied?: boolean
+    profileIsGuest?: boolean
   }
 ) {
   const debugLogs: string[] = []
@@ -857,6 +863,10 @@ export async function createBookingWithFirestore(
       if (additionalData.termsAccepted) {
         completeBookingData.termsAcceptedAt = serverTimestamp()
       }
+      if (additionalData.loyaltyFreeDayApplied) {
+        completeBookingData.loyaltyFreeDayApplied = true
+        completeBookingData.loyaltyFreeDaysUsed = 1
+      }
     }
     
     if (apiResult.success) {
@@ -954,6 +964,23 @@ export async function createBookingWithFirestore(
       }
 
       console.log("✅ Rezervare confirmată:", firestoreResult.firestoreId)
+
+      try {
+        const { processLoyaltyForCompletedMobileBooking } = await import("@/lib/loyalty-program")
+        await processLoyaltyForCompletedMobileBooking({
+          userId: additionalData?.userId,
+          profileIsGuest: additionalData?.profileIsGuest,
+          bookingOrigin: additionalData?.bookingOrigin,
+          apiSuccess: apiResult.success,
+          status: completeBookingData.status,
+          billableDays: additionalData?.days,
+          loyaltyFreeDayApplied: additionalData?.loyaltyFreeDayApplied,
+          firestoreId: firestoreResult.firestoreId,
+        })
+      } catch (loyaltyError) {
+        console.warn("[createBookingWithFirestore] Loyalty processing failed (non-critical):", loyaltyError)
+      }
+
       const bookingDocRef = firestoreResult.firestoreId ? doc(db, "bookings", firestoreResult.firestoreId) : null
       
       // Generează factură OBLIO automată pentru TOATE rezervările plătite ȘI în test mode

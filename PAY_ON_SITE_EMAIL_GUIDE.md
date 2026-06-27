@@ -120,7 +120,7 @@ Rezervarea dumneavoastră a fost confirmată cu succes!
 • Anularea se poate face cu minimum 24 ore înainte
 • Pentru suport, contactați-ne folosind datele de mai jos
 
-[🚫 Anulează rezervarea]
+[🚫 Anulează]
 
 📞 Contactați-ne
 📞 0742.039.955 | 📧 contact.parcareaeroport@gmail.com

@@ -3,6 +3,7 @@ import {
   createMobilePayOnSiteBooking,
   validateMobileBookingPayload,
 } from "@/lib/mobile-booking-mapper"
+import { applyLoyaltyPricingToMobilePayload } from "@/lib/mobile-loyalty-pricing"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 
 export async function OPTIONS() {
@@ -20,13 +21,24 @@ export async function POST(request: Request) {
       return mobileJsonResponse({ success: false, error: validated.error }, 400)
     }
 
-    const payload = validated.data
+    let payload = validated.data
     if (auth.user.email && !payload.email) {
       payload.email = auth.user.email
     }
 
+    const profileCol = auth.user.isGuest ? ("guests" as const) : ("users" as const)
+    const loyaltyPricing = await applyLoyaltyPricingToMobilePayload(
+      payload,
+      auth.user.uid,
+      profileCol,
+      "at_parking"
+    )
+    payload = loyaltyPricing.payload
+
     const result = await createMobilePayOnSiteBooking(payload, {
       userId: auth.user.uid,
+      isGuest: auth.user.isGuest,
+      loyaltyFreeDayApplied: loyaltyPricing.applied,
     })
 
     return mobileJsonResponse(result, result.success ? 200 : 400)

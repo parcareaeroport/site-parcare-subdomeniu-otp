@@ -202,7 +202,9 @@ export async function POST(req: Request) {
         country: bookingMetadata.country || undefined,
         orderNotes: bookingMetadata.orderNotes || undefined,
         // Termeni și condiții
-        termsAccepted: bookingMetadata.termsAccepted ? bookingMetadata.termsAccepted === 'true' : undefined
+        termsAccepted: bookingMetadata.termsAccepted ? bookingMetadata.termsAccepted === 'true' : undefined,
+        loyaltyFreeDayApplied: bookingMetadata.loyaltyFreeDayApplied === 'true',
+        profileIsGuest: bookingMetadata.profileIsGuest === 'true',
       })
       
       const bookingDuration = Date.now() - bookingStartTime

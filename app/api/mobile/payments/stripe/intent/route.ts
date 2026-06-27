@@ -4,6 +4,7 @@ import {
   validateMobileBookingPayload,
   type MobileBookingPayload,
 } from "@/lib/mobile-booking-mapper"
+import { applyLoyaltyPricingToMobilePayload } from "@/lib/mobile-loyalty-pricing"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { resolveActivePaymentProvider } from "@/lib/payments/payment-provider"
 import { createMobileStripePaymentIntent } from "@/lib/payments/stripe-provider"
@@ -25,14 +26,9 @@ export async function POST(request: Request) {
       return mobileJsonResponse({ success: false, error: validated.error }, 400)
     }
 
-    const payload = validated.data
+    let payload = validated.data
     if (auth.user.email && !payload.email) {
       payload.email = auth.user.email
-    }
-
-    const parsedAmount = parseFloat(String(amount))
-    if (!parsedAmount || parsedAmount <= 0) {
-      return mobileJsonResponse({ success: false, error: "Invalid amount" }, 400)
     }
 
     const settings = await getMobileAppSettings()
@@ -49,6 +45,20 @@ export async function POST(request: Request) {
       )
     }
 
+    const profileCol = auth.user.isGuest ? ("guests" as const) : ("users" as const)
+    const loyaltyPricing = await applyLoyaltyPricingToMobilePayload(
+      payload,
+      auth.user.uid,
+      profileCol,
+      "online"
+    )
+    payload = loyaltyPricing.payload
+
+    const parsedAmount = loyaltyPricing.finalAmount
+    if (!parsedAmount || parsedAmount < 0) {
+      return mobileJsonResponse({ success: false, error: "Invalid amount" }, 400)
+    }
+
     const resolvedOrderId =
       typeof orderId === "string" && orderId.trim()
         ? orderId.trim()
@@ -56,7 +66,12 @@ export async function POST(request: Request) {
 
     const stripeResult = await createMobileStripePaymentIntent(
       payload,
-      { userId: auth.user.uid, paymentProvider: "stripe" },
+      {
+        userId: auth.user.uid,
+        isGuest: auth.user.isGuest,
+        paymentProvider: "stripe",
+        loyaltyFreeDayApplied: loyaltyPricing.applied,
+      },
       parsedAmount,
       resolvedOrderId
     )
@@ -67,6 +82,8 @@ export async function POST(request: Request) {
       clientSecret: stripeResult.clientSecret,
       paymentIntentId: stripeResult.paymentIntentId,
       orderId: resolvedOrderId,
+      amount: parsedAmount,
+      loyaltyFreeDayApplied: loyaltyPricing.applied,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"

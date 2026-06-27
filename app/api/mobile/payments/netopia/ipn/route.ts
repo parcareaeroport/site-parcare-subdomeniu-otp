@@ -1,15 +1,154 @@
-import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
+import { createBookingWithFirestore } from "@/app/actions/booking-actions"
+import {
+  mapMobilePayloadToFormData,
+  MOBILE_BOOKING_ORIGIN,
+  type MobileBookingPayload,
+} from "@/lib/mobile-booking-mapper"
+import { db, doc, getDoc, updateDoc, serverTimestamp } from "@/lib/server-firestore"
 
-export async function OPTIONS() {
-  return mobileOptionsResponse()
+export const dynamic = "force-dynamic"
+
+const NETOPIA_STATUS_PAID = 3
+const NETOPIA_STATUS_CONFIRMED = 5
+
+function isPaymentSuccessful(status: number | undefined, errorCode: string | undefined): boolean {
+  if (status === NETOPIA_STATUS_PAID || status === NETOPIA_STATUS_CONFIRMED) return true
+  if (errorCode === "00" || errorCode === "0") return true
+  return false
 }
 
-export async function POST() {
-  return mobileJsonResponse(
-    {
-      success: false,
-      error: "Netopia IPN handler is not yet activated",
+export async function OPTIONS() {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Verification-Token",
     },
-    501
-  )
+  })
+}
+
+/**
+ * NETOPIA IPN (Instant Payment Notification) handler.
+ *
+ * NETOPIA POSTs here after a payment attempt to notify us of the result.
+ * We verify the data, match it to a pending payment, and create the booking.
+ */
+export async function POST(request: Request) {
+  try {
+    const body = await request.json()
+
+    // TODO: In production, verify IPN signature using the Verification-Token header
+    // and NETOPIA_PUBLIC_KEY via JWT verification (RS512). For sandbox testing this
+    // is skipped to allow integration testing without the full key setup.
+    // const verificationToken = request.headers.get("verification-token")
+
+    const payment = body?.payment || body?.data?.payment || {}
+    const order = body?.order || body?.data?.order || {}
+    const error = body?.error || body?.data?.error || {}
+
+    const ntpID = payment?.ntpID?.toString() || order?.ntpID?.toString() || ""
+    const orderID = order?.orderID || ""
+    const paymentStatus = payment?.status
+    const errorCode = error?.code?.toString()
+
+    if (!orderID && !ntpID) {
+      console.warn("[netopia-ipn] No orderID or ntpID in IPN body")
+      return Response.json({ errorCode: 0, message: "OK – no orderId" }, { status: 200 })
+    }
+
+    const pendingRef = doc(db, "pendingPayments", orderID)
+    const pendingSnap = await getDoc(pendingRef)
+
+    if (!pendingSnap.exists()) {
+      console.warn(`[netopia-ipn] No pending payment found for orderId=${orderID}`)
+      return Response.json({ errorCode: 0, message: "OK – unknown order" }, { status: 200 })
+    }
+
+    const pending = pendingSnap.data() as {
+      orderId: string
+      ntpID: string
+      userId: string
+      isGuest: boolean
+      amount: number
+      status: string
+      bookingPayload: MobileBookingPayload
+      loyaltyFreeDayApplied: boolean
+      bookingId?: string
+    }
+
+    if (pending.status === "paid" || pending.status === "completed") {
+      return Response.json({ errorCode: 0, message: "Already processed" }, { status: 200 })
+    }
+
+    const paid = isPaymentSuccessful(paymentStatus, errorCode)
+
+    if (!paid) {
+      await updateDoc(pendingRef, {
+        status: "failed",
+        netopiaStatus: paymentStatus,
+        netopiaErrorCode: errorCode,
+        netopiaErrorMessage: error?.message || "",
+        updatedAt: serverTimestamp(),
+      })
+      return Response.json({ errorCode: 0, message: "OK – payment failed" }, { status: 200 })
+    }
+
+    const payload = pending.bookingPayload
+    const formData = mapMobilePayloadToFormData(payload)
+
+    const bookingResult = await createBookingWithFirestore(formData, {
+      clientEmail: payload.email,
+      clientPhone: payload.phone,
+      numberOfPersons: payload.numberOfPersons ?? 1,
+      paymentStatus: "paid",
+      source: "webhook",
+      bookingOrigin: MOBILE_BOOKING_ORIGIN,
+      userId: pending.userId,
+      profileIsGuest: pending.isGuest,
+      paymentProvider: "netopia",
+      paymentIntentId: ntpID || orderID,
+      amount: pending.amount,
+      days: payload.days,
+      address: payload.address,
+      city: payload.city,
+      county: payload.county,
+      postalCode: payload.postalCode,
+      country: payload.country,
+      needInvoice: payload.needInvoice,
+      company: payload.needInvoice ? payload.company || undefined : undefined,
+      companyVAT: payload.needInvoice ? payload.companyVAT || undefined : undefined,
+      companyReg: payload.needInvoice ? payload.companyReg || undefined : undefined,
+      companyAddress: payload.needInvoice ? payload.companyAddress || undefined : undefined,
+      orderNotes: payload.orderNotes,
+      termsAccepted: true,
+      loyaltyFreeDayApplied: pending.loyaltyFreeDayApplied,
+    })
+
+    await updateDoc(pendingRef, {
+      status: "paid",
+      ntpID: ntpID || pending.ntpID,
+      netopiaStatus: paymentStatus,
+      netopiaErrorCode: errorCode,
+      bookingId: bookingResult.success
+        ? bookingResult.firestoreId || null
+        : null,
+      bookingNumber: bookingResult.success
+        ? bookingResult.bookingNumber || null
+        : null,
+      bookingSuccess: bookingResult.success,
+      updatedAt: serverTimestamp(),
+    })
+
+    console.log(
+      `[netopia-ipn] Payment confirmed for orderId=${orderID}, ` +
+        `bookingSuccess=${bookingResult.success}, ` +
+        `bookingNumber=${bookingResult.bookingNumber || "N/A"}`
+    )
+
+    return Response.json({ errorCode: 0, message: "OK" }, { status: 200 })
+  } catch (err) {
+    console.error("[netopia-ipn] Error processing IPN:", err)
+    return Response.json({ errorCode: 0, message: "OK – internal error logged" }, { status: 200 })
+  }
 }

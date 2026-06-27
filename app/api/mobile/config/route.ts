@@ -28,9 +28,12 @@ export async function GET() {
       paymentProvider: settings.paymentProvider,
       stripeEnabled: settings.stripeEnabled,
       netopiaEnabled: settings.netopiaEnabled,
+      netopia: settings.netopia,
       pricesEnabled: settings.pricesEnabled,
       reservationsEnabled,
       appUpdate: settings.appUpdate,
+      loyaltyProgram: settings.loyaltyProgram,
+      testPaymentEnabled: settings.testPaymentEnabled,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"

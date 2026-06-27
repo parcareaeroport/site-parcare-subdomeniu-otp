@@ -33,8 +33,10 @@ export type MobileBookingPayload = {
 
 export type MobileBookingContext = {
   userId: string
+  isGuest?: boolean
   paymentProvider?: MobilePaymentProvider
   paymentIntentId?: string
+  loyaltyFreeDayApplied?: boolean
 }
 
 export function validateMobileBookingPayload(
@@ -148,6 +150,8 @@ export function buildPayOnSiteAdditionalData(
     companyAddress: payload.needInvoice ? payload.companyAddress || undefined : undefined,
     orderNotes: payload.orderNotes,
     termsAccepted: true,
+    loyaltyFreeDayApplied: ctx.loyaltyFreeDayApplied,
+    profileIsGuest: ctx.isGuest,
   }
 }
 
@@ -179,6 +183,8 @@ export function buildPaidCardAdditionalData(
     companyAddress: payload.needInvoice ? payload.companyAddress || undefined : undefined,
     orderNotes: payload.orderNotes,
     termsAccepted: true,
+    loyaltyFreeDayApplied: ctx.loyaltyFreeDayApplied,
+    profileIsGuest: ctx.isGuest,
   }
 }
 
@@ -242,6 +248,12 @@ export function buildStripeMetadataFromMobilePayload(
   if (payload.orderNotes) metadata.orderNotes = payload.orderNotes
   if (payload.needInvoice !== undefined) {
     metadata.needInvoice = String(payload.needInvoice)
+  }
+  if (ctx.loyaltyFreeDayApplied) {
+    metadata.loyaltyFreeDayApplied = "true"
+  }
+  if (ctx.isGuest) {
+    metadata.profileIsGuest = "true"
   }
   metadata.termsAccepted = "true"
 

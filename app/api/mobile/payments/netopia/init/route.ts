@@ -4,6 +4,8 @@ import {
   validateMobileBookingPayload,
   type MobileBookingPayload,
 } from "@/lib/mobile-booking-mapper"
+import { applyLoyaltyPricingToMobilePayload } from "@/lib/mobile-loyalty-pricing"
+import type { NetopiaPaymentMethod } from "@/lib/mobile-netopia-types"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { resolveActivePaymentProvider } from "@/lib/payments/payment-provider"
 import { createMobileNetopiaPaymentSession } from "@/lib/payments/netopia-provider"
@@ -32,16 +34,32 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
-    const { amount, orderId, ...bookingFields } = body || {}
+    const {
+      amount,
+      orderId,
+      saveCard,
+      selectedPaymentToken,
+      paymentMethod,
+      ...bookingFields
+    } = body || {}
 
     const validated = validateMobileBookingPayload(bookingFields as MobileBookingPayload)
     if (!validated.ok) {
       return mobileJsonResponse({ success: false, error: validated.error }, 400)
     }
 
-    const payload = validated.data
-    const parsedAmount = parseFloat(String(amount))
-    if (!parsedAmount || parsedAmount <= 0) {
+    let payload = validated.data
+    const profileCol = auth.user.isGuest ? ("guests" as const) : ("users" as const)
+    const loyaltyPricing = await applyLoyaltyPricingToMobilePayload(
+      payload,
+      auth.user.uid,
+      profileCol,
+      "online"
+    )
+    payload = loyaltyPricing.payload
+
+    const parsedAmount = loyaltyPricing.finalAmount
+    if (!parsedAmount || parsedAmount < 0) {
       return mobileJsonResponse({ success: false, error: "Invalid amount" }, 400)
     }
 
@@ -50,21 +68,42 @@ export async function POST(request: Request) {
         ? orderId.trim()
         : `mobile_netopia_${auth.user.uid}_${Date.now()}`
 
+    const resolvedPaymentMethod: NetopiaPaymentMethod =
+      paymentMethod === "google_pay" || paymentMethod === "apple_pay"
+        ? paymentMethod
+        : "card"
+
     const session = await createMobileNetopiaPaymentSession(
       payload,
-      { userId: auth.user.uid, paymentProvider: "netopia" },
+      {
+        userId: auth.user.uid,
+        isGuest: auth.user.isGuest,
+        paymentProvider: "netopia",
+        loyaltyFreeDayApplied: loyaltyPricing.applied,
+      },
       parsedAmount,
-      resolvedOrderId
+      resolvedOrderId,
+      {
+        saveCard: !!saveCard,
+        selectedPaymentToken:
+          typeof selectedPaymentToken === "string" ? selectedPaymentToken : undefined,
+        paymentMethod: resolvedPaymentMethod,
+      }
     )
 
     return mobileJsonResponse({
       success: true,
       provider: "netopia",
       paymentUrl: session.paymentUrl,
+      authenticationUrl: session.authenticationUrl,
+      ntpID: session.ntpID,
+      status: session.status,
       orderId: resolvedOrderId,
+      amount: parsedAmount,
+      loyaltyFreeDayApplied: loyaltyPricing.applied,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
-    return mobileJsonResponse({ success: false, error: message }, 501)
+    return mobileJsonResponse({ success: false, error: message }, 500)
   }
 }

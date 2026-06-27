@@ -24,6 +24,8 @@ export type MobileUserBilling = {
     address?: string
     city?: string
     county?: string
+    country?: string
+    postalCode?: string
   }
   company?: {
     name?: string
@@ -44,6 +46,7 @@ export type MobileUserProfile = {
   loyalty?: {
     points: number
     reservationsCount: number
+    freeDaysAvailable?: number
   }
   createdAt?: unknown
   updatedAt?: unknown
@@ -86,7 +89,7 @@ export async function ensureMobileUserProfile(
     phone: partial?.phone,
     billing: partial?.billing || { type: "individual" },
     cars: partial?.cars || [],
-    loyalty: { points: 0, reservationsCount: 0 },
+    loyalty: { points: 0, reservationsCount: 0, freeDaysAvailable: 0 },
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }

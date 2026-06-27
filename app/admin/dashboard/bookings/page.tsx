@@ -3180,7 +3180,7 @@ function BookingsPageContent() {
                                     className="text-red-700 hover:text-white hover:bg-red-700 focus:text-white focus:bg-red-700"
                                   >
                                     <XCircle className="mr-2 h-4 w-4" />
-                                    Anulează rezervarea
+                                    Anulează
                                   </DropdownMenuItem>
                                 </>
                               )}
@@ -4054,7 +4054,7 @@ function BookingsPageContent() {
                   ) : (
                     <XCircle className="mr-2 h-4 w-4" />
                   )}
-                  Anulează rezervarea
+                  Anulează
                 </Button>
               )}
 
