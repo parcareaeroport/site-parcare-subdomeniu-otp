@@ -38,14 +38,36 @@ export async function createMobileNetopiaPaymentSession(
   _options?: NetopiaPaymentSessionOptions
 ): Promise<NetopiaPaymentSessionResult> {
   const { apiKey, posSignature, isLive, notifyUrl, redirectUrl } = getNetopiaConfig()
+  console.info("[netopia-provider] Config resolved", {
+    hasApiKey: !!apiKey,
+    hasPosSignature: !!posSignature,
+    isLive,
+    notifyUrl,
+    redirectUrl,
+    orderId,
+    userId: ctx.userId,
+    isGuest: !!ctx.isGuest,
+    amount,
+  })
 
   if (!apiKey || !posSignature) {
+    console.error("[netopia-provider] Missing configuration", {
+      hasApiKey: !!apiKey,
+      hasPosSignature: !!posSignature,
+      isLive,
+      orderId,
+    })
     throw new Error(
       "Netopia is not configured. Set NETOPIA_API_KEY and NETOPIA_POS_SIGNATURE environment variables."
     )
   }
 
   const baseUrl = isLive ? NETOPIA_LIVE_URL : NETOPIA_SANDBOX_URL
+  console.info("[netopia-provider] Preparing Netopia request", {
+    baseUrl,
+    orderId,
+    amount,
+  })
 
   const requestBody = {
     config: {
@@ -103,12 +125,31 @@ export async function createMobileNetopiaPaymentSession(
   })
 
   const result = await response.json()
+  console.info("[netopia-provider] Netopia response received", {
+    orderId,
+    httpStatus: response.status,
+    ok: response.ok,
+    resultCode: result?.code,
+    hasPaymentUrl:
+      !!result?.data?.payment?.paymentURL ||
+      !!result?.data?.paymentURL ||
+      !!result?.data?.customerAction?.url ||
+      !!result?.paymentURL ||
+      !!result?.customerAction?.url,
+  })
 
   if (!response.ok || (result.code && result.code !== 200 && result.code !== 100 && result.code !== 101)) {
     const errorMsg =
       result?.data?.error?.message ||
       result?.message ||
       `NETOPIA returned status ${response.status}`
+    console.error("[netopia-provider] Netopia returned an error", {
+      orderId,
+      httpStatus: response.status,
+      ok: response.ok,
+      resultCode: result?.code,
+      errorMsg,
+    })
     throw new Error(`Netopia error: ${errorMsg}`)
   }
 
@@ -135,6 +176,11 @@ export async function createMobileNetopiaPaymentSession(
     loyaltyFreeDayApplied: !!ctx.loyaltyFreeDayApplied,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+  })
+  console.info("[netopia-provider] Pending payment persisted", {
+    orderId,
+    ntpID,
+    status: "pending",
   })
 
   return {

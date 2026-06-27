@@ -19,10 +19,24 @@ export async function POST(request: Request) {
   if (!auth.ok) return auth.response
 
   try {
+    console.info("[netopia-init] Request received", {
+      userId: auth.user.uid,
+      isGuest: auth.user.isGuest,
+    })
+
     const settings = await getMobileAppSettings()
     const provider = resolveActivePaymentProvider(settings)
+    console.info("[netopia-init] Payment settings resolved", {
+      provider,
+      netopiaEnabled: settings.netopiaEnabled,
+      stripeEnabled: settings.stripeEnabled,
+    })
 
     if (provider !== "netopia" || !settings.netopiaEnabled) {
+      console.warn("[netopia-init] Netopia rejected by settings", {
+        provider,
+        netopiaEnabled: settings.netopiaEnabled,
+      })
       return mobileJsonResponse(
         {
           success: false,
@@ -42,9 +56,21 @@ export async function POST(request: Request) {
       paymentMethod,
       ...bookingFields
     } = body || {}
+    console.info("[netopia-init] Request body parsed", {
+      hasOrderId: typeof orderId === "string" && orderId.trim().length > 0,
+      saveCard: !!saveCard,
+      hasSelectedPaymentToken: typeof selectedPaymentToken === "string",
+      paymentMethod:
+        paymentMethod === "google_pay" || paymentMethod === "apple_pay"
+          ? paymentMethod
+          : "card",
+    })
 
     const validated = validateMobileBookingPayload(bookingFields as MobileBookingPayload)
     if (!validated.ok) {
+      console.warn("[netopia-init] Payload validation failed", {
+        error: validated.error,
+      })
       return mobileJsonResponse({ success: false, error: validated.error }, 400)
     }
 
@@ -57,9 +83,20 @@ export async function POST(request: Request) {
       "online"
     )
     payload = loyaltyPricing.payload
+    console.info("[netopia-init] Loyalty pricing resolved", {
+      userId: auth.user.uid,
+      profileCol,
+      applied: loyaltyPricing.applied,
+      baseAmount: loyaltyPricing.baseAmount,
+      finalAmount: loyaltyPricing.finalAmount,
+      billableDays: loyaltyPricing.billableDays,
+    })
 
     const parsedAmount = loyaltyPricing.finalAmount
     if (!parsedAmount || parsedAmount < 0) {
+      console.warn("[netopia-init] Invalid amount after loyalty pricing", {
+        parsedAmount,
+      })
       return mobileJsonResponse({ success: false, error: "Invalid amount" }, 400)
     }
 
@@ -73,6 +110,11 @@ export async function POST(request: Request) {
         ? paymentMethod
         : "card"
 
+    console.info("[netopia-init] Creating Netopia session", {
+      orderId: resolvedOrderId,
+      amount: parsedAmount,
+      paymentMethod: resolvedPaymentMethod,
+    })
     const session = await createMobileNetopiaPaymentSession(
       payload,
       {
@@ -90,6 +132,13 @@ export async function POST(request: Request) {
         paymentMethod: resolvedPaymentMethod,
       }
     )
+    console.info("[netopia-init] Netopia session created", {
+      orderId: resolvedOrderId,
+      status: session.status,
+      hasPaymentUrl: !!session.paymentUrl,
+      hasAuthenticationUrl: !!session.authenticationUrl,
+      hasNtpId: !!session.ntpID,
+    })
 
     return mobileJsonResponse({
       success: true,
@@ -104,6 +153,12 @@ export async function POST(request: Request) {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
+    console.error("[netopia-init] Request failed", {
+      userId: auth.user.uid,
+      isGuest: auth.user.isGuest,
+      message,
+      stack: error instanceof Error ? error.stack : undefined,
+    })
     return mobileJsonResponse({ success: false, error: message }, 500)
   }
 }
