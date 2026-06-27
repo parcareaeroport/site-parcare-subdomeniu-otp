@@ -1159,6 +1159,8 @@ function BookingsPageContent() {
     return b.paymentStatus === "paid" || String(b.status || "") === "confirmed_paid"
   }
 
+  const isMobileAppBooking = (b: Booking) => b.bookingOrigin === "mobile-app" || b.channel === "mobile"
+
   const canRetryOblioInvoice = (booking?: Booking | null) => {
     if (!booking) return false
     const source = String(booking.source || "")
@@ -1194,6 +1196,10 @@ function BookingsPageContent() {
     .filter((b) => !isLostBooking(b) && isOnlinePaidBooking(b))
     .reduce((s, b) => s + computeBookingRowValue(b), 0)
   const onlineUnpaidCount = Math.max(0, onlineTotalCount - onlineReceivedCount)
+  const mobileAppCount = statsBookings.filter((b) => !isLostBooking(b) && isMobileAppBooking(b)).length
+  const mobileAppValue = statsBookings
+    .filter((b) => !isLostBooking(b) && isMobileAppBooking(b))
+    .reduce((s, b) => s + computeBookingRowValue(b), 0)
 
   // Pay-on-site: show all in-table pay_on_site count (even those over threshold),
   // and also how many are over threshold / auto-cancelled. Value remains computed for non-lost ones only.
@@ -2424,7 +2430,7 @@ function BookingsPageContent() {
       )}
 
       {/* Bara de statistici rapide */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -2491,6 +2497,23 @@ function BookingsPageContent() {
             </p>
             )}
             
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Aplicație mobilă</CardTitle>
+            <CardDescription className="text-xs">Rezervări prin aplicația mobilă</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-sky-700">{mobileAppCount}</div>
+            {isAdmin && (
+            <p className="text-xs text-muted-foreground">
+              Valoare totală:{" "}
+              <span className="font-semibold text-sky-700">
+                {mobileAppValue.toLocaleString("ro-RO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} LEI
+              </span>
+            </p>
+            )}
           </CardContent>
         </Card>
         <Card>
