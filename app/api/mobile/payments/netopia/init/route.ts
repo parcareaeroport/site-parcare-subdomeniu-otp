@@ -9,6 +9,8 @@ import type { NetopiaPaymentMethod } from "@/lib/mobile-netopia-types"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { resolveActivePaymentProvider } from "@/lib/payments/payment-provider"
 import { createMobileNetopiaPaymentSession } from "@/lib/payments/netopia-provider"
+import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
+import { getNetopiaForcedTestConfig } from "@/lib/payments/netopia-test-mode"
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
@@ -104,15 +106,54 @@ export async function POST(request: Request) {
       typeof orderId === "string" && orderId.trim()
         ? orderId.trim()
         : `mobile_netopia_${auth.user.uid}_${Date.now()}`
+    const forcedTestConfig = getNetopiaForcedTestConfig()
+    const effectiveChargedAmount = forcedTestConfig.enabled
+      ? forcedTestConfig.amount
+      : parsedAmount
 
     const resolvedPaymentMethod: NetopiaPaymentMethod =
       paymentMethod === "google_pay" || paymentMethod === "apple_pay"
         ? paymentMethod
         : "card"
 
+    await recordPaymentAuditEvent(resolvedOrderId, "init_received", {
+      status: "info",
+      message: "Netopia init request received",
+      provider: "netopia",
+      orderId: resolvedOrderId,
+      userId: auth.user.uid,
+      paymentTestMode: forcedTestConfig.enabled,
+      realAmount: parsedAmount,
+      chargedAmount: effectiveChargedAmount,
+      extra: {
+        isGuest: auth.user.isGuest,
+        paymentMethod: resolvedPaymentMethod,
+      },
+    })
+
+    if (forcedTestConfig.enabled) {
+      console.warn("[netopia-init] Forced test amount active", {
+        orderId: resolvedOrderId,
+        realAmount: parsedAmount,
+        chargedAmount: effectiveChargedAmount,
+      })
+      await recordPaymentAuditEvent(resolvedOrderId, "amount_overridden", {
+        status: "info",
+        message: `Forced test amount applied: ${effectiveChargedAmount} RON`,
+        provider: "netopia",
+        orderId: resolvedOrderId,
+        userId: auth.user.uid,
+        paymentTestMode: true,
+        realAmount: parsedAmount,
+        chargedAmount: effectiveChargedAmount,
+      })
+    }
+
     console.info("[netopia-init] Creating Netopia session", {
       orderId: resolvedOrderId,
-      amount: parsedAmount,
+      amount: effectiveChargedAmount,
+      realAmount: parsedAmount,
+      paymentTestMode: forcedTestConfig.enabled,
       paymentMethod: resolvedPaymentMethod,
     })
     const session = await createMobileNetopiaPaymentSession(
@@ -123,13 +164,16 @@ export async function POST(request: Request) {
         paymentProvider: "netopia",
         loyaltyFreeDayApplied: loyaltyPricing.applied,
       },
-      parsedAmount,
+      effectiveChargedAmount,
       resolvedOrderId,
       {
         saveCard: !!saveCard,
         selectedPaymentToken:
           typeof selectedPaymentToken === "string" ? selectedPaymentToken : undefined,
         paymentMethod: resolvedPaymentMethod,
+        realAmount: parsedAmount,
+        chargedAmount: effectiveChargedAmount,
+        paymentTestMode: forcedTestConfig.enabled,
       }
     )
     console.info("[netopia-init] Netopia session created", {
@@ -138,6 +182,9 @@ export async function POST(request: Request) {
       hasPaymentUrl: !!session.paymentUrl,
       hasAuthenticationUrl: !!session.authenticationUrl,
       hasNtpId: !!session.ntpID,
+      chargedAmount: session.chargedAmount,
+      realAmount: session.realAmount,
+      paymentTestMode: session.paymentTestMode,
     })
 
     return mobileJsonResponse({
@@ -148,7 +195,9 @@ export async function POST(request: Request) {
       ntpID: session.ntpID,
       status: session.status,
       orderId: resolvedOrderId,
-      amount: parsedAmount,
+      amount: session.chargedAmount,
+      realAmount: session.realAmount,
+      paymentTestMode: session.paymentTestMode,
       loyaltyFreeDayApplied: loyaltyPricing.applied,
     })
   } catch (error) {

@@ -1,5 +1,6 @@
 import type { MobileBookingPayload, MobileBookingContext } from "@/lib/mobile-booking-mapper"
 import type { NetopiaPaymentMethod } from "@/lib/mobile-netopia-types"
+import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
 import { db, doc, setDoc, serverTimestamp } from "@/lib/server-firestore"
 
 const NETOPIA_SANDBOX_URL = "https://secure.sandbox.netopia-payments.com"
@@ -9,6 +10,9 @@ export type NetopiaPaymentSessionOptions = {
   saveCard?: boolean
   selectedPaymentToken?: string
   paymentMethod?: NetopiaPaymentMethod
+  realAmount?: number
+  chargedAmount?: number
+  paymentTestMode?: boolean
 }
 
 export type NetopiaPaymentSessionResult = {
@@ -17,6 +21,9 @@ export type NetopiaPaymentSessionResult = {
   ntpID?: string
   orderId: string
   status: "pending" | "requires_action" | "paid" | "failed"
+  realAmount: number
+  chargedAmount: number
+  paymentTestMode: boolean
 }
 
 function sanitizeFirestoreValue<T>(value: T): T {
@@ -53,9 +60,12 @@ export async function createMobileNetopiaPaymentSession(
   ctx: MobileBookingContext,
   amount: number,
   orderId: string,
-  _options?: NetopiaPaymentSessionOptions
+  options?: NetopiaPaymentSessionOptions
 ): Promise<NetopiaPaymentSessionResult> {
   const { apiKey, posSignature, isLive, notifyUrl, redirectUrl } = getNetopiaConfig()
+  const realAmount = options?.realAmount ?? amount
+  const chargedAmount = options?.chargedAmount ?? amount
+  const paymentTestMode = !!options?.paymentTestMode
   console.info("[netopia-provider] Config resolved", {
     hasApiKey: !!apiKey,
     hasPosSignature: !!posSignature,
@@ -65,7 +75,9 @@ export async function createMobileNetopiaPaymentSession(
     orderId,
     userId: ctx.userId,
     isGuest: !!ctx.isGuest,
-    amount,
+    amount: chargedAmount,
+    realAmount,
+    paymentTestMode,
   })
 
   if (!apiKey || !posSignature) {
@@ -74,6 +86,16 @@ export async function createMobileNetopiaPaymentSession(
       hasPosSignature: !!posSignature,
       isLive,
       orderId,
+    })
+    await recordPaymentAuditEvent(orderId, "netopia_session_failed", {
+      status: "failed",
+      message: "Netopia configuration missing",
+      provider: "netopia",
+      orderId,
+      userId: ctx.userId,
+      paymentTestMode,
+      realAmount,
+      chargedAmount,
     })
     throw new Error(
       "Netopia is not configured. Set NETOPIA_API_KEY and NETOPIA_POS_SIGNATURE environment variables."
@@ -84,7 +106,9 @@ export async function createMobileNetopiaPaymentSession(
   console.info("[netopia-provider] Preparing Netopia request", {
     baseUrl,
     orderId,
-    amount,
+    amount: chargedAmount,
+    realAmount,
+    paymentTestMode,
   })
 
   const requestBody = {
@@ -105,7 +129,7 @@ export async function createMobileNetopiaPaymentSession(
       dateTime: new Date().toISOString(),
       orderID: orderId,
       description: `Rezervare parcare OTP Parking – ${payload.startDate} → ${payload.endDate}`,
-      amount,
+      amount: chargedAmount,
       currency: "RON",
       billing: {
         email: payload.email || "client@otpparking.ro",
@@ -124,7 +148,7 @@ export async function createMobileNetopiaPaymentSession(
           name: `Parcare OTP Parking ${payload.days || 1} zi${(payload.days || 1) > 1 ? "le" : ""}`,
           code: orderId,
           category: "Parcare",
-          price: amount,
+          price: chargedAmount,
           vat: 19,
         },
       ],
@@ -147,8 +171,11 @@ export async function createMobileNetopiaPaymentSession(
     orderId,
     httpStatus: response.status,
     ok: response.ok,
-    resultCode: result?.code,
-    hasPaymentUrl:
+      resultCode: result?.code,
+      paymentTestMode,
+      realAmount,
+      chargedAmount,
+      hasPaymentUrl:
       !!result?.data?.payment?.paymentURL ||
       !!result?.data?.paymentURL ||
       !!result?.data?.customerAction?.url ||
@@ -167,6 +194,20 @@ export async function createMobileNetopiaPaymentSession(
       ok: response.ok,
       resultCode: result?.code,
       errorMsg,
+    })
+    await recordPaymentAuditEvent(orderId, "netopia_session_failed", {
+      status: "failed",
+      message: `Netopia returned error: ${errorMsg}`,
+      provider: "netopia",
+      orderId,
+      userId: ctx.userId,
+      paymentTestMode,
+      realAmount,
+      chargedAmount,
+      extra: {
+        httpStatus: response.status,
+        resultCode: result?.code,
+      },
     })
     throw new Error(`Netopia error: ${errorMsg}`)
   }
@@ -190,10 +231,14 @@ export async function createMobileNetopiaPaymentSession(
     ntpID,
     userId: ctx.userId,
     isGuest: !!ctx.isGuest,
-    amount,
+    amount: chargedAmount,
+    realAmount,
+    chargedAmount,
     currency: "RON",
     status: "pending",
+    provider: "netopia",
     paymentProvider: "netopia",
+    paymentTestMode,
     bookingPayload: bookingPayloadForStorage,
     loyaltyFreeDayApplied: !!ctx.loyaltyFreeDayApplied,
     createdAt: serverTimestamp(),
@@ -203,6 +248,23 @@ export async function createMobileNetopiaPaymentSession(
     orderId,
     ntpID,
     status: "pending",
+    realAmount,
+    chargedAmount,
+    paymentTestMode,
+  })
+  await recordPaymentAuditEvent(orderId, "netopia_session_created", {
+    status: "success",
+    message: "Netopia payment session persisted",
+    provider: "netopia",
+    orderId,
+    userId: ctx.userId,
+    paymentTestMode,
+    realAmount,
+    chargedAmount,
+    extra: {
+      ntpID,
+      hasPaymentUrl: !!paymentUrl,
+    },
   })
 
   return {
@@ -210,6 +272,9 @@ export async function createMobileNetopiaPaymentSession(
     ntpID: ntpID || undefined,
     orderId,
     status: paymentUrl ? "requires_action" : "pending",
+    realAmount,
+    chargedAmount,
+    paymentTestMode,
   }
 }
 

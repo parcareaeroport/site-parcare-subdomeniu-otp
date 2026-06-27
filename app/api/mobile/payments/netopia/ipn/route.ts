@@ -4,6 +4,7 @@ import {
   MOBILE_BOOKING_ORIGIN,
   type MobileBookingPayload,
 } from "@/lib/mobile-booking-mapper"
+import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
 import { db, doc, getDoc, updateDoc, serverTimestamp } from "@/lib/server-firestore"
 
 export const dynamic = "force-dynamic"
@@ -71,11 +72,33 @@ export async function POST(request: Request) {
       userId: string
       isGuest: boolean
       amount: number
+      realAmount?: number
+      chargedAmount?: number
       status: string
+      provider?: string
+      paymentTestMode?: boolean
       bookingPayload: MobileBookingPayload
       loyaltyFreeDayApplied: boolean
       bookingId?: string
     }
+    const chargedAmount = pending.chargedAmount ?? pending.amount
+    const realAmount = pending.realAmount ?? pending.amount
+
+    await recordPaymentAuditEvent(orderID, "ipn_received", {
+      status: "info",
+      message: "Netopia IPN received",
+      provider: pending.provider || "netopia",
+      orderId: orderID,
+      userId: pending.userId,
+      paymentTestMode: !!pending.paymentTestMode,
+      realAmount,
+      chargedAmount,
+      extra: {
+        ntpID,
+        paymentStatus,
+        errorCode,
+      },
+    })
 
     if (pending.status === "paid" || pending.status === "completed") {
       return Response.json({ errorCode: 0, message: "Already processed" }, { status: 200 })
@@ -96,6 +119,16 @@ export async function POST(request: Request) {
 
     const payload = pending.bookingPayload
     const formData = mapMobilePayloadToFormData(payload)
+    await recordPaymentAuditEvent(orderID, "booking_started", {
+      status: "info",
+      message: "Booking creation started from Netopia IPN",
+      provider: pending.provider || "netopia",
+      orderId: orderID,
+      userId: pending.userId,
+      paymentTestMode: !!pending.paymentTestMode,
+      realAmount,
+      chargedAmount,
+    })
 
     const bookingResult = await createBookingWithFirestore(formData, {
       clientEmail: payload.email,
@@ -107,8 +140,9 @@ export async function POST(request: Request) {
       userId: pending.userId,
       profileIsGuest: pending.isGuest,
       paymentProvider: "netopia",
+      paymentOrderId: orderID,
       paymentIntentId: ntpID || orderID,
-      amount: pending.amount,
+      amount: chargedAmount,
       days: payload.days,
       address: payload.address,
       city: payload.city,
@@ -123,6 +157,9 @@ export async function POST(request: Request) {
       orderNotes: payload.orderNotes,
       termsAccepted: true,
       loyaltyFreeDayApplied: pending.loyaltyFreeDayApplied,
+      paymentTestMode: !!pending.paymentTestMode,
+      paymentTestRealAmount: realAmount,
+      paymentTestChargedAmount: chargedAmount,
     })
 
     await updateDoc(pendingRef, {
@@ -138,6 +175,21 @@ export async function POST(request: Request) {
         : null,
       bookingSuccess: bookingResult.success,
       updatedAt: serverTimestamp(),
+    })
+
+    await recordPaymentAuditEvent(orderID, bookingResult.success ? "booking_completed" : "booking_failed", {
+      status: bookingResult.success ? "success" : "failed",
+      message: bookingResult.success
+        ? "Booking created from Netopia IPN"
+        : bookingResult.message || "Booking creation failed from Netopia IPN",
+      provider: pending.provider || "netopia",
+      orderId: orderID,
+      userId: pending.userId,
+      bookingId: bookingResult.firestoreId,
+      bookingNumber: bookingResult.bookingNumber || undefined,
+      paymentTestMode: !!pending.paymentTestMode,
+      realAmount,
+      chargedAmount,
     })
 
     console.log(

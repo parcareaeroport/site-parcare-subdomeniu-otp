@@ -6,14 +6,22 @@ import {
   normalizeNetopiaFeatures,
   type MobileAppSettings,
 } from "@/lib/mobile-app-settings.shared"
+import { getNetopiaForcedTestConfig } from "@/lib/payments/netopia-test-mode"
 
 export * from "@/lib/mobile-app-settings.shared"
 
 export async function getMobileAppSettings(): Promise<MobileAppSettings> {
   try {
+    const forcedTestConfig = getNetopiaForcedTestConfig()
     const snap = await getDoc(doc(db, "config", "mobileAppSettings"))
     if (!snap.exists()) {
-      return DEFAULT_MOBILE_APP_SETTINGS
+      return {
+        ...DEFAULT_MOBILE_APP_SETTINGS,
+        netopiaForcedTestMode: forcedTestConfig.enabled,
+        netopiaForcedTestAmount: forcedTestConfig.enabled
+          ? forcedTestConfig.amount
+          : undefined,
+      }
     }
 
     const data = snap.data() || {}
@@ -31,6 +39,10 @@ export async function getMobileAppSettings(): Promise<MobileAppSettings> {
       stripeEnabled: data.stripeEnabled !== false,
       netopiaEnabled: !!data.netopiaEnabled,
       netopia: normalizeNetopiaFeatures(data.netopia),
+      netopiaForcedTestMode: forcedTestConfig.enabled,
+      netopiaForcedTestAmount: forcedTestConfig.enabled
+        ? forcedTestConfig.amount
+        : undefined,
       pricesEnabled: data.pricesEnabled !== false,
       reservationsEnabled: data.reservationsEnabled !== false,
       testPaymentEnabled: !!data.testPaymentEnabled,

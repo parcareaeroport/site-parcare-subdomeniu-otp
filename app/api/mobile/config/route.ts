@@ -29,6 +29,8 @@ export async function GET() {
       stripeEnabled: settings.stripeEnabled,
       netopiaEnabled: settings.netopiaEnabled,
       netopia: settings.netopia,
+      netopiaForcedTestMode: settings.netopiaForcedTestMode,
+      netopiaForcedTestAmount: settings.netopiaForcedTestAmount,
       pricesEnabled: settings.pricesEnabled,
       reservationsEnabled,
       appUpdate: settings.appUpdate,

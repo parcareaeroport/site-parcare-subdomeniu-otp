@@ -19,6 +19,9 @@ interface OblioInvoiceData {
   clientCity?: string;
   clientCounty?: string;
   clientCountry?: string;
+  paymentTestMode?: boolean;
+  realAmount?: number;
+  chargedAmount?: number;
 }
 
 interface OblioConfig {
@@ -185,6 +188,9 @@ class OblioInvoiceService {
     // Calculare preț fără TVA (21% este inclus în totalCost) - ACTUALIZAT pentru noul TVA
     const totalWithVAT = invoiceData.totalCost;
     const priceWithoutVAT = Math.round((totalWithVAT / 1.21) * 10000) / 10000;
+    const testNote = invoiceData.paymentTestMode
+      ? ` MOD TEST NETOPIA LIVE: sumă taxată ${invoiceData.chargedAmount ?? totalWithVAT} RON, sumă reală calculată ${invoiceData.realAmount ?? totalWithVAT} RON.`
+      : "";
 
     const baseInvoiceData = {
       cif: this.config.companyCif,
@@ -208,15 +214,17 @@ class OblioInvoiceService {
           productType: 'Serviciu',
         },
       ],
-      mentions: `Factură generată automat pentru rezervarea de parcare #${invoiceData.bookingId}. Plata a fost procesată online (card).`,
-      internalNote: `Booking ID: ${invoiceData.bookingId} | Plată online (card)`,
+      mentions: `Factură generată automat pentru rezervarea de parcare #${invoiceData.bookingId}. Plata a fost procesată online (card).${testNote}`,
+      internalNote: `Booking ID: ${invoiceData.bookingId} | Plată online (card)${invoiceData.paymentTestMode ? ` | TEST MODE | real=${invoiceData.realAmount ?? totalWithVAT} | charged=${invoiceData.chargedAmount ?? totalWithVAT}` : ""}`,
       collect: {
         type: 'Card',
         // IMPORTANT: do not expose Stripe wording in invoices; keep only booking reference.
         documentNumber: `${invoiceData.bookingId}`,
         value: totalWithVAT,
         issueDate: new Date().toISOString().split('T')[0],
-        mentions: 'Plată online (card)',
+        mentions: invoiceData.paymentTestMode
+          ? `Plată online (card) - TEST MODE ${invoiceData.chargedAmount ?? totalWithVAT} RON`
+          : 'Plată online (card)',
       },
     };
 
@@ -298,7 +306,6 @@ export async function generateOblioInvoice(invoiceData: OblioInvoiceData) {
 }
 
 export type { OblioInvoiceData }; 
-
 
 
 

@@ -8,6 +8,7 @@ import { generateMultiparkQR } from "@/lib/qr-generator"
 import { sendBookingConfirmationEmail } from "@/lib/email-service"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { recordOblioFailure } from "@/lib/oblio-alerting"
+import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
 
 // Define validation schema for the form data
 const bookingFormSchema = z.object({
@@ -90,6 +91,10 @@ interface CompleteBookingData {
   bookingOrigin?: string
   userId?: string
   paymentProvider?: "stripe" | "netopia"
+  paymentTestMode?: boolean
+  paymentTestRealAmount?: number
+  paymentTestChargedAmount?: number
+  paymentOrderId?: string
   channel?: "mobile"
   
   // Loialitate
@@ -651,6 +656,10 @@ export async function createBookingWithFirestore(
     bookingOrigin?: string
     userId?: string
     paymentProvider?: "stripe" | "netopia"
+    paymentTestMode?: boolean
+    paymentTestRealAmount?: number
+    paymentTestChargedAmount?: number
+    paymentOrderId?: string
     // Date pentru facturare și adresă
     company?: string
     companyVAT?: string
@@ -670,6 +679,15 @@ export async function createBookingWithFirestore(
   }
 ) {
   const debugLogs: string[] = []
+  const auditOrderId = additionalData?.paymentOrderId
+  const auditBase = {
+    provider: additionalData?.paymentProvider || "netopia",
+    orderId: auditOrderId,
+    userId: additionalData?.userId,
+    paymentTestMode: additionalData?.paymentTestMode,
+    realAmount: additionalData?.paymentTestRealAmount ?? additionalData?.amount,
+    chargedAmount: additionalData?.paymentTestChargedAmount ?? additionalData?.amount,
+  }
   
   try {
     const normalizeTimeHHmm = (t?: string): string | undefined => {
@@ -724,6 +742,15 @@ export async function createBookingWithFirestore(
       const msg = `Rezervare DUPLICATĂ în Multipark pentru ${plate} (${period}). Multipark a răspuns: ${apiMessageStr || "N/A"} (ErrorCode=${apiErrorCodeStr || "N/A"})`
       debugLogs.push(`🚫 MULTIPARK DUPLICATE: ${msg}`)
       console.error(`🚫 ${msg}`)
+      await recordPaymentAuditEvent(auditOrderId || "", "booking_failed", {
+        ...auditBase,
+        status: "failed",
+        message: msg,
+        extra: {
+          duplicateReservation: true,
+          apiErrorCode: apiErrorCodeStr || undefined,
+        },
+      })
 
       return {
         firestoreId: undefined,
@@ -753,6 +780,14 @@ export async function createBookingWithFirestore(
       const msg = `MULTIPARK FAILED (webhook) for ${plate} (${period}). ${apiMessageStr2}${apiErrorCodeStr2 ? ` (ErrorCode=${apiErrorCodeStr2})` : ""}`
       debugLogs.push(`🚫 ${msg}`)
       console.error(`🚫 ${msg}`)
+      await recordPaymentAuditEvent(auditOrderId || "", "booking_failed", {
+        ...auditBase,
+        status: "failed",
+        message: msg,
+        extra: {
+          apiErrorCode: apiErrorCodeStr2,
+        },
+      })
 
       return {
         firestoreId: undefined,
@@ -816,6 +851,10 @@ export async function createBookingWithFirestore(
       })(),
       days: additionalData?.days,
       amount: additionalData?.amount,
+      paymentTestMode: additionalData?.paymentTestMode,
+      paymentTestRealAmount: additionalData?.paymentTestRealAmount,
+      paymentTestChargedAmount: additionalData?.paymentTestChargedAmount,
+      paymentOrderId: additionalData?.paymentOrderId,
       
       // Date plată
       paymentIntentId: additionalData?.paymentIntentId,
@@ -879,6 +918,13 @@ export async function createBookingWithFirestore(
     
     if (firestoreResult.success) {
       debugLogs.push(`✅ Saved to Firestore: ${firestoreResult.firestoreId}`)
+      await recordPaymentAuditEvent(auditOrderId || "", "booking_completed", {
+        ...auditBase,
+        status: "success",
+        message: "Booking saved in Firestore",
+        bookingId: firestoreResult.firestoreId,
+        bookingNumber: completeBookingData.apiBookingNumber,
+      })
       
       // Dacă rezervarea a reușit și avem email client, trimite email prin API endpoint
       // Pentru pay-on-site nu avem apiBookingNumber, dar tot trimitem email
@@ -1023,6 +1069,13 @@ export async function createBookingWithFirestore(
           }
 
           console.log(`🧾 Starting Oblio invoice generation for booking ${invoiceBookingId}`)
+          await recordPaymentAuditEvent(auditOrderId || "", "oblio_started", {
+            ...auditBase,
+            status: "info",
+            message: "Oblio invoice generation started",
+            bookingId: firestoreResult.firestoreId,
+            bookingNumber: completeBookingData.apiBookingNumber,
+          })
           
           const { generateOblioInvoice } = await import('@/lib/oblio-integration')
           
@@ -1048,6 +1101,9 @@ export async function createBookingWithFirestore(
             clientCity: additionalData.city,
             clientCounty: additionalData.county,
             clientCountry: additionalData.country,
+            paymentTestMode: additionalData.paymentTestMode,
+            realAmount: additionalData.paymentTestRealAmount ?? additionalData.amount,
+            chargedAmount: additionalData.paymentTestChargedAmount ?? additionalData.amount,
           }
 
           // Timeout pentru Oblio (max 25 secunde)
@@ -1060,6 +1116,13 @@ export async function createBookingWithFirestore(
           
           if (invoiceResult.success) {
             console.log('✅ Factură Oblio generată cu succes:', invoiceResult.invoiceNumber, '- Link:', invoiceResult.invoiceUrl)
+            await recordPaymentAuditEvent(auditOrderId || "", "oblio_succeeded", {
+              ...auditBase,
+              status: "success",
+              message: "Oblio invoice generated successfully",
+              bookingId: firestoreResult.firestoreId,
+              bookingNumber: completeBookingData.apiBookingNumber,
+            })
             if (bookingDocRef) {
               try {
                 await updateDoc(bookingDocRef, {
@@ -1078,6 +1141,13 @@ export async function createBookingWithFirestore(
           } else {
             const oblioErrorMessage = String(invoiceResult.error || "Oblio invoice failed")
             console.error('❌ Eroare la generarea facturii Oblio:', oblioErrorMessage)
+            await recordPaymentAuditEvent(auditOrderId || "", "oblio_failed", {
+              ...auditBase,
+              status: "failed",
+              message: oblioErrorMessage,
+              bookingId: firestoreResult.firestoreId,
+              bookingNumber: completeBookingData.apiBookingNumber,
+            })
             if (bookingDocRef) {
               try {
                 await updateDoc(bookingDocRef, {
@@ -1102,6 +1172,13 @@ export async function createBookingWithFirestore(
         } catch (error) {
           console.error('❌ Eroare critică la generarea facturii Oblio:', error)
           const criticalOblioMessage = error instanceof Error ? error.message : String(error)
+          await recordPaymentAuditEvent(auditOrderId || "", "oblio_failed", {
+            ...auditBase,
+            status: "failed",
+            message: criticalOblioMessage,
+            bookingId: firestoreResult.firestoreId,
+            bookingNumber: completeBookingData.apiBookingNumber,
+          })
           if (bookingDocRef) {
             try {
               await updateDoc(bookingDocRef, {
@@ -1161,6 +1238,11 @@ export async function createBookingWithFirestore(
       }
     } else {
       debugLogs.push(`❌ Firestore failed: ${firestoreResult.error}`)
+      await recordPaymentAuditEvent(auditOrderId || "", "booking_failed", {
+        ...auditBase,
+        status: "failed",
+        message: firestoreResult.error || "Failed to save booking in Firestore",
+      })
       return {
         firestoreId: undefined,
         firestoreSuccess: false,
@@ -1857,7 +1939,6 @@ export async function createManualBooking(formData: FormData) {
         }
       }
     }
-
   } catch (error) {
     console.error(`❌ [${manualProcessId}] ===== CRITICAL ERROR =====`)
     console.error(`❌ [${manualProcessId}] Error Type: ${error instanceof Error ? error.constructor.name : typeof error}`)

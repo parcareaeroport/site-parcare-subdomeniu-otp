@@ -29,6 +29,8 @@ export type MobileAppSettings = {
   stripeEnabled: boolean
   netopiaEnabled: boolean
   netopia: NetopiaFeaturesConfig
+  netopiaForcedTestMode: boolean
+  netopiaForcedTestAmount?: number
   pricesEnabled: boolean
   reservationsEnabled: boolean
   testPaymentEnabled: boolean
@@ -62,6 +64,7 @@ export const DEFAULT_MOBILE_APP_SETTINGS: MobileAppSettings = {
   stripeEnabled: true,
   netopiaEnabled: true,
   netopia: DEFAULT_NETOPIA_FEATURES,
+  netopiaForcedTestMode: false,
   pricesEnabled: true,
   reservationsEnabled: true,
   testPaymentEnabled: false,
