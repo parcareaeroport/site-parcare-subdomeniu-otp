@@ -5,6 +5,7 @@ import { cancelMultiparkBooking, createMultiparkBooking, type MultiparkBookingRe
 import { addUserCredit } from "@/lib/user-credits"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { recordBookingModificationAuditEvent } from "@/lib/booking-modification-audit"
+import { sendBookingModificationConfirmationEmail } from "@/lib/email-service"
 
 export type BookingModificationStatus =
   | "awaiting_difference_payment"
@@ -76,6 +77,241 @@ function summarizeMultiparkResult(result: MultiparkBookingResult | null) {
     apiErrorCode: result.apiErrorCode || null,
     httpStatus: result.httpStatus || null,
   }
+}
+
+function buildModificationEmailPayload(input: {
+  booking: Record<string, unknown>
+  oldValues: ModificationValues
+  finalValues: ModificationValues
+  oldAmount: number
+  newAmount: number
+  difference: number
+  amountToPay: number
+  creditAmount: number
+  oldApiBookingNumber: string
+  newApiBookingNumber?: string | null
+  payOnSiteLocalOnly: boolean
+  days: number
+}) {
+  return {
+    clientName: String(input.booking.clientName || "Client"),
+    clientEmail: String(input.booking.clientEmail || ""),
+    licensePlate: input.finalValues.licensePlate,
+    oldLicensePlate: input.oldValues.licensePlate,
+    startDate: input.finalValues.startDate,
+    startTime: input.finalValues.startTime,
+    endDate: input.finalValues.endDate,
+    endTime: input.finalValues.endTime,
+    oldStartDate: input.oldValues.startDate,
+    oldStartTime: input.oldValues.startTime,
+    oldEndDate: input.oldValues.endDate,
+    oldEndTime: input.oldValues.endTime,
+    days: input.days,
+    oldAmount: input.oldAmount,
+    newAmount: input.newAmount,
+    difference: input.difference,
+    amountToPay: input.amountToPay,
+    creditAmount: input.creditAmount,
+    bookingNumber: input.payOnSiteLocalOnly ? undefined : String(input.newApiBookingNumber || ""),
+    oldBookingNumber: input.oldApiBookingNumber || undefined,
+    source: input.payOnSiteLocalOnly ? "pay_on_site" as const : "online" as const,
+    modifiedAt: new Date(),
+  }
+}
+
+async function markModificationEmailResult(input: {
+  bookingId: string
+  requestId: string
+  status: "sent" | "failed" | "skipped"
+  messageId?: string | null
+  error?: string | null
+  response?: string | null
+  qrIncluded?: boolean | null
+}) {
+  const bookingRef = adminDb.collection("bookings").doc(input.bookingId)
+  const requestRef = adminDb.collection("bookingModificationRequests").doc(input.requestId)
+  const bookingSnap = await bookingRef.get()
+  const booking = bookingSnap.exists ? bookingSnap.data() || {} : {}
+  const history = Array.isArray(booking.modificationHistory) ? booking.modificationHistory : []
+  const updatedHistory = history.map((entry: unknown) => {
+    if (!entry || typeof entry !== "object") return entry
+    const item = entry as Record<string, unknown>
+    if (String(item.requestId || "") !== input.requestId) return entry
+    return {
+      ...item,
+      modificationEmailStatus: input.status,
+      modificationEmailSentAtIso: input.status === "sent" ? new Date().toISOString() : null,
+      modificationEmailError: input.error || null,
+      modificationEmailMessageId: input.messageId || null,
+      modificationEmailQrIncluded: input.qrIncluded ?? null,
+    }
+  })
+  const updatePayload = {
+    modificationEmailStatus: input.status,
+    modificationEmailSentAt: input.status === "sent" ? FieldValue.serverTimestamp() : null,
+    modificationEmailError: input.error || null,
+    modificationEmailMessageId: input.messageId || null,
+    modificationEmailQrIncluded: input.qrIncluded ?? null,
+    modificationEmailTransportResponse: input.response || null,
+    modificationHistory: updatedHistory,
+    activeModificationRequest: {
+      ...(booking.activeModificationRequest && typeof booking.activeModificationRequest === "object"
+        ? booking.activeModificationRequest as Record<string, unknown>
+        : {}),
+      modificationEmailStatus: input.status,
+      modificationEmailError: input.error || null,
+      modificationEmailMessageId: input.messageId || null,
+    },
+    lastUpdated: FieldValue.serverTimestamp(),
+  }
+  await Promise.all([
+    bookingRef.set(updatePayload, { merge: true }),
+    requestRef.set(
+      {
+        modificationEmailStatus: input.status,
+        modificationEmailSentAt: input.status === "sent" ? FieldValue.serverTimestamp() : null,
+        modificationEmailError: input.error || null,
+        modificationEmailMessageId: input.messageId || null,
+        modificationEmailQrIncluded: input.qrIncluded ?? null,
+        modificationEmailTransportResponse: input.response || null,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ])
+}
+
+async function sendModificationConfirmationEmailBestEffort(input: {
+  bookingId: string
+  requestId: string
+  booking: Record<string, unknown>
+  oldValues: ModificationValues
+  finalValues: ModificationValues
+  oldAmount: number
+  newAmount: number
+  difference: number
+  amountToPay: number
+  creditAmount: number
+  oldApiBookingNumber: string
+  newApiBookingNumber?: string | null
+  payOnSiteLocalOnly: boolean
+  days: number
+  userId?: string | null
+  orderId?: string | null
+}) {
+  const email = String(input.booking.clientEmail || "").trim()
+  const shouldHaveQr = !input.payOnSiteLocalOnly
+  console.info("[booking-modification] modification_email_started", {
+    bookingId: input.bookingId,
+    modificationRequestId: input.requestId,
+    oldApiBookingNumber: input.oldApiBookingNumber || null,
+    newApiBookingNumber: input.newApiBookingNumber || null,
+    payOnSiteLocalOnly: input.payOnSiteLocalOnly,
+    hasClientEmail: Boolean(email),
+  })
+  await recordBookingModificationAuditEvent(input.requestId, "modification_email_started", "info", {
+    bookingId: input.bookingId,
+    apiBookingNumber: input.newApiBookingNumber || null,
+    userId: input.userId || null,
+    orderId: input.orderId || null,
+    amountToPay: input.amountToPay,
+    creditAmount: input.creditAmount,
+    difference: input.difference,
+    message: "Se pregătește emailul de confirmare pentru modificare.",
+  })
+
+  if (!email) {
+    const error = "Client email missing"
+    await markModificationEmailResult({ bookingId: input.bookingId, requestId: input.requestId, status: "failed", error })
+    await recordBookingModificationAuditEvent(input.requestId, "modification_email_failed", "failed", {
+      bookingId: input.bookingId,
+      apiBookingNumber: input.newApiBookingNumber || null,
+      message: error,
+    })
+    return
+  }
+
+  if (shouldHaveQr && !input.newApiBookingNumber) {
+    const error = "Missing new Multipark booking number for online modification email"
+    console.warn("[booking-modification] modification_email_failed", {
+      bookingId: input.bookingId,
+      modificationRequestId: input.requestId,
+      reason: "missing_new_api_booking_number",
+    })
+    await markModificationEmailResult({ bookingId: input.bookingId, requestId: input.requestId, status: "failed", error })
+    await recordBookingModificationAuditEvent(input.requestId, "modification_email_failed", "failed", {
+      bookingId: input.bookingId,
+      apiBookingNumber: input.newApiBookingNumber || null,
+      message: error,
+    })
+    return
+  }
+
+  const result = await sendBookingModificationConfirmationEmail(
+    buildModificationEmailPayload({
+      booking: input.booking,
+      oldValues: input.oldValues,
+      finalValues: input.finalValues,
+      oldAmount: input.oldAmount,
+      newAmount: input.newAmount,
+      difference: input.difference,
+      amountToPay: input.amountToPay,
+      creditAmount: input.creditAmount,
+      oldApiBookingNumber: input.oldApiBookingNumber,
+      newApiBookingNumber: input.newApiBookingNumber,
+      payOnSiteLocalOnly: input.payOnSiteLocalOnly,
+      days: input.days,
+    })
+  )
+
+  if (result.success) {
+    console.info("[booking-modification] modification_email_succeeded", {
+      bookingId: input.bookingId,
+      modificationRequestId: input.requestId,
+      oldApiBookingNumber: input.oldApiBookingNumber || null,
+      newApiBookingNumber: input.newApiBookingNumber || null,
+      messageId: result.messageId || null,
+      qrIncluded: result.qrIncluded ?? null,
+    })
+    await markModificationEmailResult({
+      bookingId: input.bookingId,
+      requestId: input.requestId,
+      status: "sent",
+      messageId: result.messageId || null,
+      response: result.response || null,
+      qrIncluded: result.qrIncluded ?? null,
+    })
+    await recordBookingModificationAuditEvent(input.requestId, "modification_email_succeeded", "success", {
+      bookingId: input.bookingId,
+      apiBookingNumber: input.newApiBookingNumber || null,
+      userId: input.userId || null,
+      orderId: input.orderId || null,
+      message: "Emailul de confirmare a modificării a fost trimis.",
+    })
+    return
+  }
+
+  console.error("[booking-modification] modification_email_failed", {
+    bookingId: input.bookingId,
+    modificationRequestId: input.requestId,
+    oldApiBookingNumber: input.oldApiBookingNumber || null,
+    newApiBookingNumber: input.newApiBookingNumber || null,
+    error: result.error || null,
+  })
+  await markModificationEmailResult({
+    bookingId: input.bookingId,
+    requestId: input.requestId,
+    status: "failed",
+    error: result.error || "Unknown email error",
+    qrIncluded: result.qrIncluded ?? null,
+  })
+  await recordBookingModificationAuditEvent(input.requestId, "modification_email_failed", "failed", {
+    bookingId: input.bookingId,
+    apiBookingNumber: input.newApiBookingNumber || null,
+    userId: input.userId || null,
+    orderId: input.orderId || null,
+    message: result.error || "Emailul de confirmare a modificării a eșuat.",
+  })
 }
 
 async function setRequestFailure(
@@ -305,9 +541,13 @@ export async function applyBookingModificationRequest(
         activeModificationRequest: {
           id: requestId,
           status: "applying",
+          currentAmount: Number(request.currentAmount || 0),
+          newAmount: Number(request.newAmount || 0),
           amountToPay,
           creditAmount: Number(request.creditAmount || 0),
           difference: Number(request.difference || 0),
+          paymentPolicy: request.paymentPolicy || null,
+          payOnSiteLocalOnly: request.payOnSiteLocalOnly === true,
           finalValues: request.finalValues || null,
         },
         lastUpdated: FieldValue.serverTimestamp(),
@@ -333,12 +573,21 @@ export async function applyBookingModificationRequest(
   const amountToPay = roundMoney(Number(request.amountToPay || 0))
   const creditAmount = roundMoney(Number(request.creditAmount || 0))
   const difference = roundMoney(Number(request.difference || 0))
+  const paymentPolicy = String(request.paymentPolicy || "")
+  const payOnSiteLocalOnly =
+    paymentPolicy === "pay_on_site_amount_updated" ||
+    request.payOnSiteLocalOnly === true ||
+    String(booking.source || "") === "pay_on_site" ||
+    String(booking.paymentMethod || "").toLowerCase() === "at_parking"
+  const multiparkSkippedStatus = payOnSiteLocalOnly
+    ? "skipped_pay_on_site_local_only"
+    : "skipped_no_api_booking_number"
   const refundRequiredAmount =
     options.reason === "difference_payment_paid"
       ? roundMoney(Number(options.paymentChargedAmount ?? amountToPay))
       : 0
   const oldApiBookingNumber = String(booking.apiBookingNumber || "")
-  const shouldUseMultipark = Boolean(oldApiBookingNumber) && String(booking.source || "") !== "pay_on_site"
+  const shouldUseMultipark = Boolean(oldApiBookingNumber) && !payOnSiteLocalOnly
   const oldValues = valuesFromSnapshot(request.currentSnapshot as Record<string, unknown> | undefined, booking)
   const newDurations = computeDurations(finalValues)
   const oldDurations = computeDurations(oldValues)
@@ -353,6 +602,8 @@ export async function applyBookingModificationRequest(
     reason: options.reason,
     paymentOrderId: options.paymentOrderId || null,
     paymentChargedAmount: options.paymentChargedAmount ?? null,
+    paymentPolicy: paymentPolicy || null,
+    payOnSiteLocalOnly,
   })
   await recordBookingModificationAuditEvent(requestId, "apply_started", "info", {
     bookingId,
@@ -566,12 +817,15 @@ export async function applyBookingModificationRequest(
           amountToPay,
           creditAmount,
           difference,
+          paymentPolicy: paymentPolicy || null,
+          payOnSiteLocalOnly,
+          modificationEmailStatus: "pending",
           completedAtIso: new Date().toISOString(),
         },
         lastModificationRequestId: requestId,
         lastModifiedAt: FieldValue.serverTimestamp(),
         lastModifiedBy: options.actorEmail || options.reason,
-        lastMultiparkUpdateStatus: shouldUseMultipark ? "recreated" : "skipped_no_api_booking_number",
+        lastMultiparkUpdateStatus: shouldUseMultipark ? "recreated" : multiparkSkippedStatus,
         lastPriceDifference: difference,
         modificationHistory: FieldValue.arrayUnion({
           requestId,
@@ -587,6 +841,13 @@ export async function applyBookingModificationRequest(
           difference,
           creditAmount,
           amountToPay,
+          paymentPolicy: paymentPolicy || null,
+          payOnSiteLocalOnly,
+          modificationEmailStatus: "pending",
+          modificationEmailSentAtIso: null,
+          modificationEmailError: null,
+          modificationEmailMessageId: null,
+          modificationEmailQrIncluded: null,
           multipark: {
             oldCancel: cancelResult
               ? summarizeMultiparkResult(cancelResult)
@@ -610,7 +871,7 @@ export async function applyBookingModificationRequest(
         paymentOrderId: options.paymentOrderId || null,
         oldApiBookingNumber: oldApiBookingNumber || null,
         newApiBookingNumber: newApiBookingNumber || null,
-        multiparkStatus: shouldUseMultipark ? "recreated" : "skipped_no_api_booking_number",
+        multiparkStatus: shouldUseMultipark ? "recreated" : multiparkSkippedStatus,
         oldMultiparkCancelResult: summarizeMultiparkResult(cancelResult),
         newMultiparkCreateResult: summarizeMultiparkResult(createResult),
         updatedAt: FieldValue.serverTimestamp(),
@@ -627,11 +888,15 @@ export async function applyBookingModificationRequest(
     amountToPay,
     creditAmount,
     difference,
-    multiparkStatus: shouldUseMultipark ? "recreated" : "skipped_no_api_booking_number",
+    multiparkStatus: shouldUseMultipark ? "recreated" : multiparkSkippedStatus,
+    extra: {
+      paymentPolicy: paymentPolicy || null,
+      payOnSiteLocalOnly,
+    },
     message: "Rezervarea a fost actualizată în Firestore.",
   })
 
-  if (creditAmount > 0 && request.userId) {
+  if (!payOnSiteLocalOnly && creditAmount > 0 && request.userId) {
     await addUserCredit({
       userId: String(request.userId),
       amount: creditAmount,
@@ -649,6 +914,25 @@ export async function applyBookingModificationRequest(
       message: "Diferența negativă a fost adăugată ca avans pentru următoarea rezervare.",
     })
   }
+
+  await sendModificationConfirmationEmailBestEffort({
+    bookingId,
+    requestId,
+    booking,
+    oldValues,
+    finalValues,
+    oldAmount: Number(request.currentAmount || 0),
+    newAmount,
+    difference,
+    amountToPay,
+    creditAmount,
+    oldApiBookingNumber,
+    newApiBookingNumber: newApiBookingNumber || null,
+    payOnSiteLocalOnly,
+    days: newDurations.days,
+    userId: String(request.userId || "") || null,
+    orderId: options.paymentOrderId || null,
+  })
 
   console.info("[booking-modification] completed", {
     modificationRequestId: requestId,

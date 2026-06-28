@@ -30,6 +30,32 @@ interface BookingEmailData {
   qrLinkUrl?: string
 }
 
+export interface BookingModificationConfirmationEmailData {
+  clientName: string
+  clientEmail: string
+  licensePlate: string
+  oldLicensePlate: string
+  startDate: string
+  startTime: string
+  endDate: string
+  endTime: string
+  oldStartDate: string
+  oldStartTime: string
+  oldEndDate: string
+  oldEndTime: string
+  days: number
+  oldAmount: number
+  newAmount: number
+  difference: number
+  amountToPay: number
+  creditAmount: number
+  bookingNumber?: string
+  oldBookingNumber?: string
+  source: "online" | "pay_on_site"
+  modifiedAt: Date
+  qrLinkUrl?: string
+}
+
 /**
  * Configurează transporterul Nodemailer pentru Gmail cu setări robuste
  */
@@ -48,6 +74,242 @@ function createEmailTransporter() {
     debug: false,             // activează doar pentru debugging SMTP
     logger: false,            // elimină log-urile SMTP verbose
   } as any) // bypass TypeScript pentru setări avansate
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;")
+}
+
+export function generateBookingModificationConfirmationEmailHTML(data: BookingModificationConfirmationEmailData): string {
+  const isPayOnSite = data.source === "pay_on_site"
+  const formattedBookingNumber = data.bookingNumber ? data.bookingNumber.padStart(6, "0") : ""
+  const formattedOldBookingNumber = data.oldBookingNumber ? data.oldBookingNumber.padStart(6, "0") : ""
+  const differenceText =
+    data.difference > 0
+      ? `Diferență ${isPayOnSite ? "actualizată la parcare" : "achitată"}: ${data.difference.toFixed(2)} RON`
+      : data.difference < 0
+        ? `${Math.abs(data.difference).toFixed(2)} RON ${isPayOnSite ? "scădere din suma datorată la parcare" : "rămân avans pentru o rezervare viitoare"}`
+        : "Nu există diferență de plată."
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Rezervare modificată OTP Parking</title>
+      <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #ee7f1a, #d67016); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
+        .header h1 { color: #ffffff; margin: 8px 0; }
+        .header p { color: #fff7ed; margin: 5px 0; }
+        .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
+        .box { background: white; padding: 20px; border-radius: 8px; margin: 18px 0; }
+        .detail-row { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; border-bottom: 1px solid #eee; }
+        .detail-label { font-weight: bold; color: #666; }
+        .detail-value { color: #333; text-align: right; }
+        .notice { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .success { background: #ecfdf5; border: 1px solid #bbf7d0; color: #166534; padding: 15px; border-radius: 8px; margin: 20px 0; }
+        .qr-section { text-align: center; background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .qr-button { display: inline-block; background: #ee7f1a; color: white !important; padding: 12px 16px; border-radius: 8px; text-decoration: none; font-weight: bold; }
+        .footer { text-align: center; color: #666; font-size: 12px; margin-top: 30px; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <div class="header">
+          <h1>Rezervarea a fost modificată</h1>
+          <p>OTP Parking a actualizat detaliile rezervării dumneavoastră.</p>
+        </div>
+        <div class="content">
+          <div class="success">
+            <strong>Modificare confirmată</strong><br>
+            ${isPayOnSite
+              ? "Suma de plată la parcare a fost actualizată local. Plata se face la sosire."
+              : "Rezervarea a fost recreată în sistemul de parcare. Folosiți noul cod QR de mai jos."}
+          </div>
+
+          <h2>Detalii noi</h2>
+          <div class="box">
+            ${!isPayOnSite ? `
+            <div class="detail-row">
+              <span class="detail-label">Număr rezervare nou:</span>
+              <span class="detail-value"><strong>${escapeHtml(formattedBookingNumber)}</strong></span>
+            </div>
+            ${formattedOldBookingNumber ? `
+            <div class="detail-row">
+              <span class="detail-label">Număr rezervare vechi:</span>
+              <span class="detail-value">${escapeHtml(formattedOldBookingNumber)}</span>
+            </div>
+            ` : ""}
+            ` : ""}
+            <div class="detail-row">
+              <span class="detail-label">Număr înmatriculare:</span>
+              <span class="detail-value">${escapeHtml(data.licensePlate)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Intrare:</span>
+              <span class="detail-value">${escapeHtml(data.startDate)} ${escapeHtml(data.startTime)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Ieșire:</span>
+              <span class="detail-value">${escapeHtml(data.endDate)} ${escapeHtml(data.endTime)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Valoare nouă:</span>
+              <span class="detail-value"><strong>${data.newAmount.toFixed(2)} RON</strong></span>
+            </div>
+          </div>
+
+          <h2>Ce s-a schimbat</h2>
+          <div class="box">
+            <div class="detail-row">
+              <span class="detail-label">Perioadă veche:</span>
+              <span class="detail-value">${escapeHtml(data.oldStartDate)} ${escapeHtml(data.oldStartTime)} → ${escapeHtml(data.oldEndDate)} ${escapeHtml(data.oldEndTime)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Perioadă nouă:</span>
+              <span class="detail-value">${escapeHtml(data.startDate)} ${escapeHtml(data.startTime)} → ${escapeHtml(data.endDate)} ${escapeHtml(data.endTime)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Mașină veche:</span>
+              <span class="detail-value">${escapeHtml(data.oldLicensePlate)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Mașină nouă:</span>
+              <span class="detail-value">${escapeHtml(data.licensePlate)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Valoare inițială:</span>
+              <span class="detail-value">${data.oldAmount.toFixed(2)} RON</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Diferență:</span>
+              <span class="detail-value"><strong>${differenceText}</strong></span>
+            </div>
+          </div>
+
+          ${isPayOnSite ? `
+          <div class="notice">
+            <strong>Plată la parcare</strong><br>
+            Prezentați-vă la sosire și plătiți ${data.newAmount.toFixed(2)} RON la recepția parcării.
+          </div>
+          ` : `
+          <div class="qr-section">
+            <h3>Cod QR nou pentru acces</h3>
+            <p>Codul vechi nu mai trebuie folosit pentru această rezervare modificată.</p>
+            ${data.qrLinkUrl ? `
+              <p style="margin: 14px 0;">
+                <a class="qr-button" href="${data.qrLinkUrl}">Deschide noul cod QR</a>
+              </p>
+              <p><small>Cod QR: MPK_RES=${escapeHtml(formattedBookingNumber)}</small></p>
+            ` : `
+              <p style="color:#b91c1c;"><strong>Link QR indisponibil momentan.</strong></p>
+              <p><small>Cod rezervare: ${escapeHtml(formattedBookingNumber)}</small></p>
+            `}
+          </div>
+          `}
+
+          <div class="notice">
+            <strong>Important:</strong><br>
+            • Păstrați acest email pentru acces și verificări.<br>
+            • Anularea rezervării se poate solicita cu minimum 24 de ore înainte de sosire.<br>
+            • Pentru suport: contact.parcareaeroport@gmail.com sau 0742.039.955.
+          </div>
+        </div>
+        <div class="footer">
+          <p>Acest email a fost trimis automat de sistemul OTP Parking.</p>
+          <p>Modificare aplicată la: ${data.modifiedAt.toLocaleString("ro-RO")}</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `
+}
+
+export async function sendBookingModificationConfirmationEmail(
+  data: BookingModificationConfirmationEmailData
+): Promise<{
+  success: boolean
+  error?: string
+  messageId?: string
+  response?: string
+  qrIncluded?: boolean
+}> {
+  const bookingRef = data.bookingNumber || `pay_on_site_${data.licensePlate}`
+  const emailProcessId = `MODIFICATION_${bookingRef}_${Date.now()}`
+
+  try {
+    console.log(`📧 [EMAIL-${emailProcessId}] ===== STARTING MODIFICATION EMAIL =====`)
+    console.log(`📧 [EMAIL-${emailProcessId}] Recipient: ${data.clientEmail}`)
+    console.log(`📧 [EMAIL-${emailProcessId}] New Booking Number: ${data.bookingNumber || "N/A"}`)
+    console.log(`📧 [EMAIL-${emailProcessId}] Old Booking Number: ${data.oldBookingNumber || "N/A"}`)
+    console.log(`📧 [EMAIL-${emailProcessId}] Source: ${data.source}`)
+    console.log(`📧 [EMAIL-${emailProcessId}] Amount: ${data.newAmount} RON`)
+    console.log(`📧 [EMAIL-${emailProcessId}] Difference: ${data.difference} RON`)
+
+    const emailConfig = validateEmailConfig()
+    if (!emailConfig.isValid) {
+      return {
+        success: false,
+        error: `Email configuration missing: ${emailConfig.missingVars.join(", ")}`,
+      }
+    }
+
+    const shouldHaveQrLink = data.source !== "pay_on_site" && !!data.bookingNumber
+    if (shouldHaveQrLink && data.bookingNumber) {
+      const signedQrApiUrl = buildSignedQrUrl(data.bookingNumber)
+      if (signedQrApiUrl) {
+        const base = getSiteBaseUrl()
+        const u = new URL(signedQrApiUrl)
+        const bn = u.searchParams.get("bookingNumber") || data.bookingNumber
+        const sig = u.searchParams.get("sig") || ""
+        data.qrLinkUrl = `${base}/qr?bookingNumber=${encodeURIComponent(bn)}&sig=${encodeURIComponent(sig)}`
+      }
+    } else {
+      data.qrLinkUrl = undefined
+    }
+
+    const transporter = createEmailTransporter()
+    const formattedBookingNumber = data.bookingNumber ? data.bookingNumber.padStart(6, "0") : data.licensePlate
+    const mailOptions = {
+      from: {
+        name: "OTP Parking",
+        address: process.env.GMAIL_USER || "noreply@rezervari.otp-parking.ro",
+      },
+      to: data.clientEmail,
+      subject: `Rezervare modificată OTP Parking - ${formattedBookingNumber}`,
+      html: generateBookingModificationConfirmationEmailHTML(data),
+      attachments: [] as any[],
+    }
+
+    const sendStartTime = Date.now()
+    const emailPromise = transporter.sendMail(mailOptions)
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("SMTP timeout - 30 seconds")), 30000)
+    )
+    const result = await Promise.race([emailPromise, timeoutPromise]) as any
+    console.log(`✅ [EMAIL-${emailProcessId}] MODIFICATION EMAIL SENT in ${Date.now() - sendStartTime}ms`)
+
+    return {
+      success: true,
+      messageId: result?.messageId,
+      response: result?.response,
+      qrIncluded: shouldHaveQrLink && !!data.qrLinkUrl,
+    }
+  } catch (error) {
+    console.error(`❌ [EMAIL-${emailProcessId}] MODIFICATION EMAIL FAILED`, error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown email error",
+      qrIncluded: data.source !== "pay_on_site" && !!data.bookingNumber,
+    }
+  }
 }
 
 /**

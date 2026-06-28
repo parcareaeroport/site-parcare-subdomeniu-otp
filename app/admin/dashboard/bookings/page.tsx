@@ -143,7 +143,12 @@ interface Booking {
     amountToPay?: number
     creditAmount?: number
     difference?: number
+    paymentPolicy?: string | null
+    payOnSiteLocalOnly?: boolean
     refundRequiredAmount?: number
+    modificationEmailStatus?: string | null
+    modificationEmailError?: string | null
+    modificationEmailMessageId?: string | null
     finalValues?: {
       startDate?: string
       startTime?: string
@@ -155,6 +160,45 @@ interface Booking {
   lastModificationRequestId?: string | null
   lastPriceDifference?: number
   lastMultiparkUpdateStatus?: string
+  modificationEmailStatus?: string | null
+  modificationEmailSentAt?: Timestamp
+  modificationEmailError?: string | null
+  modificationEmailMessageId?: string | null
+  modificationHistory?: Array<{
+    requestId?: string
+    status?: string
+    reason?: string
+    paymentOrderId?: string | null
+    oldValues?: {
+      startDate?: string
+      startTime?: string
+      endDate?: string
+      endTime?: string
+      licensePlate?: string
+    }
+    newValues?: {
+      startDate?: string
+      startTime?: string
+      endDate?: string
+      endTime?: string
+      licensePlate?: string
+    }
+    oldApiBookingNumber?: string | null
+    newApiBookingNumber?: string | null
+    oldAmount?: number
+    newAmount?: number
+    difference?: number
+    creditAmount?: number
+    amountToPay?: number
+    paymentPolicy?: string | null
+    payOnSiteLocalOnly?: boolean
+    modificationEmailStatus?: string | null
+    modificationEmailSentAtIso?: string | null
+    modificationEmailError?: string | null
+    modificationEmailMessageId?: string | null
+    modificationEmailQrIncluded?: boolean | null
+    atIso?: string
+  }>
   createdAt: Timestamp // Firestore Timestamp
   lastUpdated?: Timestamp
   expiredAt?: Timestamp // Când a fost marcată ca expirată
@@ -3870,6 +3914,12 @@ function BookingsPageContent() {
                   <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm">
                     <h3 className="mb-2 font-medium text-amber-900">Cerere modificare activă</h3>
                     <div className="space-y-1 text-amber-950">
+                      {selectedBooking.activeModificationRequest.paymentPolicy === "pay_on_site_amount_updated" ||
+                      selectedBooking.activeModificationRequest.payOnSiteLocalOnly ? (
+                        <p>
+                          <strong>Tip modificare:</strong> Plată la parcare
+                        </p>
+                      ) : null}
                       <p>
                         <strong>Status:</strong> {selectedBooking.activeModificationRequest.status || "-"}
                       </p>
@@ -3900,20 +3950,37 @@ function BookingsPageContent() {
                         <strong>Valoare nouă:</strong>{" "}
                         {Number(selectedBooking.activeModificationRequest.newAmount || 0).toFixed(2)} RON
                       </p>
-                      <p>
-                        <strong>De plată:</strong>{" "}
-                        {Number(selectedBooking.activeModificationRequest.amountToPay || 0).toFixed(2)} RON
-                      </p>
-                      <p>
-                        <strong>Credit client:</strong>{" "}
-                        {Number(selectedBooking.activeModificationRequest.creditAmount || 0).toFixed(2)} RON
-                      </p>
-                      {Number(selectedBooking.activeModificationRequest.creditAmount || 0) > 0 ? (
+                      {selectedBooking.activeModificationRequest.paymentPolicy === "pay_on_site_amount_updated" ||
+                      selectedBooking.activeModificationRequest.payOnSiteLocalOnly ? (
+                        <p>
+                          <strong>Noua valoare la parcare:</strong>{" "}
+                          {Number(selectedBooking.activeModificationRequest.newAmount || 0).toFixed(2)} RON
+                        </p>
+                      ) : (
+                        <>
+                          <p>
+                            <strong>De plată online:</strong>{" "}
+                            {Number(selectedBooking.activeModificationRequest.amountToPay || 0).toFixed(2)} RON
+                          </p>
+                          <p>
+                            <strong>Credit client:</strong>{" "}
+                            {Number(selectedBooking.activeModificationRequest.creditAmount || 0).toFixed(2)} RON
+                          </p>
+                        </>
+                      )}
+                      {selectedBooking.activeModificationRequest.paymentPolicy === "pay_on_site_amount_updated" ||
+                      selectedBooking.activeModificationRequest.payOnSiteLocalOnly ? (
+                        <p className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 font-medium text-sky-800">
+                          Suma a fost actualizată local. Clientul plătește noua valoare la parcare.
+                        </p>
+                      ) : Number(selectedBooking.activeModificationRequest.creditAmount || 0) > 0 ? (
                         <p className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 font-medium text-emerald-800">
                           Valoarea modificată este mai mică. Diferența rămâne avans pentru următoarea rezervare mobilă.
                         </p>
                       ) : null}
-                      {selectedBooking.activeModificationRequest.refundRequiredAmount ? (
+                      {selectedBooking.activeModificationRequest.paymentPolicy !== "pay_on_site_amount_updated" &&
+                      !selectedBooking.activeModificationRequest.payOnSiteLocalOnly &&
+                      selectedBooking.activeModificationRequest.refundRequiredAmount ? (
                         <p className="font-semibold text-red-700">
                           Refund manual necesar: {Number(selectedBooking.activeModificationRequest.refundRequiredAmount).toFixed(2)} RON
                         </p>
@@ -3954,6 +4021,112 @@ function BookingsPageContent() {
                         )}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {selectedBooking.modificationHistory && selectedBooking.modificationHistory.length > 0 && (
+                  <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <h3 className="mb-2 font-medium text-slate-900">Istoric modificări</h3>
+                    <div className="space-y-3">
+                      {[...selectedBooking.modificationHistory].reverse().map((historyItem, index) => {
+                        const appliedDate = parseFirestoreDate(historyItem.atIso)
+                        const isPayOnSiteModification =
+                          historyItem.paymentPolicy === "pay_on_site_amount_updated" || historyItem.payOnSiteLocalOnly === true
+                        const emailStatus = historyItem.modificationEmailStatus || "-"
+                        const emailStatusNode =
+                          emailStatus === "sent" ? (
+                            <span className="text-green-700">✅ Trimis</span>
+                          ) : emailStatus === "failed" ? (
+                            <span className="text-red-700">❌ Eșuat</span>
+                          ) : emailStatus === "pending" ? (
+                            <span className="text-amber-700">⏳ În curs</span>
+                          ) : (
+                            <span className="text-gray-500">-</span>
+                          )
+
+                        return (
+                          <div
+                            key={`${historyItem.requestId || "modification"}-${index}`}
+                            className="rounded-md border border-slate-200 bg-white p-3"
+                          >
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <Badge className={isPayOnSiteModification ? "bg-orange-100 text-orange-700 border-orange-300" : "bg-blue-100 text-blue-700 border-blue-300"}>
+                                {isPayOnSiteModification ? "Plată la parcare" : "Online/Card"}
+                              </Badge>
+                              <span className="text-xs text-slate-500">
+                                {appliedDate ? formatDateFn(appliedDate, "dd MMM yyyy, HH:mm", { locale: ro }) : "Dată indisponibilă"}
+                              </span>
+                              {historyItem.status && (
+                                <Badge variant="outline" className="text-xs">
+                                  {historyItem.status}
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="grid gap-2 text-slate-700 md:grid-cols-2">
+                              <p>
+                                <strong>Perioadă veche:</strong>{" "}
+                                {historyItem.oldValues?.startDate || "-"} {historyItem.oldValues?.startTime || "--:--"} →{" "}
+                                {historyItem.oldValues?.endDate || "-"} {historyItem.oldValues?.endTime || "--:--"}
+                              </p>
+                              <p>
+                                <strong>Perioadă nouă:</strong>{" "}
+                                {historyItem.newValues?.startDate || "-"} {historyItem.newValues?.startTime || "--:--"} →{" "}
+                                {historyItem.newValues?.endDate || "-"} {historyItem.newValues?.endTime || "--:--"}
+                              </p>
+                              <p>
+                                <strong>Mașină veche:</strong> {historyItem.oldValues?.licensePlate || "-"}
+                              </p>
+                              <p>
+                                <strong>Mașină nouă:</strong> {historyItem.newValues?.licensePlate || "-"}
+                              </p>
+                              <p>
+                                <strong>Valoare inițială:</strong> {Number(historyItem.oldAmount || 0).toFixed(2)} RON
+                              </p>
+                              <p>
+                                <strong>Valoare nouă:</strong> {Number(historyItem.newAmount || 0).toFixed(2)} RON
+                              </p>
+                              <p>
+                                <strong>Diferență:</strong> {Number(historyItem.difference || 0).toFixed(2)} RON
+                              </p>
+                              <p>
+                                <strong>{isPayOnSiteModification ? "Actualizare plată:" : "Plată/Credit:"}</strong>{" "}
+                                {isPayOnSiteModification
+                                  ? "Suma se achită la parcare"
+                                  : `Online ${Number(historyItem.amountToPay || 0).toFixed(2)} RON / Credit ${Number(historyItem.creditAmount || 0).toFixed(2)} RON`}
+                              </p>
+                              {!isPayOnSiteModification && (
+                                <>
+                                  <p>
+                                    <strong>Nr. Multipark vechi:</strong> {historyItem.oldApiBookingNumber || "-"}
+                                  </p>
+                                  <p>
+                                    <strong>Nr. Multipark nou:</strong> {historyItem.newApiBookingNumber || "-"}
+                                  </p>
+                                </>
+                              )}
+                              <p>
+                                <strong>Status email modificare:</strong> {emailStatusNode}
+                              </p>
+                              {historyItem.modificationEmailSentAtIso && (
+                                <p>
+                                  <strong>Email trimis la:</strong>{" "}
+                                  {(() => {
+                                    const emailDate = parseFirestoreDate(historyItem.modificationEmailSentAtIso)
+                                    return emailDate ? formatDateFn(emailDate, "dd MMM yyyy, HH:mm", { locale: ro }) : "-"
+                                  })()}
+                                </p>
+                              )}
+                              {historyItem.modificationEmailError && (
+                                <p className="md:col-span-2">
+                                  <strong>Eroare email:</strong>{" "}
+                                  <span className="text-red-700">{historyItem.modificationEmailError}</span>
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

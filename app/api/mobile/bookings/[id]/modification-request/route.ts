@@ -63,6 +63,13 @@ function getCurrentCommercialAmount(booking: Record<string, unknown>): number {
   return roundMoney(Number(booking.amount || 0))
 }
 
+function isPayOnSiteBooking(booking: Record<string, unknown>): boolean {
+  return (
+    String(booking.source || "") === "pay_on_site" ||
+    String(booking.paymentMethod || "").toLowerCase() === "at_parking"
+  )
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -323,14 +330,12 @@ export async function POST(
       endDate: finalEndDate,
       endTime: finalEndTime,
     })
-    const newAmount =
-      String(booking.paymentMethod || "").toLowerCase() === "at_parking" ||
-      String(booking.source || "") === "pay_on_site"
-        ? newQuote.atParkingTotal
-        : newQuote.onlineTotal
+    const payOnSite = isPayOnSiteBooking(booking)
+    const newAmount = payOnSite ? newQuote.atParkingTotal : newQuote.onlineTotal
     const priceDifference = roundMoney(newAmount - currentAmount)
-    const amountToPay = priceDifference > 0 ? priceDifference : 0
-    const creditAmount = priceDifference < 0 ? Math.abs(priceDifference) : 0
+    const amountToPay = !payOnSite && priceDifference > 0 ? priceDifference : 0
+    const creditAmount = !payOnSite && priceDifference < 0 ? Math.abs(priceDifference) : 0
+    const paymentPolicy = payOnSite ? "pay_on_site_amount_updated" : "online_difference_policy"
     console.info("[booking-modification] modification_quote_resolved", {
       bookingId: id,
       userId: auth.user.uid,
@@ -343,6 +348,7 @@ export async function POST(
       billableDays: newQuote.days,
       paymentTestMode: booking.paymentTestMode === true,
       storedChargedAmount: Number(booking.amount || 0),
+      paymentPolicy,
     })
 
     if (!email) {
@@ -390,6 +396,8 @@ export async function POST(
       amountToPay,
       creditAmount,
       billableDays: newQuote.days,
+      paymentPolicy,
+      payOnSiteLocalOnly: payOnSite,
     })
     console.info("[booking-modification] modification_request_created", {
       bookingId: id,
@@ -401,6 +409,7 @@ export async function POST(
       difference: priceDifference,
       amountToPay,
       creditAmount,
+      paymentPolicy,
     })
     await recordBookingModificationAuditEvent(modificationRef.id, "request_created", "info", {
       bookingId: id,
@@ -411,6 +420,8 @@ export async function POST(
       difference: priceDifference,
       message: "Clientul a trimis cererea de modificare din aplicația mobilă.",
       extra: {
+        paymentPolicy,
+        payOnSiteLocalOnly: payOnSite,
         requested,
         finalValues: {
           startDate: finalStartDate,
@@ -433,6 +444,8 @@ export async function POST(
         amountToPay,
         creditAmount,
         difference: priceDifference,
+        paymentPolicy,
+        payOnSiteLocalOnly: payOnSite,
         finalValues: {
           startDate: finalStartDate,
           startTime: finalStartTime,
@@ -447,8 +460,11 @@ export async function POST(
         currentAmount,
         newAmount,
         difference: priceDifference,
+        paymentPolicy,
         policy:
-          priceDifference > 0
+          payOnSite
+            ? "Suma de plată la parcare se actualizează local."
+            : priceDifference > 0
             ? "Clientul achită diferența înainte de confirmarea modificării."
             : priceDifference < 0
               ? "Diferența rămâne avans pentru o rezervare viitoare."
@@ -478,6 +494,7 @@ export async function POST(
         amountToPay,
         creditAmount,
         billableDays: newQuote.days,
+        paymentPolicy,
       })
     }
 
@@ -498,6 +515,7 @@ export async function POST(
       amountToPay,
       creditAmount,
       billableDays: newQuote.days,
+      paymentPolicy,
       refundRequired: "refundRequired" in applyResult ? applyResult.refundRequired : false,
       recoveryRequired: "recoveryRequired" in applyResult ? applyResult.recoveryRequired : false,
       error: applyResult.success ? undefined : applyResult.message,

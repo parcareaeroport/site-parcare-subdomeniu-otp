@@ -43,6 +43,13 @@ function getCurrentCommercialAmount(booking: Record<string, unknown>): number {
   return roundMoney(Number(booking.amount || 0))
 }
 
+function isPayOnSiteBooking(booking: Record<string, unknown>): boolean {
+  return (
+    String(booking.source || "") === "pay_on_site" ||
+    String(booking.paymentMethod || "").toLowerCase() === "at_parking"
+  )
+}
+
 function isBookingOwner(booking: Record<string, unknown>, uid: string, email?: string | null) {
   if (booking.userId === uid) return true
   return !!email && booking.clientEmail === email && (booking.bookingOrigin === "mobile-app" || booking.userId === uid)
@@ -155,15 +162,15 @@ export async function POST(
       endDate: finalEndDate,
       endTime: finalEndTime,
     })
+    const payOnSite = isPayOnSiteBooking(booking)
     const currentPaidAmount = getCurrentCommercialAmount(booking)
     const newAmount = roundMoney(
-      String(booking.paymentMethod || "").toLowerCase() === "at_parking" || String(booking.source || "") === "pay_on_site"
-        ? quote.atParkingTotal
-        : quote.onlineTotal
+      payOnSite ? quote.atParkingTotal : quote.onlineTotal
     )
     const difference = roundMoney(newAmount - currentPaidAmount)
-    const amountToPay = difference > 0 ? difference : 0
-    const creditAmount = difference < 0 ? Math.abs(difference) : 0
+    const amountToPay = !payOnSite && difference > 0 ? difference : 0
+    const creditAmount = !payOnSite && difference < 0 ? Math.abs(difference) : 0
+    const paymentPolicy = payOnSite ? "pay_on_site_amount_updated" : "online_difference_policy"
 
     console.info("[booking-modification] quote_resolved", {
       bookingId: id,
@@ -177,6 +184,7 @@ export async function POST(
       billableDays: quote.days,
       paymentTestMode: booking.paymentTestMode === true,
       storedChargedAmount: Number(booking.amount || 0),
+      paymentPolicy,
     })
 
     return mobileJsonResponse({
@@ -188,6 +196,7 @@ export async function POST(
       amountToPay,
       creditAmount,
       billableDays: quote.days,
+      paymentPolicy,
       finalValues: {
         startDate: finalStartDate,
         startTime: finalStartTime,
