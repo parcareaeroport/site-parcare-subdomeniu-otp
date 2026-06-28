@@ -1,13 +1,12 @@
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import {
-  sendModificationRequestEmail,
   type ModificationRequested,
 } from "@/lib/modification-email"
 import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { resolveMobileBookingQuote } from "@/lib/booking-pricing"
-import { getMobileUserProfile } from "@/lib/mobile-user-service"
 import { recordBookingModificationAuditEvent } from "@/lib/booking-modification-audit"
+import { applyBookingModificationRequest } from "@/lib/booking-modifications"
 import { addDoc, collection, db, doc, getDoc, serverTimestamp, updateDoc } from "@/lib/server-firestore"
 
 const MODIFICATION_MIN_LEAD_MS = 24 * 60 * 60 * 1000
@@ -293,8 +292,7 @@ export async function POST(
       !!requested.newStartTime ||
       !!requested.newEndDate ||
       !!requested.newEndTime ||
-      !!requested.newLicensePlate ||
-      !!(requested.note && requested.note.trim())
+      !!requested.newLicensePlate
 
     if (!hasAnyChange) {
       console.warn("[booking-modification] modification_request_failed", {
@@ -305,19 +303,11 @@ export async function POST(
       return mobileJsonResponse({ success: false, error: "Niciun câmp modificat" }, 400)
     }
 
-    const profile = await getMobileUserProfile(auth.user.uid)
-    const firstName = profile?.firstName || String(booking.clientFirstName || "Client")
-    const lastName = profile?.lastName || String(booking.clientLastName || "OTP Parking")
-    const phone = profile?.phone || String(booking.clientPhone || "—")
-    const email = auth.user.email || profile?.email || String(booking.clientEmail || "")
+    const email = auth.user.email || String(booking.clientEmail || "")
     const bookingNumber = String(
       booking.apiBookingNumber || booking.bookingNumber || snap.id
     )
     const licensePlate = String(booking.licensePlate || "—")
-    const numberOfPersons =
-      booking.numberOfPersons !== undefined && booking.numberOfPersons !== null
-        ? Number(booking.numberOfPersons)
-        : "—"
     const currentAmount = Number(booking.amount || 0) || 0
     const newQuote = await resolveMobileBookingQuote({
       startDate: finalStartDate,
@@ -358,7 +348,7 @@ export async function POST(
       bookingId: snap.id,
       userId: auth.user.uid,
       userEmail: email,
-      status: "pending_admin_review",
+      status: amountToPay > 0 ? "awaiting_difference_payment" : "applying",
       requestedAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
       source: "mobile-app",
@@ -382,6 +372,7 @@ export async function POST(
         licensePlate: finalLicensePlate,
       },
       currentAmount,
+      currentPaidAmount: currentAmount,
       newAmount,
       difference: priceDifference,
       amountToPay,
@@ -424,7 +415,7 @@ export async function POST(
       activeModificationRequestId: modificationRef.id,
       activeModificationRequest: {
         id: modificationRef.id,
-        status: "pending_admin_review",
+        status: amountToPay > 0 ? "awaiting_difference_payment" : "applying",
         amountToPay,
         creditAmount,
         difference: priceDifference,
@@ -451,37 +442,52 @@ export async function POST(
       },
     })
 
-    const result = await sendModificationRequestEmail({
-      firstName,
-      lastName,
-      phone,
-      email,
-      bookingNumber,
-      current: {
-        startDate: currentStartDate,
-        startTime: currentStartTime,
-        endDate: currentEndDate,
-        endTime: currentEndTime,
-        licensePlate,
-        numberOfPersons,
-      },
-      requested,
-      priceImpact: {
-        currentAmount,
+    if (amountToPay > 0) {
+      await recordBookingModificationAuditEvent(modificationRef.id, "payment_required", "info", {
+        bookingId: id,
+        apiBookingNumber: bookingNumber,
+        userId: auth.user.uid,
+        amountToPay,
+        creditAmount,
+        difference: priceDifference,
+        message: "Modificarea necesită plata diferenței înainte de aplicare.",
+      })
+      return mobileJsonResponse({
+        success: true,
+        status: "awaiting_difference_payment",
+        requiresPayment: true,
+        modificationRequestId: modificationRef.id,
+        bookingId: id,
+        currentPaidAmount: currentAmount,
         newAmount,
         difference: priceDifference,
+        amountToPay,
+        creditAmount,
         billableDays: newQuote.days,
-      },
-    })
-    console.info("[booking-modification] modification_request_email_sent", {
-      bookingId: id,
-      modificationRequestId: modificationRef.id,
-      userId: auth.user.uid,
-      messageId: result.messageId || null,
-      message: result.message || null,
+      })
+    }
+
+    const applyResult = await applyBookingModificationRequest(modificationRef.id, {
+      reason: "auto_no_payment",
     })
 
-    return mobileJsonResponse({ success: true, modificationRequestId: modificationRef.id, ...result })
+    return mobileJsonResponse({
+      success: applyResult.success,
+      status: applyResult.status,
+      requiresPayment: false,
+      modificationRequestId: modificationRef.id,
+      bookingId: id,
+      bookingNumber: applyResult.bookingNumber || undefined,
+      currentPaidAmount: currentAmount,
+      newAmount,
+      difference: priceDifference,
+      amountToPay,
+      creditAmount,
+      billableDays: newQuote.days,
+      refundRequired: "refundRequired" in applyResult ? applyResult.refundRequired : false,
+      recoveryRequired: "recoveryRequired" in applyResult ? applyResult.recoveryRequired : false,
+      error: applyResult.success ? undefined : applyResult.message,
+    }, applyResult.success ? 200 : 409)
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
     console.error("[booking-modification] modification_request_exception", {
