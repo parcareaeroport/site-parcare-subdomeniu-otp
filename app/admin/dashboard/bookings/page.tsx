@@ -138,6 +138,8 @@ interface Booking {
   activeModificationRequest?: {
     id?: string
     status?: string
+    currentAmount?: number
+    newAmount?: number
     amountToPay?: number
     creditAmount?: number
     difference?: number
@@ -3891,6 +3893,14 @@ function BookingsPageContent() {
                         {Number(selectedBooking.activeModificationRequest.difference || 0).toFixed(2)} RON
                       </p>
                       <p>
+                        <strong>Valoare inițială:</strong>{" "}
+                        {Number(selectedBooking.activeModificationRequest.currentAmount || 0).toFixed(2)} RON
+                      </p>
+                      <p>
+                        <strong>Valoare nouă:</strong>{" "}
+                        {Number(selectedBooking.activeModificationRequest.newAmount || 0).toFixed(2)} RON
+                      </p>
+                      <p>
                         <strong>De plată:</strong>{" "}
                         {Number(selectedBooking.activeModificationRequest.amountToPay || 0).toFixed(2)} RON
                       </p>
@@ -3898,6 +3908,11 @@ function BookingsPageContent() {
                         <strong>Credit client:</strong>{" "}
                         {Number(selectedBooking.activeModificationRequest.creditAmount || 0).toFixed(2)} RON
                       </p>
+                      {Number(selectedBooking.activeModificationRequest.creditAmount || 0) > 0 ? (
+                        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 font-medium text-emerald-800">
+                          Valoarea modificată este mai mică. Diferența rămâne avans pentru următoarea rezervare mobilă.
+                        </p>
+                      ) : null}
                       {selectedBooking.activeModificationRequest.refundRequiredAmount ? (
                         <p className="font-semibold text-red-700">
                           Refund manual necesar: {Number(selectedBooking.activeModificationRequest.refundRequiredAmount).toFixed(2)} RON

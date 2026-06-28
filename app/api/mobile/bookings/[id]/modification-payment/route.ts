@@ -3,6 +3,7 @@ import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { db, doc, getDoc } from "@/lib/server-firestore"
 import { createMobileNetopiaPaymentSession } from "@/lib/payments/netopia-provider"
 import { recordBookingModificationAuditEvent } from "@/lib/booking-modification-audit"
+import { getNetopiaForcedTestConfig } from "@/lib/payments/netopia-test-mode"
 import type { MobileBookingPayload } from "@/lib/mobile-booking-mapper"
 
 export async function OPTIONS() {
@@ -84,6 +85,8 @@ export async function POST(
       return mobileJsonResponse({ success: false, error: "Cererea nu are diferență de plată." }, 400)
     }
 
+    const forcedTestConfig = getNetopiaForcedTestConfig()
+    const chargedAmount = forcedTestConfig.enabled ? forcedTestConfig.amount : amountToPay
     const finalValues = (mod.finalValues || {}) as Record<string, string>
     const payload: MobileBookingPayload = {
       licensePlate: String(finalValues.licensePlate || booking.licensePlate || ""),
@@ -96,7 +99,7 @@ export async function POST(
       firstName: booking.clientName ? String(booking.clientName).split(" ")[0] : "Client",
       lastName: booking.clientName ? String(booking.clientName).split(" ").slice(1).join(" ") : "OTP Parking",
       days: Number(mod.billableDays || booking.days || 1),
-      amount: amountToPay,
+      amount: chargedAmount,
     }
 
     const orderId = requestedOrderId || `mobile_mod_${bookingId}_${Date.now()}`
@@ -106,10 +109,24 @@ export async function POST(
       userId: auth.user.uid,
       orderId,
       amountToPay,
+      chargedAmount,
+      paymentTestMode: forcedTestConfig.enabled,
       apiBookingNumber: booking.apiBookingNumber || booking.bookingNumber || null,
       originalBookingAmount: Number(mod.currentAmount || booking.amount || 0),
       newBookingAmount: Number(mod.newAmount || 0),
     })
+
+    if (forcedTestConfig.enabled) {
+      console.warn("[booking-modification] modification_difference_forced_test_amount_active", {
+        bookingId,
+        modificationRequestId: requestId,
+        userId: auth.user.uid,
+        orderId,
+        realAmountToPay: amountToPay,
+        chargedAmount,
+      })
+    }
+
     await recordBookingModificationAuditEvent(requestId, "difference_payment_init", "info", {
       bookingId,
       apiBookingNumber: String(booking.apiBookingNumber || booking.bookingNumber || "") || null,
@@ -119,7 +136,13 @@ export async function POST(
       creditAmount: Number(mod.creditAmount || 0),
       difference: Number(mod.difference || 0),
       message: "Clientul a inițiat plata diferenței pentru modificare.",
+      extra: {
+        paymentTestMode: forcedTestConfig.enabled,
+        chargedAmount,
+        realAmountToPay: amountToPay,
+      },
     })
+
     const session = await createMobileNetopiaPaymentSession(
       payload,
       {
@@ -127,17 +150,19 @@ export async function POST(
         isGuest: auth.user.isGuest,
         paymentProvider: "netopia",
       },
-      amountToPay,
+      chargedAmount,
       orderId,
       {
         realAmount: amountToPay,
-        chargedAmount: amountToPay,
+        chargedAmount,
+        paymentTestMode: forcedTestConfig.enabled,
         paymentType: "booking_modification_difference",
         description: `Diferență modificare rezervare OTP Parking #${booking.apiBookingNumber || bookingId}`,
         pendingPaymentExtra: {
           paymentType: "booking_modification_difference",
           bookingId,
           modificationRequestId: requestId,
+          modificationAmountToPay: amountToPay,
           originalBookingAmount: Number(mod.currentAmount || booking.amount || 0),
           newBookingAmount: Number(mod.newAmount || 0),
         },
@@ -149,6 +174,9 @@ export async function POST(
       userId: auth.user.uid,
       orderId,
       amountToPay,
+      chargedAmount: session.chargedAmount,
+      realAmount: session.realAmount,
+      paymentTestMode: session.paymentTestMode,
       hasPaymentUrl: Boolean(session.paymentUrl || session.authenticationUrl),
       ntpID: session.ntpID || null,
       status: session.status,

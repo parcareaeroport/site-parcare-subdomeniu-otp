@@ -55,6 +55,14 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+function getCurrentCommercialAmount(booking: Record<string, unknown>): number {
+  const testRealAmount = Number(booking.paymentTestRealAmount || 0)
+  if (booking.paymentTestMode === true && testRealAmount > 0) {
+    return roundMoney(testRealAmount)
+  }
+  return roundMoney(Number(booking.amount || 0))
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -308,7 +316,7 @@ export async function POST(
       booking.apiBookingNumber || booking.bookingNumber || snap.id
     )
     const licensePlate = String(booking.licensePlate || "—")
-    const currentAmount = Number(booking.amount || 0) || 0
+    const currentAmount = getCurrentCommercialAmount(booking)
     const newQuote = await resolveMobileBookingQuote({
       startDate: finalStartDate,
       startTime: finalStartTime,
@@ -333,6 +341,8 @@ export async function POST(
       amountToPay,
       creditAmount,
       billableDays: newQuote.days,
+      paymentTestMode: booking.paymentTestMode === true,
+      storedChargedAmount: Number(booking.amount || 0),
     })
 
     if (!email) {
@@ -359,6 +369,8 @@ export async function POST(
         endTime: currentEndTime,
         licensePlate,
         amount: currentAmount,
+        storedChargedAmount: Number(booking.amount || 0),
+        paymentTestMode: booking.paymentTestMode === true,
         apiBookingNumber: booking.apiBookingNumber || null,
         source: booking.source || null,
         paymentProvider: booking.paymentProvider || null,
@@ -416,6 +428,8 @@ export async function POST(
       activeModificationRequest: {
         id: modificationRef.id,
         status: amountToPay > 0 ? "awaiting_difference_payment" : "applying",
+        currentAmount,
+        newAmount,
         amountToPay,
         creditAmount,
         difference: priceDifference,

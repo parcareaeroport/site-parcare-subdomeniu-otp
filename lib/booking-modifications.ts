@@ -256,6 +256,7 @@ export async function applyBookingModificationRequest(
     actorEmail?: string | null
     reason: ApplyReason
     paymentOrderId?: string
+    paymentChargedAmount?: number
   }
 ) {
   const requestRef = adminDb.collection("bookingModificationRequests").doc(requestId)
@@ -332,6 +333,10 @@ export async function applyBookingModificationRequest(
   const amountToPay = roundMoney(Number(request.amountToPay || 0))
   const creditAmount = roundMoney(Number(request.creditAmount || 0))
   const difference = roundMoney(Number(request.difference || 0))
+  const refundRequiredAmount =
+    options.reason === "difference_payment_paid"
+      ? roundMoney(Number(options.paymentChargedAmount ?? amountToPay))
+      : 0
   const oldApiBookingNumber = String(booking.apiBookingNumber || "")
   const shouldUseMultipark = Boolean(oldApiBookingNumber) && String(booking.source || "") !== "pay_on_site"
   const oldValues = valuesFromSnapshot(request.currentSnapshot as Record<string, unknown> | undefined, booking)
@@ -347,6 +352,7 @@ export async function applyBookingModificationRequest(
     difference,
     reason: options.reason,
     paymentOrderId: options.paymentOrderId || null,
+    paymentChargedAmount: options.paymentChargedAmount ?? null,
   })
   await recordBookingModificationAuditEvent(requestId, "apply_started", "info", {
     bookingId,
@@ -386,7 +392,7 @@ export async function applyBookingModificationRequest(
         oldApiBookingNumber,
         multiparkStatus: "old_cancel_failed",
         oldMultiparkCancelResult: summarizeMultiparkResult(cancelResult),
-        refundRequiredAmount: status === "refund_required" ? amountToPay : 0,
+        refundRequiredAmount: status === "refund_required" ? refundRequiredAmount : 0,
       })
       await updateBookingAfterMultiparkFailure({
         bookingId,
@@ -395,7 +401,7 @@ export async function applyBookingModificationRequest(
         amountToPay,
         difference,
         message,
-        refundRequiredAmount: status === "refund_required" ? amountToPay : 0,
+        refundRequiredAmount: status === "refund_required" ? refundRequiredAmount : 0,
       })
       return { success: false, status, bookingId, message, refundRequired: status === "refund_required" }
     }
@@ -475,7 +481,7 @@ export async function applyBookingModificationRequest(
         oldMultiparkCancelResult: summarizeMultiparkResult(cancelResult),
         newMultiparkCreateResult: summarizeMultiparkResult(createResult),
         rollbackMultiparkResult: summarizeMultiparkResult(rollbackResult),
-        refundRequiredAmount: options.reason === "difference_payment_paid" ? amountToPay : 0,
+        refundRequiredAmount,
       })
       await updateBookingAfterMultiparkFailure({
         bookingId,
@@ -484,7 +490,7 @@ export async function applyBookingModificationRequest(
         amountToPay,
         difference,
         message,
-        refundRequiredAmount: options.reason === "difference_payment_paid" ? amountToPay : 0,
+        refundRequiredAmount,
         recoveryRequired: !rollbackSucceeded,
       })
       await recordBookingModificationAuditEvent(
@@ -555,6 +561,8 @@ export async function applyBookingModificationRequest(
         activeModificationRequest: {
           id: requestId,
           status: "completed",
+          currentAmount: Number(request.currentAmount || 0),
+          newAmount,
           amountToPay,
           creditAmount,
           difference,

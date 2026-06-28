@@ -35,6 +35,14 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+function getCurrentCommercialAmount(booking: Record<string, unknown>): number {
+  const testRealAmount = Number(booking.paymentTestRealAmount || 0)
+  if (booking.paymentTestMode === true && testRealAmount > 0) {
+    return roundMoney(testRealAmount)
+  }
+  return roundMoney(Number(booking.amount || 0))
+}
+
 function isBookingOwner(booking: Record<string, unknown>, uid: string, email?: string | null) {
   if (booking.userId === uid) return true
   return !!email && booking.clientEmail === email && (booking.bookingOrigin === "mobile-app" || booking.userId === uid)
@@ -147,7 +155,7 @@ export async function POST(
       endDate: finalEndDate,
       endTime: finalEndTime,
     })
-    const currentPaidAmount = roundMoney(Number(booking.amount || 0))
+    const currentPaidAmount = getCurrentCommercialAmount(booking)
     const newAmount = roundMoney(
       String(booking.paymentMethod || "").toLowerCase() === "at_parking" || String(booking.source || "") === "pay_on_site"
         ? quote.atParkingTotal
@@ -167,6 +175,8 @@ export async function POST(
       amountToPay,
       creditAmount,
       billableDays: quote.days,
+      paymentTestMode: booking.paymentTestMode === true,
+      storedChargedAmount: Number(booking.amount || 0),
     })
 
     return mobileJsonResponse({

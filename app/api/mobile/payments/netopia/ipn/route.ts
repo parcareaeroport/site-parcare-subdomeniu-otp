@@ -200,6 +200,7 @@ export async function POST(request: Request) {
       const applyResult = await applyBookingModificationRequest(pending.modificationRequestId, {
         reason: "difference_payment_paid",
         paymentOrderId: orderID,
+        paymentChargedAmount: chargedAmount,
       })
       console.info("[netopia-ipn] modification_difference_apply_result", {
         orderId: orderID,
