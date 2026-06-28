@@ -18,7 +18,19 @@ type AuditMetadata = {
 
 function compact(value: Record<string, unknown>) {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined)
+    Object.entries(value)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .map(([key, entryValue]) => {
+        if (
+          entryValue &&
+          typeof entryValue === "object" &&
+          !Array.isArray(entryValue) &&
+          !(entryValue instanceof Date)
+        ) {
+          return [key, compact(entryValue as Record<string, unknown>)]
+        }
+        return [key, entryValue]
+      })
   )
 }
 

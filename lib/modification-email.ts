@@ -18,6 +18,47 @@ export type ModificationRequested = {
   note?: string
 }
 
+/** Firestore rejects undefined field values — keep only defined modification fields. */
+export function compactModificationRequested(
+  requested: ModificationRequested
+): ModificationRequested {
+  return Object.fromEntries(
+    Object.entries(requested).filter(([, value]) => value !== undefined)
+  ) as ModificationRequested
+}
+
+export function parseModificationRequested(
+  body: Record<string, unknown>
+): ModificationRequested {
+  const requested: ModificationRequested = {}
+
+  const newStartDate = asModificationField(body.newStartDate)
+  if (newStartDate) requested.newStartDate = newStartDate
+
+  const newStartTime = asModificationField(body.newStartTime)
+  if (newStartTime) requested.newStartTime = newStartTime
+
+  const newEndDate = asModificationField(body.newEndDate)
+  if (newEndDate) requested.newEndDate = newEndDate
+
+  const newEndTime = asModificationField(body.newEndTime)
+  if (newEndTime) requested.newEndTime = newEndTime
+
+  const newLicensePlate = asModificationField(body.newLicensePlate)?.toUpperCase()
+  if (newLicensePlate) requested.newLicensePlate = newLicensePlate
+
+  const note = asModificationField(body.note)
+  if (note) requested.note = note
+
+  return requested
+}
+
+function asModificationField(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined
+  const trimmed = String(value).trim()
+  return trimmed ? trimmed : undefined
+}
+
 export type ModificationEmailData = {
   firstName: string
   lastName: string

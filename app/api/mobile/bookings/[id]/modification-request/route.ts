@@ -1,8 +1,6 @@
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
-import {
-  type ModificationRequested,
-} from "@/lib/modification-email"
+import { parseModificationRequested } from "@/lib/modification-email"
 import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { resolveMobileBookingQuote } from "@/lib/booking-pricing"
 import { recordBookingModificationAuditEvent } from "@/lib/booking-modification-audit"
@@ -29,12 +27,6 @@ function isBookingOwner(
     return true
   }
   return false
-}
-
-function asString(v: unknown): string | undefined {
-  if (v === undefined || v === null) return undefined
-  const s = String(v).trim()
-  return s ? s : undefined
 }
 
 function isValidDate(value: string): boolean {
@@ -127,14 +119,7 @@ export async function POST(
 
     const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
 
-    const requested: ModificationRequested = {
-      newStartDate: asString(body.newStartDate),
-      newStartTime: asString(body.newStartTime),
-      newEndDate: asString(body.newEndDate),
-      newEndTime: asString(body.newEndTime),
-      newLicensePlate: asString(body.newLicensePlate)?.toUpperCase(),
-      note: asString(body.note),
-    }
+    const requested = parseModificationRequested(body)
     console.info("[booking-modification] modification_request_payload_parsed", {
       bookingId: id,
       userId: auth.user.uid,
