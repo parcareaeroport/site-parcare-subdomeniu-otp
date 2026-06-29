@@ -1228,39 +1228,37 @@ function BookingsPageContent() {
   const isMobileAppBooking = (b: Booking) => b.bookingOrigin === "mobile-app" || b.channel === "mobile"
 
   const renderBookingApiColumn = (booking: Booking) => {
+    const showManualBadge = booking.source === "manual"
+    const showLprBadge = booking.source === "lpr" || booking.status === "unmatched_lpr"
+    const showPayOnSiteBadge = isPayOnSiteBooking(booking)
+    const showOnlineBadge =
+      !showManualBadge &&
+      !showLprBadge &&
+      !showPayOnSiteBadge &&
+      booking.status !== "unmatched_lpr"
     const hasChannelBadge =
-      booking.source === "manual" ||
-      booking.source === "lpr" ||
-      booking.status === "unmatched_lpr" ||
-      isPayOnSiteBooking(booking) ||
-      (booking.source !== "manual" &&
-        !isPayOnSiteBooking(booking) &&
-        booking.source !== "lpr" &&
-        booking.status !== "unmatched_lpr")
+      showManualBadge || showLprBadge || showPayOnSiteBadge || showOnlineBadge
 
     return (
       <div className="flex flex-col gap-1">
         {hasChannelBadge ? (
           <div className="flex flex-wrap items-center gap-1">
-            {booking.source === "manual" && (
+            {showManualBadge && (
               <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
                 MANUAL
               </Badge>
             )}
-            {(booking.source === "lpr" || booking.status === "unmatched_lpr") && (
+            {showLprBadge && (
               <Badge variant="outline" className="text-purple-700 border-purple-400 bg-purple-100 text-xs">
                 LPR
               </Badge>
             )}
-            {booking.source !== "manual" &&
-              !isPayOnSiteBooking(booking) &&
-              booking.source !== "lpr" &&
-              booking.status !== "unmatched_lpr" && (
-                <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 text-xs">
-                  ONLINE
-                </Badge>
-              )}
-            {isPayOnSiteBooking(booking) && (
+            {showOnlineBadge && (
+              <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 text-xs">
+                ONLINE
+              </Badge>
+            )}
+            {showPayOnSiteBadge && (
               <Badge
                 variant="outline"
                 className={`text-xs ${
