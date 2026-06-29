@@ -1227,6 +1227,65 @@ function BookingsPageContent() {
 
   const isMobileAppBooking = (b: Booking) => b.bookingOrigin === "mobile-app" || b.channel === "mobile"
 
+  const renderBookingApiColumn = (booking: Booking) => {
+    const hasChannelBadge =
+      booking.source === "manual" ||
+      booking.source === "lpr" ||
+      booking.status === "unmatched_lpr" ||
+      isPayOnSiteBooking(booking) ||
+      (booking.source !== "manual" &&
+        !isPayOnSiteBooking(booking) &&
+        booking.source !== "lpr" &&
+        booking.status !== "unmatched_lpr")
+
+    return (
+      <div className="flex flex-col gap-1">
+        {hasChannelBadge ? (
+          <div className="flex flex-wrap items-center gap-1">
+            {booking.source === "manual" && (
+              <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 text-xs">
+                MANUAL
+              </Badge>
+            )}
+            {(booking.source === "lpr" || booking.status === "unmatched_lpr") && (
+              <Badge variant="outline" className="text-purple-700 border-purple-400 bg-purple-100 text-xs">
+                LPR
+              </Badge>
+            )}
+            {booking.source !== "manual" &&
+              !isPayOnSiteBooking(booking) &&
+              booking.source !== "lpr" &&
+              booking.status !== "unmatched_lpr" && (
+                <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 text-xs">
+                  ONLINE
+                </Badge>
+              )}
+            {isPayOnSiteBooking(booking) && (
+              <Badge
+                variant="outline"
+                className={`text-xs ${
+                  isPayOnSiteOverThreshold(booking)
+                    ? "text-red-800 border-red-500 bg-red-100"
+                    : "text-orange-800 border-orange-500 bg-orange-200"
+                }`}
+              >
+                PLATĂ LA PARCARE
+              </Badge>
+            )}
+          </div>
+        ) : null}
+        {!isPayOnSiteBooking(booking) && (
+          <span>{booking.apiBookingNumber || booking.id.substring(0, 6)}</span>
+        )}
+        {isMobileAppBooking(booking) && (
+          <Badge className="w-fit self-start border-0 bg-[#3D2067] text-white text-xs hover:bg-[#3D2067]">
+            Mobile
+          </Badge>
+        )}
+      </div>
+    )
+  }
+
   const canRetryOblioInvoice = (booking?: Booking | null) => {
     if (!booking) return false
     const source = String(booking.source || "")
@@ -2948,7 +3007,7 @@ function BookingsPageContent() {
                       {paginatedGlobalSearchResults.map((booking) => (
                         <TableRow key={`global-${booking.id}`}>
                           <TableCell className="font-medium">
-                            {booking.apiBookingNumber || booking.id.substring(0, 6)}
+                            {renderBookingApiColumn(booking)}
                           </TableCell>
                           <TableCell>{booking.licensePlate}</TableCell>
                           <TableCell>{booking.clientName || "N/A"}</TableCell>
@@ -3131,44 +3190,9 @@ function BookingsPageContent() {
                         ;(booking as any)._lprTimesLabel = lprTimesLabel
                         return null
                       })()}
-                        <TableCell className="font-medium">
-                          {booking.source === "manual" && (
-                            <Badge variant="outline" className="text-orange-700 border-orange-400 bg-orange-100 mr-2 text-xs">
-                              MANUAL
-                            </Badge>
-                          )}
-                          {(booking.source === "lpr" || booking.status === "unmatched_lpr") && (
-                            <Badge variant="outline" className="text-purple-700 border-purple-400 bg-purple-100 mr-2 text-xs">
-                              LPR
-                            </Badge>
-                          )}
-                          {booking.source !== "manual" &&
-                            !isPayOnSiteBooking(booking) &&
-                            booking.source !== "lpr" &&
-                            booking.status !== "unmatched_lpr" && (
-                              <Badge variant="outline" className="text-green-700 border-green-400 bg-green-100 mr-2 text-xs">
-                                ONLINE
-                              </Badge>
-                            )}
-                          {isPayOnSiteBooking(booking) && (
-                            <Badge
-                              variant="outline"
-                              className={`mr-2 text-xs ${
-                                isPayOnSiteOverThreshold(booking)
-                                  ? "text-red-800 border-red-500 bg-red-100"
-                                  : "text-orange-800 border-orange-500 bg-orange-200"
-                              }`}
-                            >
-                              {/* Temporar ascuns textul de prag (>X min) pentru pay_on_site */}
-                              {/* {isPayOnSiteOverThreshold(booking)
-                                ? `PLATĂ LA PARCARE (>${payOnSiteCancelMinutes} min)`
-                                : "PLATĂ LA PARCARE"} */}
-                              {"PLATĂ LA PARCARE"}
-                            </Badge>
-                          )}
-                          {/* Pentru pay-on-site nu afișăm număr de rezervare (nu există în Multipark) */}
-                          {!isPayOnSiteBooking(booking) && (booking.apiBookingNumber || booking.id.substring(0, 6))}
-                        </TableCell>
+                          <TableCell className="font-medium">
+                            {renderBookingApiColumn(booking)}
+                          </TableCell>
                         <TableCell>{booking.licensePlate}</TableCell>
                         <TableCell>{booking.clientName || "N/A"}</TableCell>
                         <TableCell>

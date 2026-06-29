@@ -106,7 +106,7 @@ export function generateBookingModificationConfirmationEmailHTML(data: BookingMo
         body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
         .container { max-width: 600px; margin: 0 auto; padding: 20px; }
         .header { background: linear-gradient(135deg, #ee7f1a, #d67016); color: white; padding: 20px; text-align: center; border-radius: 10px 10px 0 0; }
-        .header h1 { color: #ffffff; margin: 8px 0; }
+        .header h1 { color: #ffffff; margin: 8px 0; font-size: 22px; line-height: 1.25; }
         .header p { color: #fff7ed; margin: 5px 0; }
         .content { background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px; }
         .box { background: white; padding: 20px; border-radius: 8px; margin: 18px 0; }
