@@ -120,8 +120,8 @@ export default function MobileForceUpdateOpsPage() {
           </div>
           <h1 className="text-2xl font-bold text-slate-900">Update forțat app mobil</h1>
           <p className="mt-2 text-sm text-slate-600">
-            Pagină ascunsă — nu apare în meniul admin. Folosește codul de versiune din build-ul EAS
-            (`EXPO_PUBLIC_APP_VERSION_CODE`).
+            Pagină ascunsă — nu apare în meniul admin. La fiecare build EAS, numărul de build nativ
+            (iOS/Android) crește automat (`autoIncrement` + `appVersionSource: remote`).
           </p>
         </div>
 
@@ -162,11 +162,12 @@ export default function MobileForceUpdateOpsPage() {
               </CardHeader>
               <CardContent className="space-y-2 text-sm text-orange-950">
                 <p>
-                  1. La fiecare build nou, crește `EXPO_PUBLIC_APP_VERSION_CODE` în `eas.json` (ex: 1 → 2).
+                  1. Fiecare build EAS incrementează automat build number-ul nativ (vezi build logs sau
+                  expo.dev → Builds).
                 </p>
                 <p>
-                  2. Activează update-ul și setează versiunea minimă (ex: 2). Utilizatorii cu cod mai mic
-                  văd modalul.
+                  2. Activează update-ul și setează versiunea minimă = acel build number (ex: 8).
+                  Utilizatorii cu build mai mic văd modalul.
                 </p>
                 <p>
                   3. Cu „Forțat” activ, modalul nu se poate închide — doar actualizare din App Store /
@@ -179,7 +180,7 @@ export default function MobileForceUpdateOpsPage() {
               <CardHeader>
                 <CardTitle>Setări update</CardTitle>
                 <CardDescription>
-                  Valoarea minimă se compară cu codul din aplicație (`EXPO_PUBLIC_APP_VERSION_CODE`).
+                  Valoarea minimă se compară cu build number-ul din app (EAS autoIncrement).
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
