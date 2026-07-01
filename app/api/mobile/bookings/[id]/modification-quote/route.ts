@@ -1,4 +1,9 @@
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
+import {
+  canAccessMobileBooking,
+  logMobileBookingAuthResolved,
+  logMobileBookingOwnershipFailure,
+} from "@/lib/mobile-booking-ownership"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
 import { resolveMobileBookingQuote } from "@/lib/booking-pricing"
@@ -50,11 +55,6 @@ function isPayOnSiteBooking(booking: Record<string, unknown>): boolean {
   )
 }
 
-function isBookingOwner(booking: Record<string, unknown>, uid: string, email?: string | null) {
-  if (booking.userId === uid) return true
-  return !!email && booking.clientEmail === email && (booking.bookingOrigin === "mobile-app" || booking.userId === uid)
-}
-
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -64,13 +64,25 @@ export async function POST(
 
   try {
     const { id } = await params
+    logMobileBookingAuthResolved("modification_quote", id, {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    })
+
     const snap = await getDoc(doc(db, "bookings", id))
     if (!snap.exists()) {
       return mobileJsonResponse({ success: false, error: "Booking not found" }, 404)
     }
 
     const booking = (snap.data() || {}) as Record<string, unknown>
-    if (!isBookingOwner(booking, auth.user.uid, auth.user.email)) {
+    const authContext = {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    }
+    if (!canAccessMobileBooking(booking, authContext)) {
+      logMobileBookingOwnershipFailure("modification_quote", id, authContext, booking)
       return mobileJsonResponse({ success: false, error: "Forbidden" }, 403)
     }
 

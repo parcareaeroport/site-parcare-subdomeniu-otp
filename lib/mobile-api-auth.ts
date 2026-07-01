@@ -70,7 +70,9 @@ export async function verifyMobileUser(
           },
         }
       } catch (error) {
-        console.error("[mobile-api-auth] Failed to verify token.", error)
+        console.error("[mobile-api-auth] Failed to verify bearer token.", {
+          error: error instanceof Error ? error.message : error,
+        })
         return {
           ok: false,
           response: NextResponse.json({ error: "Invalid token" }, { status: 401 }),
@@ -84,6 +86,9 @@ export async function verifyMobileUser(
     try {
       const guest = await resolveGuestByEmail(guestEmail)
       if (!guest) {
+        console.warn("[mobile-api-auth] Guest not found for email.", {
+          guestEmail: guestEmail.trim().toLowerCase(),
+        })
         return {
           ok: false,
           response: NextResponse.json(

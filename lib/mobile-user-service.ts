@@ -198,39 +198,25 @@ export async function updateMobileUserCar(
   return cars
 }
 
-export async function queryBookingsByContact(
-  email: string | null,
-  phone: string | null
-) {
-  if (!email && !phone) return []
+export async function queryBookingsByContact(email: string | null) {
+  if (!email) return []
+
+  const normalizedEmail = email.trim().toLowerCase()
+  if (!normalizedEmail) return []
 
   const bookingsRef = collection(db, "bookings")
   const results = new Map<string, { id: string; [key: string]: unknown }>()
 
-  const collectSnap = async (snap: any) => {
+  try {
+    const q = query(bookingsRef, where("clientEmail", "==", normalizedEmail))
+    const snap = await getDocs(q)
     snap.docs.forEach((d: { id: string; data: () => Record<string, unknown> }) => {
       const data = d.data()
       if (data.bookingOrigin !== "mobile-app") return
       results.set(d.id, { id: d.id, ...data })
     })
-  }
-
-  if (email) {
-    try {
-      const q = query(bookingsRef, where("clientEmail", "==", email))
-      await collectSnap(await getDocs(q))
-    } catch (error) {
-      console.warn("[mobile-user-service] clientEmail query failed:", error)
-    }
-  }
-
-  if (phone) {
-    try {
-      const q = query(bookingsRef, where("clientPhone", "==", phone))
-      await collectSnap(await getDocs(q))
-    } catch (error) {
-      console.warn("[mobile-user-service] clientPhone query failed:", error)
-    }
+  } catch (error) {
+    console.warn("[mobile-user-service] clientEmail query failed:", error)
   }
 
   return Array.from(results.values()).sort((a, b) => {

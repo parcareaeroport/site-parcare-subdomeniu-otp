@@ -14,16 +14,15 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
     const email = (searchParams.get("email") || "").trim().toLowerCase() || null
-    const phone = (searchParams.get("phone") || "").trim().replace(/\s+/g, "") || null
 
-    if (!email && !phone) {
+    if (!email) {
       return mobileJsonResponse(
-        { success: false, error: "Provide at least one of: email, phone" },
+        { success: false, error: "Provide email query parameter" },
         400
       )
     }
 
-    const bookings = await queryBookingsByContact(email, phone)
+    const bookings = await queryBookingsByContact(email)
 
     const mapped = bookings.map((b: Record<string, unknown>) => ({
       id: b.id,

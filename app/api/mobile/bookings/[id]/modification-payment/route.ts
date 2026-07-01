@@ -1,4 +1,9 @@
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
+import {
+  canAccessMobileBooking,
+  logMobileBookingAuthResolved,
+  logMobileBookingOwnershipFailure,
+} from "@/lib/mobile-booking-ownership"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { db, doc, getDoc } from "@/lib/server-firestore"
 import { createMobileNetopiaPaymentSession } from "@/lib/payments/netopia-provider"
@@ -8,11 +13,6 @@ import type { MobileBookingPayload } from "@/lib/mobile-booking-mapper"
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
-}
-
-function isBookingOwner(booking: Record<string, unknown>, uid: string, email?: string | null) {
-  if (booking.userId === uid) return true
-  return !!email && booking.clientEmail === email
 }
 
 export async function POST(
@@ -27,6 +27,12 @@ export async function POST(
   try {
     const { id: bookingId } = await params
     bookingIdForLog = bookingId
+    logMobileBookingAuthResolved("modification_payment", bookingId, {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    })
+
     const body = await request.json().catch(() => ({}))
     const requestedOrderId = typeof body?.orderId === "string" ? body.orderId.trim() : ""
 
@@ -36,7 +42,13 @@ export async function POST(
     }
 
     const booking = bookingSnap.data() || {}
-    if (!isBookingOwner(booking, auth.user.uid, auth.user.email)) {
+    const authContext = {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    }
+    if (!canAccessMobileBooking(booking, authContext)) {
+      logMobileBookingOwnershipFailure("modification_payment", bookingId, authContext, booking)
       console.warn("[booking-modification] modification_difference_payment_failed", {
         bookingId,
         userId: auth.user.uid,

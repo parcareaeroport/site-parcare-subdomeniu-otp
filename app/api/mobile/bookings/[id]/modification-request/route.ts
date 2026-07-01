@@ -1,4 +1,9 @@
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
+import {
+  canAccessMobileBooking,
+  logMobileBookingAuthResolved,
+  logMobileBookingOwnershipFailure,
+} from "@/lib/mobile-booking-ownership"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { parseModificationRequested } from "@/lib/modification-email"
 import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
@@ -11,22 +16,6 @@ const MODIFICATION_MIN_LEAD_MS = 24 * 60 * 60 * 1000
 
 export async function OPTIONS() {
   return mobileOptionsResponse()
-}
-
-function isBookingOwner(
-  booking: Record<string, unknown>,
-  uid: string,
-  email: string | null | undefined
-) {
-  if (booking.userId === uid) return true
-  if (
-    email &&
-    booking.clientEmail === email &&
-    (booking.bookingOrigin === "mobile-app" || booking.userId === uid)
-  ) {
-    return true
-  }
-  return false
 }
 
 function isValidDate(value: string): boolean {
@@ -73,6 +62,12 @@ export async function POST(
   try {
     const { id } = await params
     bookingIdForLog = id
+    logMobileBookingAuthResolved("modification_request", id, {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    })
+
     const snap = await getDoc(doc(db, "bookings", id))
 
     if (!snap.exists()) {
@@ -95,7 +90,14 @@ export async function POST(
       bookingOrigin: booking.bookingOrigin || null,
     })
 
-    if (!isBookingOwner(booking, auth.user.uid, auth.user.email)) {
+    const authContext = {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    }
+
+    if (!canAccessMobileBooking(booking, authContext)) {
+      logMobileBookingOwnershipFailure("modification_request", id, authContext, booking)
       console.warn("[booking-modification] modification_request_failed", {
         bookingId: id,
         userId: auth.user.uid,

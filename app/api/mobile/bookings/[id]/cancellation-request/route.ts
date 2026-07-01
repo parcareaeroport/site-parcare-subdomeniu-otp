@@ -1,4 +1,9 @@
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
+import {
+  canAccessMobileBooking,
+  logMobileBookingAuthResolved,
+  logMobileBookingOwnershipFailure,
+} from "@/lib/mobile-booking-ownership"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { sendCancellationRequestEmail } from "@/lib/cancellation-email"
 import { getMobileUserProfile } from "@/lib/mobile-user-service"
@@ -16,22 +21,6 @@ function formatReservationPeriod(booking: Record<string, unknown>) {
   return `${startDate} ${startTime} – ${endDate} ${endTime}`.trim()
 }
 
-function isBookingOwner(
-  booking: Record<string, unknown>,
-  uid: string,
-  email: string | null | undefined
-) {
-  if (booking.userId === uid) return true
-  if (
-    email &&
-    booking.clientEmail === email &&
-    (booking.bookingOrigin === "mobile-app" || booking.userId === uid)
-  ) {
-    return true
-  }
-  return false
-}
-
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -41,6 +30,12 @@ export async function POST(
 
   try {
     const { id } = await params
+    logMobileBookingAuthResolved("cancellation_request", id, {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    })
+
     const snap = await getDoc(doc(db, "bookings", id))
 
     if (!snap.exists()) {
@@ -48,8 +43,14 @@ export async function POST(
     }
 
     const booking = snap.data() || {}
+    const authContext = {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    }
 
-    if (!isBookingOwner(booking, auth.user.uid, auth.user.email)) {
+    if (!canAccessMobileBooking(booking, authContext)) {
+      logMobileBookingOwnershipFailure("cancellation_request", id, authContext, booking)
       return mobileJsonResponse({ success: false, error: "Forbidden" }, 403)
     }
 

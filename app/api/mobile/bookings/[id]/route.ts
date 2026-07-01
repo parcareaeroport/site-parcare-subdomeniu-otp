@@ -1,5 +1,10 @@
 import { buildSignedQrUrl } from "@/lib/qr-link"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
+import {
+  canAccessMobileBooking,
+  logMobileBookingAuthResolved,
+  logMobileBookingOwnershipFailure,
+} from "@/lib/mobile-booking-ownership"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { getDoc, doc, db } from "@/lib/server-firestore"
 
@@ -16,6 +21,12 @@ export async function GET(
 
   try {
     const { id } = await params
+    logMobileBookingAuthResolved("booking_details", id, {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    })
+
     const snap = await getDoc(doc(db, "bookings", id))
 
     if (!snap.exists()) {
@@ -23,11 +34,14 @@ export async function GET(
     }
 
     const data = snap.data() || {}
-    const isOwner =
-      data.userId === auth.user.uid ||
-      (auth.user.email && data.clientEmail === auth.user.email)
+    const authContext = {
+      uid: auth.user.uid,
+      email: auth.user.email,
+      isGuest: auth.user.isGuest,
+    }
 
-    if (!isOwner) {
+    if (!canAccessMobileBooking(data, authContext)) {
+      logMobileBookingOwnershipFailure("booking_details", id, authContext, data)
       return mobileJsonResponse({ success: false, error: "Forbidden" }, 403)
     }
 

@@ -13,23 +13,15 @@ export {
 } from "@/lib/pricing-settings.shared"
 export type { PricingSettings } from "@/lib/pricing-settings.shared"
 
-let cachedPricingSettings: PricingSettings | null = null
-
+/** Always read Firestore so admin changes (e.g. mobile discount %) apply immediately. */
 export async function getPricingSettings(): Promise<PricingSettings> {
-  if (cachedPricingSettings) return cachedPricingSettings
-
   try {
     const snap = await getDoc(doc(db, "config", "pricingSettings"))
-    cachedPricingSettings = snap.exists()
+    return snap.exists()
       ? normalizePricingSettings(snap.data())
       : DEFAULT_PRICING_SETTINGS
-    return cachedPricingSettings
   } catch (error) {
     console.warn("[pricing-settings] Failed to load settings, using defaults.", error)
     return DEFAULT_PRICING_SETTINGS
   }
-}
-
-export function clearPricingSettingsCache() {
-  cachedPricingSettings = null
 }
