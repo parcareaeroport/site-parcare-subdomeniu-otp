@@ -7,7 +7,8 @@
     "shell": "firebase functions:shell",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log"
+    "logs": "firebase functions:log",
+    "test-review-email": "sh -c 'test -n \"$1\" || { echo \"Usage: npm run test-review-email -- you@example.com\"; exit 1; }; curl -s \"https://europe-west1-parcare-aeroport-ebe28.cloudfunctions.net/testReviewEmail?secret=${REVIEW_LINK_SECRET}&email=$1\"' sh"
   },
   "engines": {
     "node": "22"

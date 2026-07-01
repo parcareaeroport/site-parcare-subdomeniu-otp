@@ -1,8 +1,12 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { collection, getDocs, doc, updateDoc, addDoc, deleteDoc, query, orderBy, writeBatch } from "firebase/firestore"
+import { collection, getDocs, doc, updateDoc, addDoc, deleteDoc, query, orderBy, writeBatch, setDoc, onSnapshot } from "firebase/firestore"
 import { db } from "@/lib/firebase" // Importă instanța db
+import {
+  DEFAULT_MOBILE_ONLINE_DISCOUNT_PERCENT,
+  normalizeMobileOnlineDiscountPercent,
+} from "@/lib/pricing-settings.shared"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -52,6 +56,8 @@ export default function PricesPage() {
   const [newPrice, setNewPrice] = useState({ days: 1, standardPrice: 50, discountPercentage: 0, reducedPrice: 50 })
   const [inputMode, setInputMode] = useState<'discount' | 'reduced'>('discount') // Mod de input: discount sau preț redus
   const [globalDiscount, setGlobalDiscount] = useState(0)
+  const [mobileAppDiscount, setMobileAppDiscount] = useState(DEFAULT_MOBILE_ONLINE_DISCOUNT_PERCENT)
+  const [savingMobileAppDiscount, setSavingMobileAppDiscount] = useState(false)
   const [bulkPerDayStart, setBulkPerDayStart] = useState<number>(1)
   const [bulkPerDayValue, setBulkPerDayValue] = useState<number>(0)
   const [bulkSaving, setBulkSaving] = useState(false)
@@ -60,6 +66,23 @@ export default function PricesPage() {
   const [importPreview, setImportPreview] = useState<ExcelRow[]>([])
 
   const pricesCollectionRef = collection(db, "prices")
+  const pricingSettingsRef = doc(db, "config", "pricingSettings")
+
+  useEffect(() => {
+    const unsub = onSnapshot(
+      pricingSettingsRef,
+      (snap) => {
+        const data = snap.data() || {}
+        setMobileAppDiscount(
+          normalizeMobileOnlineDiscountPercent(data.mobileOnlineDiscountPercent)
+        )
+      },
+      (error) => {
+        console.error("Error loading mobile pricing settings:", error)
+      }
+    )
+    return () => unsub()
+  }, [])
 
   // Funcție pentru calculul automat
   const calculateFromDiscount = (standardPrice: number, discountPercentage: number) => {
@@ -486,6 +509,33 @@ export default function PricesPage() {
     }
   }
 
+  const saveMobileAppDiscount = async () => {
+    if (!user) return
+    setSavingMobileAppDiscount(true)
+    const normalized = normalizeMobileOnlineDiscountPercent(mobileAppDiscount)
+    try {
+      await setDoc(
+        pricingSettingsRef,
+        { mobileOnlineDiscountPercent: normalized },
+        { merge: true }
+      )
+      setMobileAppDiscount(normalized)
+      toast({
+        title: "Discount app mobil salvat",
+        description: `Plata online în app va folosi ${normalized}% discount.`,
+      })
+    } catch (error) {
+      console.error("Error saving mobile app discount:", error)
+      toast({
+        title: "Eroare",
+        description: "Salvarea discountului pentru app mobil a eșuat.",
+        variant: "destructive",
+      })
+    } finally {
+      setSavingMobileAppDiscount(false)
+    }
+  }
+
   // Aplică același preț pe zi pentru toate intrările cu zile >= bulkPerDayStart
   const applyBulkPricePerDay = async () => {
     if (!user) return
@@ -811,6 +861,7 @@ export default function PricesPage() {
         <TabsList>
           <TabsTrigger value="prices">Prețuri Individuale</TabsTrigger>
           <TabsTrigger value="discounts">Discount Global</TabsTrigger>
+          <TabsTrigger value="mobile-app">App mobil</TabsTrigger>
         </TabsList>
         <TabsContent value="prices" className="space-y-4">
           <Card>
@@ -999,6 +1050,53 @@ export default function PricesPage() {
             </CardContent>
             <CardFooter className="flex justify-end">
               <Button onClick={applyGlobalDiscount}>Aplică Discount Global</Button>
+            </CardFooter>
+          </Card>
+        </TabsContent>
+        <TabsContent value="mobile-app" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Discount plata online – App mobil</CardTitle>
+              <CardDescription>
+                Procent aplicat la plata online în aplicația Expo. Nu afectează site-ul web.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Alert>
+                <AlertCircle className="h-4 w-4" />
+                <AlertTitle>Doar aplicația mobilă</AlertTitle>
+                <AlertDescription>
+                  Site-ul web folosește discounturile per tier din tab-ul Prețuri Individuale / Discount Global.
+                  Utilizatorii trebuie să repornească app-ul (sau să o redeschidă) pentru a vedea noul procent.
+                </AlertDescription>
+              </Alert>
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="mobileAppDiscount" className="text-right">
+                  Discount app mobil (%)
+                </Label>
+                <Input
+                  id="mobileAppDiscount"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={mobileAppDiscount}
+                  onChange={(e) => setMobileAppDiscount(Number(e.target.value))}
+                  className="col-span-3"
+                />
+              </div>
+            </CardContent>
+            <CardFooter className="flex justify-end">
+              <Button onClick={saveMobileAppDiscount} disabled={savingMobileAppDiscount}>
+                {savingMobileAppDiscount ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Se salvează...
+                  </>
+                ) : (
+                  "Salvează discount app mobil"
+                )}
+              </Button>
             </CardFooter>
           </Card>
         </TabsContent>

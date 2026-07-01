@@ -1,3 +1,4 @@
+import { getPricingSettings } from "@/lib/pricing-settings"
 import { getMobileAppSettings } from "@/lib/mobile-app-settings"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
 import { getDoc, doc, db } from "@/lib/server-firestore"
@@ -9,6 +10,7 @@ export async function OPTIONS() {
 export async function GET() {
   try {
     const settings = await getMobileAppSettings()
+    const pricingSettings = await getPricingSettings()
 
     let reservationsEnabled = settings.reservationsEnabled
     if (reservationsEnabled) {
@@ -36,6 +38,7 @@ export async function GET() {
       appUpdate: settings.appUpdate,
       loyaltyProgram: settings.loyaltyProgram,
       testPaymentEnabled: settings.testPaymentEnabled,
+      onlineDiscountPercent: pricingSettings.mobileOnlineDiscountPercent,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"

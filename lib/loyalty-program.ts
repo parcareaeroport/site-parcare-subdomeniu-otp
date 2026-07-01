@@ -7,9 +7,12 @@ import {
 import type { ProfileCollection } from "@/lib/mobile-user-service"
 import {
   computeBookingTotal,
+  getMobileOnlineTierTotal,
   loadPriceTiersFromFirestore,
+  resolvePriceTier,
   type PaymentMethod,
 } from "@/lib/booking-pricing"
+import { getPricingSettings } from "@/lib/pricing-settings"
 import {
   DEFAULT_LOYALTY_PROGRAM,
   getLoyaltyProgramFromSettings,
@@ -39,6 +42,20 @@ type PriceTier = {
   days: number
   standardPrice: number
   discountedPrice?: number
+}
+
+export function calculateMobileBookingPriceFromTiers(
+  tiers: PriceTier[],
+  days: number,
+  paymentMethod: PaymentMethod,
+  mobileOnlineDiscountPercent: number
+): number {
+  const tier = resolvePriceTier(days, tiers)
+  if (!tier) return 0
+  if (paymentMethod === "at_parking") {
+    return Math.round(tier.standardPrice * 100) / 100
+  }
+  return Math.round(getMobileOnlineTierTotal(tier, mobileOnlineDiscountPercent) * 100) / 100
 }
 
 export function calculateBookingPriceFromTiers(
@@ -126,10 +143,20 @@ export async function resolveMobileBookingAmountWithLoyalty(params: {
   oneDayPrice: number
 }> {
   const config = params.config || (await getLoyaltyProgramConfig())
-  const tiers = await loadPriceTiersForLoyalty()
+  const [tiers, pricingSettings] = await Promise.all([
+    loadPriceTiersForLoyalty(),
+    getPricingSettings(),
+  ])
+  const mobileDiscount = pricingSettings.mobileOnlineDiscountPercent
   const days = Math.max(1, Math.floor(Number(params.billableDays) || 1))
-  const baseAmount = calculateBookingPriceFromTiers(tiers, days, params.paymentMethod)
-  const oneDayPrice = calculateBookingPriceFromTiers(tiers, 1, params.paymentMethod)
+  const baseAmount =
+    params.paymentMethod === "online"
+      ? calculateMobileBookingPriceFromTiers(tiers, days, "online", mobileDiscount)
+      : calculateBookingPriceFromTiers(tiers, days, params.paymentMethod)
+  const oneDayPrice =
+    params.paymentMethod === "online"
+      ? calculateMobileBookingPriceFromTiers(tiers, 1, "online", mobileDiscount)
+      : calculateBookingPriceFromTiers(tiers, 1, params.paymentMethod)
   const discounted = applyLoyaltyDiscountToAmount(
     baseAmount,
     oneDayPrice,
@@ -212,8 +239,16 @@ export async function redeemFreeDayIfEligible(
       return { applied: false, freeDaysUsed: 0, discountAmount: 0 }
     }
 
-    const tiers = await loadPriceTiersForLoyalty()
-    const oneDayPrice = calculateBookingPriceFromTiers(tiers, 1, "online")
+    const [tiers, pricingSettings] = await Promise.all([
+      loadPriceTiersForLoyalty(),
+      getPricingSettings(),
+    ])
+    const oneDayPrice = calculateMobileBookingPriceFromTiers(
+      tiers,
+      1,
+      "online",
+      pricingSettings.mobileOnlineDiscountPercent
+    )
 
     return { applied: true, freeDaysUsed: 1, discountAmount: oneDayPrice }
   } catch (error) {

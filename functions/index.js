@@ -1,4 +1,5 @@
 const {setGlobalOptions} = require("firebase-functions/v2");
+const {onRequest} = require("firebase-functions/v2/https");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
@@ -216,6 +217,48 @@ function buildReviewEmailHtml({
       </p>
     </div>
   `;
+}
+
+/**
+ * Send review email via Gmail SMTP.
+ * @param {Object} params
+ * @param {string} params.clientEmail
+ * @param {string} params.clientName
+ * @param {Object} [params.transporter]
+ * @return {Promise<Object>}
+ */
+async function sendReviewEmail({clientEmail, clientName, transporter}) {
+  const fromAddress = process.env.REVIEW_EMAIL_FROM || process.env.GMAIL_USER;
+  if (!fromAddress) {
+    throw new Error("REVIEW_EMAIL_FROM/GMAIL_USER missing");
+  }
+
+  const mailTransport = transporter || createReviewTransporter();
+  const result = await mailTransport.sendMail({
+    from: {
+      name: "OTP Parking",
+      address: fromAddress,
+    },
+    to: clientEmail,
+    subject: "Cum a fost experienta ta la OTP Parking?",
+    html: buildReviewEmailHtml({
+      clientName,
+      googleReviewUrl: GOOGLE_REVIEW_URL,
+    }),
+  });
+
+  return {
+    messageId: result && result.messageId ? result.messageId : null,
+  };
+}
+
+/**
+ * Basic email format check.
+ * @param {string} email
+ * @return {boolean}
+ */
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
 }
 
 /**
@@ -722,25 +765,16 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
     }, {merge: true});
 
     try {
-      const mailOptions = {
-        from: {
-          name: "OTP Parking",
-          address: fromAddress,
-        },
-        to: clientEmail,
-        subject: "Cum a fost experienta ta la OTP Parking?",
-        html: buildReviewEmailHtml({
-          clientName,
-          googleReviewUrl: GOOGLE_REVIEW_URL,
-        }),
-      };
-
-      const result = await transporter.sendMail(mailOptions);
+      const result = await sendReviewEmail({
+        clientEmail,
+        clientName,
+        transporter,
+      });
 
       await taskRef.set({
         status: "completed",
         sentAt: admin.firestore.FieldValue.serverTimestamp(),
-        messageId: result && result.messageId ? result.messageId : null,
+        messageId: result.messageId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, {merge: true});
 
@@ -800,4 +834,52 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
     failed,
   });
   return null;
+});
+
+exports.testReviewEmail = onRequest({invoker: "public"}, async (req, res) => {
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.status(405).json({ok: false, error: "Method not allowed"});
+    return;
+  }
+
+  const expectedSecret = String(process.env.REVIEW_LINK_SECRET || "").trim();
+  const secret = String(
+      req.query.secret || (req.body && req.body.secret) || "",
+  ).trim();
+  if (!expectedSecret || secret !== expectedSecret) {
+    res.status(401).json({ok: false, error: "Unauthorized"});
+    return;
+  }
+
+  const email = String(
+      req.query.email || (req.body && req.body.email) || "",
+  ).trim();
+  const name = String(
+      req.query.name || (req.body && req.body.name) || "Test",
+  ).trim() || "Test";
+
+  if (!isValidEmail(email)) {
+    res.status(400).json({ok: false, error: "Missing or invalid email"});
+    return;
+  }
+
+  try {
+    const result = await sendReviewEmail({
+      clientEmail: email,
+      clientName: name,
+    });
+    console.log("testReviewEmail: sent", {
+      email,
+      messageId: result.messageId,
+    });
+    res.status(200).json({
+      ok: true,
+      to: email,
+      messageId: result.messageId,
+    });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    console.error("testReviewEmail: failed", {email, errMsg});
+    res.status(500).json({ok: false, error: errMsg});
+  }
 });

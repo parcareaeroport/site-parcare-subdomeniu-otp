@@ -21,6 +21,7 @@ This document covers the delayed review email flow for bookings created via
 - `GMAIL_USER`
 - `GMAIL_APP_PASSWORD`
 - `REVIEW_EMAIL_FROM` (optional; fallback is `GMAIL_USER`)
+- `REVIEW_LINK_SECRET` (required for manual test endpoint)
 
 ## Firestore collections used
 
@@ -45,3 +46,39 @@ This document covers the delayed review email flow for bookings created via
 4. Verify `scheduledFor` equals booking `startDate/startTime + 1h`.
 5. Run scheduler and confirm email is sent after `scheduledFor`.
 6. Confirm email contains only Google Reviews link.
+
+## Test manual din terminal
+
+Deploy the test function once:
+
+```bash
+cd next-js
+firebase deploy --only functions:testReviewEmail
+```
+
+Send a test review email (same SMTP path as production):
+
+```bash
+curl "https://europe-west1-parcare-aeroport-ebe28.cloudfunctions.net/testReviewEmail?secret=YOUR_REVIEW_LINK_SECRET&email=you@example.com"
+```
+
+Optional name parameter:
+
+```bash
+curl "https://europe-west1-parcare-aeroport-ebe28.cloudfunctions.net/testReviewEmail?secret=YOUR_REVIEW_LINK_SECRET&email=you@example.com&name=Ion"
+```
+
+From `functions/` with env loaded from `.env`:
+
+```bash
+cd next-js/functions
+export $(grep -v '^#' .env | xargs)
+npm run test-review-email -- you@example.com
+```
+
+Responses:
+
+- `200` + `{ "ok": true, "to": "...", "messageId": "..." }` — sent
+- `401` — wrong or missing `secret`
+- `400` — missing or invalid `email`
+- `500` + `{ "ok": false, "error": "..." }` — SMTP failure (e.g. invalid Gmail app password)

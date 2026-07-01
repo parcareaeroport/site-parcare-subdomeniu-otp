@@ -1,4 +1,5 @@
 import { collection, db, getDocs, orderBy, query } from "@/lib/server-firestore"
+import { getPricingSettings } from "@/lib/pricing-settings"
 
 export type PaymentMethod = "online" | "at_parking"
 
@@ -144,6 +145,13 @@ export function resolvePriceTier(days: number, tiers: PriceTier[]): PriceTier | 
   return exact || sorted.find((tier) => tier.days >= days) || sorted[sorted.length - 1] || null
 }
 
+export function getMobileOnlineTierTotal(
+  tier: PriceTier,
+  mobileOnlineDiscountPercent: number
+): number {
+  return roundPrice(tier.standardPrice * (1 - mobileOnlineDiscountPercent / 100))
+}
+
 export function getTierTotal(tier: PriceTier, paymentMethod: PaymentMethod): number {
   if (paymentMethod === "at_parking") {
     return tier.standardPrice
@@ -232,6 +240,27 @@ export function clearPriceTiersCache() {
   cachedPriceTiers = null
 }
 
+export function resolveMobileBookingPrice(
+  days: number,
+  tiers: PriceTier[],
+  paymentMethod: PaymentMethod,
+  mobileOnlineDiscountPercent: number
+): ResolvedPriceTier | null {
+  const tier = resolvePriceTier(days, tiers)
+  if (!tier) return null
+  const total =
+    paymentMethod === "at_parking"
+      ? Math.round(tier.standardPrice * 100) / 100
+      : Math.round(getMobileOnlineTierTotal(tier, mobileOnlineDiscountPercent) * 100) / 100
+  const pricePerDay = tier.days > 0 ? Math.round((total / tier.days) * 100) / 100 : 0
+  return {
+    tier,
+    billableDays: Math.max(1, days),
+    total,
+    pricePerDay,
+  }
+}
+
 export async function resolveMobileBookingQuote(params: {
   startDate: string
   startTime: string
@@ -239,15 +268,19 @@ export async function resolveMobileBookingQuote(params: {
   endTime: string
   paymentMethod?: PaymentMethod
 }) {
-  const tiers = await loadPriceTiersFromFirestore()
+  const [tiers, pricingSettings] = await Promise.all([
+    loadPriceTiersFromFirestore(),
+    getPricingSettings(),
+  ])
+  const mobileDiscount = pricingSettings.mobileOnlineDiscountPercent
   const days = computeBillableDays(
     params.startDate,
     params.startTime,
     params.endDate,
     params.endTime
   )
-  const onlineResolved = resolveBookingPrice(days, tiers, "online")
-  const atParkingResolved = resolveBookingPrice(days, tiers, "at_parking")
+  const onlineResolved = resolveMobileBookingPrice(days, tiers, "online", mobileDiscount)
+  const atParkingResolved = resolveMobileBookingPrice(days, tiers, "at_parking", mobileDiscount)
 
   return {
     days,
