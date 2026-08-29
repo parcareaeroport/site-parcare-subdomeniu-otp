@@ -457,6 +457,17 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
             </p>
           </div>
 
+          <div class="qr-section">
+            <p style="margin: 0 0 16px 0; font-size: 15px;">
+              Instalează aplicația OTP Parking și beneficiază de 25% reducere la rezervări, zile de parcare gratuite și multă flexibilitate.
+            </p>
+            <p style="margin: 0;">
+              <a class="qr-button" href="https://www.otp-parking.ro/otp-parking-app">
+                Vezi detalii și descarcă
+              </a>
+            </p>
+          </div>
+
           <div class="contact-section">
             <h3 style="text-align: center; color: #ee7f1a; margin-bottom: 20px;">📞 Contactați-ne</h3>
             <div class="contact-grid">

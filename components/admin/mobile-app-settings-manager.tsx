@@ -326,14 +326,18 @@ export function MobileAppSettingsManager() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label htmlFor="min-version">Versiune minimă (semver)</Label>
+            <Label htmlFor="min-version">Cod build minim (EAS)</Label>
             <Input
               id="min-version"
               value={form.minVersion}
               onChange={(e: ChangeEvent<HTMLInputElement>) => update("minVersion", e.target.value)}
-              placeholder="1.2.0"
+              placeholder="Ex: 6"
               disabled={loading}
             />
+            <p className="text-xs text-muted-foreground">
+              Folosește codul numeric al noului build pentru a bloca sigur versiunile deja
+              instalate. Pentru versiunea 1.0.2, următorul cod estimat este 6.
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="latest-version">Versiune recentă (opțional)</Label>
