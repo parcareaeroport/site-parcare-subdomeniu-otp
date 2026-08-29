@@ -3,6 +3,8 @@
 import nodemailer from 'nodemailer'
 import fs from 'fs'
 import path from 'path'
+import { getPricingSettings } from './pricing-settings'
+import { DEFAULT_MOBILE_ONLINE_DISCOUNT_PERCENT } from './pricing-settings.shared'
 import { buildSignedQrUrl, getSiteBaseUrl } from './qr-link'
 
 // Interfață pentru datele de rezervare pentru email
@@ -28,6 +30,7 @@ interface BookingEmailData {
   createdAt: Date
   // Rendering helpers (optional; computed in sendBookingConfirmationEmail)
   qrLinkUrl?: string
+  onlineDiscountPercent?: number
 }
 
 export interface BookingModificationConfirmationEmailData {
@@ -312,6 +315,25 @@ export async function sendBookingModificationConfirmationEmail(
   }
 }
 
+function resolveOnlineDiscountPercent(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.min(100, Math.max(0, value))
+  }
+  return DEFAULT_MOBILE_ONLINE_DISCOUNT_PERCENT
+}
+
+function formatOnlineDiscountPercent(percent: number): string {
+  if (Number.isInteger(percent)) return String(percent)
+  return String(Math.round(percent * 100) / 100)
+}
+
+function buildAppPromoCopy(onlineDiscountPercent: number): string {
+  if (onlineDiscountPercent <= 0) {
+    return 'Instalează aplicația OTP Parking și beneficiază de zile de parcare gratuite și multă flexibilitate.'
+  }
+  return `Instalează aplicația OTP Parking și beneficiază de ${formatOnlineDiscountPercent(onlineDiscountPercent)}% reducere la rezervări, zile de parcare gratuite și multă flexibilitate.`
+}
+
 /**
  * Generează HTML-ul pentru email-ul de confirmare
  */
@@ -321,6 +343,8 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
   const isTestMode = bookingData.source === 'test_mode'
   const isPayOnSite = bookingData.source === 'pay_on_site'
   const qrLink = bookingData.qrLinkUrl || ''
+  const onlineDiscountPercent = resolveOnlineDiscountPercent(bookingData.onlineDiscountPercent)
+  const appPromoCopy = buildAppPromoCopy(onlineDiscountPercent)
   
   return `
     <!DOCTYPE html>
@@ -459,7 +483,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
 
           <div class="qr-section">
             <p style="margin: 0 0 16px 0; font-size: 15px;">
-              Instalează aplicația OTP Parking și beneficiază de 25% reducere la rezervări, zile de parcare gratuite și multă flexibilitate.
+              ${appPromoCopy}
             </p>
             <p style="margin: 0;">
               <a class="qr-button" href="https://www.otp-parking.ro/otp-parking-app">
@@ -591,6 +615,10 @@ export async function sendBookingConfirmationEmail(
       bookingData.qrLinkUrl = undefined
     }
     
+    const pricingSettings = await getPricingSettings()
+    bookingData.onlineDiscountPercent = pricingSettings.mobileOnlineDiscountPercent
+    console.log(`📧 [EMAIL-${emailProcessId}] App promo discount: ${bookingData.onlineDiscountPercent}%`)
+
     // Nu mai folosim logo în email pentru a reduce complexitatea și dimensiunea bundle-ului
     console.log(`📧 [EMAIL-${emailProcessId}] Skipping logo loading - email will be sent without logo`)
     

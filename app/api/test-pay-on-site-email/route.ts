@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getPricingSettings } from '@/lib/pricing-settings'
 
 export async function GET(request: NextRequest) {
   try {
-    // Importăm funcția de generare HTML din email service
     const { generateBookingEmailHTML } = await import('@/lib/email-service')
-    
-    // Date test pentru rezervare pay-on-site
+    const pricingSettings = await getPricingSettings()
+
     const testBookingData = {
       clientName: 'Test Client',
       clientEmail: 'test@example.com',
@@ -20,13 +20,12 @@ export async function GET(request: NextRequest) {
       bookingNumber: '123456',
       status: 'confirmed_pay_on_site',
       source: 'pay_on_site' as const,
-      createdAt: new Date()
+      createdAt: new Date(),
+      onlineDiscountPercent: pricingSettings.mobileOnlineDiscountPercent,
     }
-    
-    // Generează HTML-ul email-ului
+
     const emailHTML = generateBookingEmailHTML(testBookingData)
-    
-    // Returnează HTML-ul pentru preview
+
     return new Response(emailHTML, {
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
@@ -42,4 +41,4 @@ export async function GET(request: NextRequest) {
       error: errorMessage,
     }, { status: 500 })
   }
-} 
+}
