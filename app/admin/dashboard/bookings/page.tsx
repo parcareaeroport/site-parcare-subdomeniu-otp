@@ -2697,6 +2697,7 @@ function BookingsPageContent() {
               </span>
             </p>
             )}
+            <p className="mt-1 text-xs text-muted-foreground">Incluse în Online și în Total</p>
           </CardContent>
         </Card>
         <Card>

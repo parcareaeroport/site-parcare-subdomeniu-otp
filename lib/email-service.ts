@@ -345,6 +345,7 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
   const qrLink = bookingData.qrLinkUrl || ''
   const onlineDiscountPercent = resolveOnlineDiscountPercent(bookingData.onlineDiscountPercent)
   const appPromoCopy = buildAppPromoCopy(onlineDiscountPercent)
+  const appIconUrl = `${getSiteBaseUrl()}/otp-parking-app-icon.png`
   
   return `
     <!DOCTYPE html>
@@ -366,6 +367,8 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
         .detail-value { color: #333; }
         .qr-section { text-align: center; background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
         .qr-button { display: inline-block; background: #ee7f1a; color: white !important; padding: 12px 16px; border-radius: 8px; text-decoration: none; font-weight: bold; }
+        .app-promo { text-align: center; background: white; padding: 20px; border-radius: 8px; margin: 0 0 20px 0; }
+        .app-button { display: inline-block; background: #3D2067; color: white !important; padding: 12px 16px; border-radius: 8px; text-decoration: none; font-weight: bold; }
         .warning { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; border-radius: 8px; margin: 20px 0; }
         .test-mode { background: #d1ecf1; border: 1px solid #bee5eb; color: #0c5460; padding: 15px; border-radius: 8px; margin: 20px 0; }
         .contact-section { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
@@ -393,6 +396,20 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
               Aceasta este o rezervare de test. Nu s-a procesat nicio plată.
             </div>
           ` : ''}
+
+          <div class="app-promo">
+            <p style="margin: 0 0 12px 0;">
+              <img src="${appIconUrl}" width="48" height="48" alt="OTP Parking" style="border-radius: 10px; display: inline-block;" />
+            </p>
+            <p style="margin: 0 0 16px 0; font-size: 15px;">
+              ${appPromoCopy}
+            </p>
+            <p style="margin: 0;">
+              <a class="app-button" href="https://www.otp-parking.ro/otp-parking-app" style="display: inline-block; background: #3D2067; color: #ffffff !important; padding: 12px 16px; border-radius: 8px; text-decoration: none; font-weight: bold;">
+                Vezi detalii și descarcă
+              </a>
+            </p>
+          </div>
           
           <h2>Detalii Rezervare</h2>
           <div class="booking-details">
@@ -478,17 +495,6 @@ export function generateBookingEmailHTML(bookingData: BookingEmailData): string 
             </a>
             <p style="color: #666; font-size: 13px; margin-top: 10px;">
               Anularea se poate face cu minimum 24 ore înainte de sosire
-            </p>
-          </div>
-
-          <div class="qr-section">
-            <p style="margin: 0 0 16px 0; font-size: 15px;">
-              ${appPromoCopy}
-            </p>
-            <p style="margin: 0;">
-              <a class="qr-button" href="https://www.otp-parking.ro/otp-parking-app">
-                Vezi detalii și descarcă
-              </a>
             </p>
           </div>
 
