@@ -23,7 +23,7 @@ async function resolveGuestByEmail(
   if (!normalized) return null
 
   const guestsRef = collection(db, "guests")
-  const q = query(guestsRef, where("email", "==", normalized))
+  const q = query(guestsRef, where("email", "==", normalized)).select("email").limit(1)
   const snap = await getDocs(q)
 
   if (snap.empty) return null

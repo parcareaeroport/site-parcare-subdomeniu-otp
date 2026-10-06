@@ -17,7 +17,9 @@ export async function OPTIONS() {
 }
 
 export async function POST(request: Request) {
+  const authenticationStarted = performance.now()
   const auth = await verifyMobileUser(request)
+  const authenticationMs = performance.now() - authenticationStarted
   if (!auth.ok) return auth.response
 
   try {
@@ -54,7 +56,7 @@ export async function POST(request: Request) {
       payload.endDate,
       payload.startTime,
       payload.endTime,
-      { auth: auth.user, paymentMethod: "online" }
+      { auth: auth.user, paymentMethod: "online", authenticationMs }
     )
 
     if (duplicateCheck.unavailable) {
