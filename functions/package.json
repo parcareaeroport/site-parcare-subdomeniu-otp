@@ -6,6 +6,7 @@
     "serve": "firebase emulators:start --only functions",
     "shell": "firebase functions:shell",
     "start": "npm run shell",
+    "test": "node --test review-email-logic.test.js",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
     "test-review-email": "sh -c 'test -n \"$1\" || { echo \"Usage: npm run test-review-email -- you@example.com\"; exit 1; }; curl -s \"https://europe-west1-parcare-aeroport-ebe28.cloudfunctions.net/testReviewEmail?secret=${REVIEW_LINK_SECRET}&email=$1\"' sh"

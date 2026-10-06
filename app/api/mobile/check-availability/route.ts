@@ -1,4 +1,5 @@
-import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
+import { checkAvailability } from "@/lib/booking-utils"
+import { checkMobileReservationConflict, conflictMessage, BOOKING_CHECK_UNAVAILABLE } from "@/lib/mobile-reservation-conflicts"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import { validateMobileBookingWindow } from "@/lib/mobile-booking-window"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
@@ -13,7 +14,7 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json()
-    const { licensePlate, startDate, startTime, endDate, endTime } = body || {}
+    const { licensePlate, startDate, startTime, endDate, endTime, paymentMethod } = body || {}
 
     if (!startDate || !startTime || !endDate || !endTime) {
       return mobileJsonResponse(
@@ -51,14 +52,21 @@ export async function POST(request: Request) {
       String(endTime)
     )
 
+    if (result.verificationFailed) return mobileJsonResponse({ success: false, code: "BOOKING_CHECK_UNAVAILABLE", error: BOOKING_CHECK_UNAVAILABLE }, 503)
+
     if (licensePlate) {
-      const duplicateCheck = await checkExistingReservationByLicensePlate(
+      const duplicateCheck = await checkMobileReservationConflict(
         String(licensePlate),
         String(startDate),
         String(endDate),
         String(startTime),
-        String(endTime)
+        String(endTime),
+        { auth: auth.user, paymentMethod }
       )
+
+      if (duplicateCheck.unavailable) {
+        return mobileJsonResponse({ success: false, code: "BOOKING_CHECK_UNAVAILABLE", error: BOOKING_CHECK_UNAVAILABLE }, 503)
+      }
 
       if (duplicateCheck.exists) {
         return mobileJsonResponse({
@@ -68,14 +76,14 @@ export async function POST(request: Request) {
           duplicateReservation: true,
           existingBooking: duplicateCheck.existingBooking,
           error: "DUPLICATE_LICENSE_PLATE_PERIOD",
-          message: "Există deja o rezervare activă pentru acest număr de înmatriculare în perioada selectată.",
+          message: conflictMessage(String(licensePlate)),
         })
       }
     }
 
     return mobileJsonResponse({ success: true, ...result })
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error"
-    return mobileJsonResponse({ success: false, error: message }, 500)
+    console.error("[mobile-check-availability] Verification failed", error)
+    return mobileJsonResponse({ success: false, code: "BOOKING_CHECK_UNAVAILABLE", error: BOOKING_CHECK_UNAVAILABLE }, 503)
   }
 }

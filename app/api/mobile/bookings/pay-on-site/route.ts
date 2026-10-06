@@ -5,7 +5,7 @@ import {
 } from "@/lib/mobile-booking-mapper"
 import { applyLoyaltyPricingToMobilePayload } from "@/lib/mobile-loyalty-pricing"
 import { mobileJsonResponse, mobileOptionsResponse } from "@/lib/mobile-cors"
-import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
+import { checkMobileReservationConflict, conflictMessage, BOOKING_CHECK_UNAVAILABLE } from "@/lib/mobile-reservation-conflicts"
 import { validateMobileBookingWindow } from "@/lib/mobile-booking-window"
 
 export async function OPTIONS() {
@@ -42,19 +42,24 @@ export async function POST(request: Request) {
       )
     }
 
-    const duplicateCheck = await checkExistingReservationByLicensePlate(
+    const duplicateCheck = await checkMobileReservationConflict(
       payload.licensePlate,
       payload.startDate,
       payload.endDate,
       payload.startTime,
-      payload.endTime
+      payload.endTime,
+      { auth: auth.user, paymentMethod: "at_parking" }
     )
+
+    if (duplicateCheck.unavailable) {
+      return mobileJsonResponse({ success: false, code: "BOOKING_CHECK_UNAVAILABLE", error: BOOKING_CHECK_UNAVAILABLE }, 503)
+    }
 
     if (duplicateCheck.exists) {
       return mobileJsonResponse(
         {
           success: false,
-          error: "Există deja o rezervare activă pentru acest număr de înmatriculare în perioada selectată.",
+          error: conflictMessage(payload.licensePlate),
           code: "DUPLICATE_LICENSE_PLATE_PERIOD",
           duplicateReservation: true,
           existingBooking: duplicateCheck.existingBooking,

@@ -172,6 +172,7 @@ export async function checkAvailability(
   endTime: string,
   options?: { excludeBookingId?: string }
 ): Promise<{
+  verificationFailed?: boolean
   available: boolean
   conflictingBookings: number
   totalSpots: number
@@ -408,6 +409,7 @@ export async function checkAvailability(
   } catch (error) {
     console.error('❌ Error checking availability:', error)
     return {
+      verificationFailed: true,
       available: false,
       conflictingBookings: 0,
       totalSpots: 100,

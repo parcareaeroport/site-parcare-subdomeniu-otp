@@ -8,9 +8,17 @@ This document covers the delayed review email flow for bookings created via
 - Marks eligible bookings:
   - `bookingOrigin: "wp-card-booking"` with `paymentStatus: "paid"`
   - `source: "pay_on_site"` with `status: "confirmed_pay_on_site"`
-- On booking create, a Firebase Function schedules a review email task for
-  `startDate + startTime + 1h`.
+- On booking create, a Firebase Function marks the task as `awaiting_entry`.
+- The first automatic LPR `entry` event schedules the review email for
+  `lpr.arrivedAt + 1h`. Manual admin events do not schedule review emails.
 - A scheduled Firebase Function processes due tasks every 5 minutes.
+- Repeated entry events are idempotent and cannot schedule a second email.
+- A normalized email address can receive the review request only once across
+  all bookings. Later tasks are marked `skipped_repeat`.
+- Legacy pending tasks are never sent. The processor marks them
+  `skipped_legacy`; only tasks carrying the new LPR event marker are trusted.
+- Before sending is enabled, completed historical tasks are migrated in
+  batches to `review_email_recipients`, keyed by a SHA-256 email hash.
 - The email contains only the Google Reviews link.
 - Legacy `/recenzie` links are redirected to Google Reviews.
 
@@ -27,11 +35,14 @@ This document covers the delayed review email flow for bookings created via
 
 - `bookings` (audit fields)
 - `review_email_tasks` (scheduler queue)
+- `review_email_recipients` (permanent one-request-per-email registry)
+- `review_email_system/recipient_deduplication` (migration state)
 
 ## Booking audit fields added
 
 - `bookingOrigin`
 - `reviewEmailStatus`
+- `reviewEmailEntryAt`
 - `reviewEmailScheduledAt`
 - `reviewEmailScheduleMode`
 - `reviewEmailSentAt`
@@ -41,11 +52,16 @@ This document covers the delayed review email flow for bookings created via
 ## Basic manual validation
 
 1. Create a booking through `wp-card-booking` or `wp-booking` (pay on site).
-2. Check booking doc is eligible for review scheduling.
-3. Check `review_email_tasks/{bookingId}` exists and is `pending`.
-4. Verify `scheduledFor` equals booking `startDate/startTime + 1h`.
-5. Run scheduler and confirm email is sent after `scheduledFor`.
-6. Confirm email contains only Google Reviews link.
+2. Check booking doc is eligible and the review task is `awaiting_entry`.
+3. Record an automatic LPR entry and check the task becomes `pending`.
+4. Verify `lprEntryAt` matches the first real entry and `scheduledFor` equals
+   `lprEntryAt + 1h` with schedule mode `lpr_entry_plus_1h`.
+5. Confirm a manual entry and repeated automatic entries do not reschedule it.
+6. Run the scheduler and confirm the email is sent after `scheduledFor`
+   (within the five-minute processing interval).
+7. Confirm the email contains only the Google Reviews link.
+8. Create another eligible booking with the same email and confirm its task is
+   marked `skipped_repeat` without another email being sent.
 
 ## Test manual din terminal
 

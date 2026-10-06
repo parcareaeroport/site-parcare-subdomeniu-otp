@@ -14,7 +14,7 @@ import { resolveActivePaymentProvider } from "@/lib/payments/payment-provider"
 import { createMobileNetopiaPaymentSession } from "@/lib/payments/netopia-provider"
 import { recordPaymentAuditEvent } from "@/lib/payments/payment-audit"
 import { getNetopiaForcedTestConfig } from "@/lib/payments/netopia-test-mode"
-import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
+import { checkMobileReservationConflict, conflictMessage, BOOKING_CHECK_UNAVAILABLE } from "@/lib/mobile-reservation-conflicts"
 import { validateMobileBookingWindow } from "@/lib/mobile-booking-window"
 import { getUserCreditBalance } from "@/lib/user-credits"
 
@@ -110,13 +110,18 @@ export async function POST(request: Request) {
       )
     }
 
-    const duplicateCheck = await checkExistingReservationByLicensePlate(
+    const duplicateCheck = await checkMobileReservationConflict(
       payload.licensePlate,
       payload.startDate,
       payload.endDate,
       payload.startTime,
-      payload.endTime
+      payload.endTime,
+      { auth: auth.user, paymentMethod: "online" }
     )
+
+    if (duplicateCheck.unavailable) {
+      return mobileJsonResponse({ success: false, code: "BOOKING_CHECK_UNAVAILABLE", error: BOOKING_CHECK_UNAVAILABLE }, 503)
+    }
 
     if (duplicateCheck.exists) {
       console.warn("[netopia-init] Duplicate reservation blocked before payment", {
@@ -132,7 +137,7 @@ export async function POST(request: Request) {
       return mobileJsonResponse(
         {
           success: false,
-          error: "Există deja o rezervare activă pentru acest număr de înmatriculare în perioada selectată.",
+          error: conflictMessage(payload.licensePlate),
           code: "DUPLICATE_LICENSE_PLATE_PERIOD",
           duplicateReservation: true,
           existingBooking: duplicateCheck.existingBooking,

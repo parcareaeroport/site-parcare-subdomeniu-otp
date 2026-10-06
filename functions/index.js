@@ -4,6 +4,19 @@ const {onSchedule} = require("firebase-functions/v2/scheduler");
 const {onDocumentCreated} = require("firebase-functions/v2/firestore");
 const admin = require("firebase-admin");
 const nodemailer = require("nodemailer");
+const {
+  REVIEW_SCHEDULE_MODE,
+  canAnchorReviewTask,
+  getLprEntryDate,
+  getReviewRecipientDecision,
+  getReviewRecipientId,
+  getReviewDueDate,
+  isEligibleReviewBooking,
+  isRealLprEntry,
+  isReviewTaskDue,
+  isTrustedLprReviewTask,
+  toDate,
+} = require("./review-email-logic");
 
 admin.initializeApp();
 
@@ -14,25 +27,14 @@ const SUPPORT_ADDRESS_LINE = "Str. Calea Bucureştilor, Nr.303A1";
 const SUPPORT_CITY_LINE = "Otopeni, Ilfov";
 const GOOGLE_MAPS_URL = "https://maps.app.goo.gl/GhoVMNWvst6BamHx5?g_st=aw";
 const WAZE_URL = "https://waze.com/ul?ll=44.575660,26.069918&navigate=yes";
-const REVIEW_TIME_ZONE = "Europe/Bucharest";
+const REVIEW_RECIPIENT_MIGRATION_VERSION = 1;
+const REVIEW_RECIPIENT_MIGRATION_BATCH_SIZE = 400;
 
 // Limităm instanțele și setăm regiunea implicită
 setGlobalOptions({
   maxInstances: 5,
   region: "europe-west1",
 });
-
-/**
- * Convert Firestore timestamp-like values to Date.
- * @param {unknown} ts
- * @return {Date|null}
- */
-function getDateFromTimestamp(ts) {
-  if (!ts) return null;
-  if (typeof ts.toDate === "function") return ts.toDate();
-  const d = new Date(ts);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
 
 /**
  * Build SMTP transporter for review emails.
@@ -262,134 +264,87 @@ function isValidEmail(email) {
 }
 
 /**
- * Parse date parts from yyyy-mm-dd.
- * @param {string} dateStr
- * @return {{year: number, month: number, day: number}|null}
+ * Seed the permanent recipient registry from review emails already sent.
+ * Sending stays paused until every historical completed task is covered.
+ * @param {FirebaseFirestore.Firestore} db
+ * @return {Promise<boolean>} true only when the registry is ready for sending
  */
-function parseDateParts(dateStr) {
-  const match = String(dateStr || "").trim()
-      .match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return null;
+async function ensureReviewRecipientMigration(db) {
+  const markerRef = db.collection("review_email_system")
+      .doc("recipient_deduplication");
+  const markerSnap = await markerRef.get();
+  const marker = markerSnap.exists ? (markerSnap.data() || {}) : {};
 
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (!Number.isInteger(year) || year < 1970) return null;
-  if (!Number.isInteger(month) || month < 1 || month > 12) return null;
-  if (!Number.isInteger(day) || day < 1 || day > 31) return null;
+  if (marker.schemaVersion === REVIEW_RECIPIENT_MIGRATION_VERSION &&
+      marker.state === "ready") {
+    return true;
+  }
 
-  return {year, month, day};
-}
+  let query = db.collection("review_email_tasks")
+      .where("status", "==", "completed")
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(REVIEW_RECIPIENT_MIGRATION_BATCH_SIZE);
+  if (marker.schemaVersion === REVIEW_RECIPIENT_MIGRATION_VERSION &&
+      marker.lastTaskId) {
+    query = query.startAfter(String(marker.lastTaskId));
+  }
 
-/**
- * Parse time parts from hh:mm or hh:mm:ss.
- * @param {string} timeStr
- * @return {{hour: number, minute: number, second: number}|null}
- */
-function parseTimeParts(timeStr) {
-  const match = String(timeStr || "").trim()
-      .match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (!match) return null;
+  const snap = await query.get();
+  const recipients = new Map();
+  for (const taskSnap of snap.docs) {
+    const task = taskSnap.data() || {};
+    const clientEmail = String(task.clientEmail || "").trim();
+    if (!isValidEmail(clientEmail)) continue;
+    const recipientId = getReviewRecipientId(clientEmail);
+    if (!recipients.has(recipientId)) {
+      recipients.set(recipientId, {taskId: taskSnap.id, task});
+    }
+  }
 
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const second = match[3] ? Number(match[3]) : 0;
-  if (!Number.isInteger(hour) || hour < 0 || hour > 23) return null;
-  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
-  if (!Number.isInteger(second) || second < 0 || second > 59) return null;
+  const batch = db.batch();
+  for (const [recipientId, historical] of recipients) {
+    const recipientRef = db.collection("review_email_recipients")
+        .doc(recipientId);
+    const historicalSentAt = historical.task.sentAt ||
+      historical.task.updatedAt ||
+      historical.task.createdAt ||
+      admin.firestore.FieldValue.serverTimestamp();
+    batch.set(recipientRef, {
+      emailHash: recipientId,
+      status: "sent",
+      firstTaskId: historical.taskId,
+      firstBookingId: String(
+          historical.task.bookingId || historical.taskId,
+      ),
+      sentAt: historicalSentAt,
+      migratedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, {merge: true});
+  }
 
-  return {hour, minute, second};
-}
+  const finished = snap.size < REVIEW_RECIPIENT_MIGRATION_BATCH_SIZE;
+  const lastTaskId = snap.empty ? null : snap.docs[snap.docs.length - 1].id;
+  batch.set(markerRef, {
+    schemaVersion: REVIEW_RECIPIENT_MIGRATION_VERSION,
+    state: finished ? "ready" : "migrating",
+    lastTaskId: finished ?
+      admin.firestore.FieldValue.delete() :
+      lastTaskId,
+    processedInLastBatch: snap.size,
+    recipientsInLastBatch: recipients.size,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    completedAt: finished ?
+      admin.firestore.FieldValue.serverTimestamp() :
+      admin.firestore.FieldValue.delete(),
+  }, {merge: true});
+  await batch.commit();
 
-/**
- * Compute timezone offset in milliseconds for a specific instant.
- * @param {Date} date
- * @param {string} timeZone
- * @return {number}
- */
-function getTimeZoneOffsetMs(date, timeZone) {
-  const dtf = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
+  console.log("processWpCardReviewEmails: recipient migration batch", {
+    checked: snap.size,
+    recipients: recipients.size,
+    finished,
   });
-
-  const parts = dtf.formatToParts(date);
-  const values = {};
-  for (const part of parts) {
-    if (part.type === "literal") continue;
-    values[part.type] = Number(part.value);
-  }
-
-  const zonedAsUtcMs = Date.UTC(
-      values.year,
-      values.month - 1,
-      values.day,
-      values.hour,
-      values.minute,
-      values.second,
-  );
-  return zonedAsUtcMs - date.getTime();
-}
-
-/**
- * Parse local date-time in target timezone to a UTC Date instant.
- * @param {string} dateStr
- * @param {string} timeStr
- * @param {string} timeZone
- * @return {Date|null}
- */
-function parseLocalDateTimeInZone(dateStr, timeStr, timeZone) {
-  const dateParts = parseDateParts(dateStr);
-  const timeParts = parseTimeParts(timeStr);
-  if (!dateParts || !timeParts) return null;
-
-  const naiveUtcMs = Date.UTC(
-      dateParts.year,
-      dateParts.month - 1,
-      dateParts.day,
-      timeParts.hour,
-      timeParts.minute,
-      timeParts.second,
-  );
-
-  const firstOffsetMs = getTimeZoneOffsetMs(new Date(naiveUtcMs), timeZone);
-  let utcMs = naiveUtcMs - firstOffsetMs;
-  const secondOffsetMs = getTimeZoneOffsetMs(new Date(utcMs), timeZone);
-  if (secondOffsetMs !== firstOffsetMs) {
-    utcMs = naiveUtcMs - secondOffsetMs;
-  }
-
-  const parsed = new Date(utcMs);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-/**
- * Parse booking start date-time from booking fields.
- * @param {Record<string, unknown>} booking
- * @return {Date|null}
- */
-function getBookingStartDateTime(booking) {
-  const startDate = String(booking.startDate || "").trim();
-  const startTime = String(booking.startTime || "").trim();
-  if (!startDate || !startTime) return null;
-  return parseLocalDateTimeInZone(startDate, startTime, REVIEW_TIME_ZONE);
-}
-
-/**
- * Compute review email schedule date as startDate + startTime + 1 hour.
- * @param {Record<string, unknown>} booking
- * @return {Date|null}
- */
-function getReviewArrivalScheduleDate(booking) {
-  const startDateTime = getBookingStartDateTime(booking);
-  if (!startDateTime) return null;
-  return new Date(startDateTime.getTime() + 60 * 60 * 1000);
+  return false;
 }
 
 /**
@@ -554,76 +509,137 @@ exports.scheduleWpCardReviewEmail = onDocumentCreated(
 
       const bookingId = event.params.bookingId;
       const booking = snap.data() || {};
-      const origin = String(booking.bookingOrigin || "");
-      const source = String(booking.source || "");
-      const status = String(booking.status || "");
-      const paymentStatus = String(booking.paymentStatus || "");
       const clientEmail = String(booking.clientEmail || "").trim();
 
-      const isWpCardBooking =
-        origin === "wp-card-booking" && paymentStatus === "paid";
-      const isPayOnSiteBooking =
-        source === "pay_on_site" && status === "confirmed_pay_on_site";
-
-      if (!isWpCardBooking && !isPayOnSiteBooking) return;
-      if (!clientEmail) return;
+      if (!isEligibleReviewBooking(booking)) return;
+      if (!isValidEmail(clientEmail)) return;
 
       const db = admin.firestore();
-      const scheduledForDate = getReviewArrivalScheduleDate(booking);
-      if (!scheduledForDate) {
-        await db.collection("bookings").doc(bookingId).set({
-          reviewEmailStatus: "schedule_failed",
-          reviewEmailLastError:
-            "Missing or invalid startDate/startTime for review email",
+      const taskRef = db.collection("review_email_tasks").doc(bookingId);
+      const bookingRef = db.collection("bookings").doc(bookingId);
+      let created = false;
+
+      await db.runTransaction(async (transaction) => {
+        const existingTask = await transaction.get(taskRef);
+        if (existingTask.exists) return;
+
+        transaction.set(taskRef, {
+          bookingId,
+          bookingOrigin: String(
+              booking.bookingOrigin || booking.source || "unknown",
+          ),
+          scheduleMode: REVIEW_SCHEDULE_MODE,
+          status: "awaiting_entry",
+          attempts: 0,
+          maxAttempts: 3,
+          clientEmail,
+          clientName: booking.clientName || "",
+          licensePlate: booking.licensePlate || "",
+          apiBookingNumber: booking.apiBookingNumber || "",
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        transaction.set(bookingRef, {
+          reviewEmailStatus: "awaiting_entry",
+          reviewEmailScheduleMode: REVIEW_SCHEDULE_MODE,
+          reviewEmailTaskId: bookingId,
           lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
         }, {merge: true});
-        console.warn("scheduleWpCardReviewEmail: start date-time missing", {
+        created = true;
+      });
+
+      console.log("scheduleWpCardReviewEmail: awaiting LPR entry", {
+        bookingId,
+        created,
+        scheduleMode: REVIEW_SCHEDULE_MODE,
+      });
+    },
+);
+
+exports.scheduleReviewEmailOnLprEntry = onDocumentCreated(
+    "bookings/{bookingId}/gateEvents/{eventId}",
+    async (event) => {
+      const gateSnap = event.data;
+      if (!gateSnap) return;
+
+      const gateEvent = gateSnap.data() || {};
+      if (!isRealLprEntry(gateEvent)) return;
+
+      const db = admin.firestore();
+      const bookingId = event.params.bookingId;
+      const bookingRef = db.collection("bookings").doc(bookingId);
+      const taskRef = db.collection("review_email_tasks").doc(bookingId);
+      const bookingSnap = await bookingRef.get();
+      if (!bookingSnap.exists) return;
+
+      const booking = bookingSnap.data() || {};
+      const clientEmail = String(booking.clientEmail || "").trim();
+      if (!isEligibleReviewBooking(booking) || !isValidEmail(clientEmail)) {
+        return;
+      }
+      if (booking.reviewEmailStatus === "sent") return;
+
+      const entryDate = getLprEntryDate(booking, gateEvent);
+      const dueDate = getReviewDueDate(entryDate);
+      if (!entryDate || !dueDate) {
+        console.error("scheduleReviewEmailOnLprEntry: invalid entry time", {
           bookingId,
+          eventId: event.params.eventId,
         });
         return;
       }
 
-      const scheduledFor = admin.firestore.Timestamp.fromDate(scheduledForDate);
+      const entryAt = admin.firestore.Timestamp.fromDate(entryDate);
+      const dueAt = admin.firestore.Timestamp.fromDate(dueDate);
+      let scheduled = false;
 
-      const taskRef = db.collection("review_email_tasks").doc(bookingId);
-      const existingTask = await taskRef.get();
-      if (existingTask.exists) {
-        console.log(
-            "scheduleWpCardReviewEmail: task already exists",
-            {bookingId},
-        );
-        return;
-      }
+      await db.runTransaction(async (transaction) => {
+        const taskSnap = await transaction.get(taskRef);
+        const task = taskSnap.exists ? (taskSnap.data() || {}) : {};
+        if (!canAnchorReviewTask(task)) return;
 
-      await taskRef.set({
-        bookingId,
-        bookingOrigin: origin || source || "unknown",
-        scheduleMode: "arrival_plus_1h",
-        status: "pending",
-        attempts: 0,
-        maxAttempts: 3,
-        scheduledFor,
-        clientEmail,
-        clientName: booking.clientName || "",
-        licensePlate: booking.licensePlate || "",
-        apiBookingNumber: booking.apiBookingNumber || "",
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        const previousAttempts = Number(task.attempts || 0);
+        transaction.set(taskRef, {
+          bookingId,
+          bookingOrigin: String(
+              booking.bookingOrigin || booking.source || "unknown",
+          ),
+          scheduleMode: REVIEW_SCHEDULE_MODE,
+          status: "pending",
+          attempts: task.status === "failed" ? 0 : previousAttempts,
+          maxAttempts: Number(task.maxAttempts || 3),
+          scheduledFor: dueAt,
+          reviewDueAt: dueAt,
+          lprEntryAt: entryAt,
+          lprEntryEventId: event.params.eventId,
+          clientEmail,
+          clientName: booking.clientName || "",
+          licensePlate: booking.licensePlate || "",
+          apiBookingNumber: booking.apiBookingNumber || "",
+          lastError: admin.firestore.FieldValue.delete(),
+          failedAt: admin.firestore.FieldValue.delete(),
+          createdAt: task.createdAt ||
+            admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        transaction.set(bookingRef, {
+          reviewEmailStatus: "scheduled",
+          reviewEmailEntryAt: entryAt,
+          reviewEmailScheduledAt: dueAt,
+          reviewEmailScheduleMode: REVIEW_SCHEDULE_MODE,
+          reviewEmailTaskId: bookingId,
+          reviewEmailLastError: admin.firestore.FieldValue.delete(),
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        scheduled = true;
       });
 
-      await db.collection("bookings").doc(bookingId).set({
-        reviewEmailStatus: "scheduled",
-        reviewEmailScheduledAt: scheduledFor,
-        reviewEmailScheduleMode: "arrival_plus_1h",
-        reviewEmailTaskId: bookingId,
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      }, {merge: true});
-
-      console.log("scheduleWpCardReviewEmail: scheduled", {
+      console.log("scheduleReviewEmailOnLprEntry: handled", {
         bookingId,
-        clientEmail,
-        scheduleMode: "arrival_plus_1h",
-        scheduledFor: scheduledForDate.toISOString(),
+        eventId: event.params.eventId,
+        scheduled,
+        entryAt: entryDate.toISOString(),
+        scheduledFor: dueDate.toISOString(),
       });
     },
 );
@@ -631,6 +647,14 @@ exports.scheduleWpCardReviewEmail = onDocumentCreated(
 exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
   const db = admin.firestore();
   const nowMs = Date.now();
+
+  const recipientRegistryReady = await ensureReviewRecipientMigration(db);
+  if (!recipientRegistryReady) {
+    console.log(
+        "processWpCardReviewEmails: sending paused for recipient migration",
+    );
+    return null;
+  }
 
   const fromAddress = process.env.REVIEW_EMAIL_FROM || process.env.GMAIL_USER;
   if (!fromAddress) {
@@ -650,8 +674,9 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
     return null;
   }
 
-  const transporter = createReviewTransporter();
-  let rescheduled = 0;
+  let transporter = null;
+  let skippedLegacy = 0;
+  let skippedRepeat = 0;
   let deferred = 0;
   let sent = 0;
   let failed = 0;
@@ -660,19 +685,18 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
     const task = docSnap.data() || {};
     const taskRef = docSnap.ref;
     const bookingId = String(task.bookingId || docSnap.id);
-    const attempts = Number(task.attempts || 0);
     const maxAttempts = Number(task.maxAttempts || 3);
     const clientEmail = String(task.clientEmail || "").trim();
     const clientName = String(task.clientName || "").trim() || "Client";
     const bookingRef = db.collection("bookings").doc(bookingId);
-    let expectedScheduleDate = null;
-    let bookingExists = false;
+    const recipientId = getReviewRecipientId(clientEmail);
+    const recipientRef = db.collection("review_email_recipients")
+        .doc(recipientId);
+    let bookingData = null;
     try {
       const bookingSnap = await bookingRef.get();
-      const bookingData = bookingSnap.exists ? (bookingSnap.data() || {}) : {};
       if (bookingSnap.exists) {
-        bookingExists = true;
-        expectedScheduleDate = getReviewArrivalScheduleDate(bookingData);
+        bookingData = bookingSnap.data() || {};
       }
     } catch (bookingErr) {
       console.error("processWpCardReviewEmails: booking read failed", {
@@ -683,107 +707,165 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
       });
     }
 
-    if (!bookingExists) {
+    if (!bookingData) {
       await taskRef.set({
         status: "failed",
-        lastError: "Missing booking for arrival_plus_1h schedule",
+        lastError: "Missing booking for lpr_entry_plus_1h schedule",
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, {merge: true});
       failed += 1;
       continue;
     }
 
-    if (!expectedScheduleDate) {
+    if (!isTrustedLprReviewTask(task)) {
       await taskRef.set({
-        status: "failed",
-        lastError:
-          "Missing or invalid startDate/startTime for arrival_plus_1h",
+        status: "skipped_legacy",
+        scheduledFor: admin.firestore.FieldValue.delete(),
+        skippedAt: admin.firestore.FieldValue.serverTimestamp(),
+        skipReason: "missing_new_lpr_entry_marker",
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, {merge: true});
       await bookingRef.set({
-        reviewEmailStatus: "schedule_failed",
-        reviewEmailLastError:
-          "Missing or invalid startDate/startTime for review email",
+        reviewEmailStatus: "skipped_legacy",
+        reviewEmailScheduleMode: REVIEW_SCHEDULE_MODE,
+        reviewEmailScheduledAt: admin.firestore.FieldValue.delete(),
+        reviewEmailLastError: admin.firestore.FieldValue.delete(),
         lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       }, {merge: true});
-      failed += 1;
-      continue;
-    }
-
-    const currentScheduledFor = getDateFromTimestamp(task.scheduledFor);
-    const shouldReschedule =
-      !currentScheduledFor ||
-      Math.abs(
-          currentScheduledFor.getTime() - expectedScheduleDate.getTime(),
-      ) > 60 * 1000;
-
-    if (shouldReschedule) {
-      const expectedScheduledForTs =
-        admin.firestore.Timestamp.fromDate(expectedScheduleDate);
-
-      await taskRef.set({
-        scheduledFor: expectedScheduledForTs,
-        scheduleMode: "arrival_plus_1h",
-        lastRescheduledAt: admin.firestore.FieldValue.serverTimestamp(),
-        lastRescheduleReason: "arrival_plus_1h_recalc",
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, {merge: true});
-
-      await bookingRef.set({
-        reviewEmailStatus: "scheduled",
-        reviewEmailScheduledAt: expectedScheduledForTs,
-        reviewEmailScheduleMode: "arrival_plus_1h",
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      }, {merge: true});
-
-      rescheduled += 1;
-      console.log("processWpCardReviewEmails: task rescheduled", {
+      skippedLegacy += 1;
+      console.log("processWpCardReviewEmails: legacy task skipped", {
         bookingId,
-        scheduleMode: "arrival_plus_1h",
-        scheduledFor: expectedScheduleDate.toISOString(),
+        reason: "missing_new_lpr_entry_marker",
       });
+      continue;
     }
 
-    if (expectedScheduleDate.getTime() > nowMs) {
+    const scheduledForDate = toDate(task.scheduledFor);
+    if (!scheduledForDate) {
+      await taskRef.set({
+        status: "failed",
+        lastError: "Missing scheduledFor for LPR review email",
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      failed += 1;
+      continue;
+    }
+
+    if (!isReviewTaskDue(scheduledForDate, new Date(nowMs))) {
       deferred += 1;
       continue;
     }
 
-    if (!clientEmail) {
+    if (!isValidEmail(clientEmail)) {
       await taskRef.set({
         status: "failed",
-        lastError: "Missing clientEmail",
+        lastError: "Missing or invalid clientEmail",
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, {merge: true});
       failed += 1;
       continue;
     }
 
-    await taskRef.set({
-      status: "processing",
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, {merge: true});
+    let claimed = false;
+    let repeatSkipped = false;
+    let attempts = Number(task.attempts || 0);
+    await db.runTransaction(async (transaction) => {
+      const [latestSnap, recipientSnap] = await Promise.all([
+        transaction.get(taskRef),
+        transaction.get(recipientRef),
+      ]);
+      if (!latestSnap.exists) return;
+      const latestTask = latestSnap.data() || {};
+      const latestScheduledFor = toDate(latestTask.scheduledFor);
+      if (latestTask.status !== "pending" ||
+          !isReviewTaskDue(latestScheduledFor)) {
+        return;
+      }
+
+      const recipient = recipientSnap.exists ?
+        (recipientSnap.data() || {}) :
+        {};
+      if (getReviewRecipientDecision(recipient, taskRef.id) ===
+          "skip_repeat") {
+        transaction.set(taskRef, {
+          status: "skipped_repeat",
+          scheduledFor: admin.firestore.FieldValue.delete(),
+          skippedAt: admin.firestore.FieldValue.serverTimestamp(),
+          skipReason: "recipient_already_claimed",
+          reviewRecipientId: recipientId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        transaction.set(bookingRef, {
+          reviewEmailStatus: "skipped_repeat",
+          reviewEmailScheduledAt: admin.firestore.FieldValue.delete(),
+          reviewEmailLastError: admin.firestore.FieldValue.delete(),
+          reviewEmailRecipientId: recipientId,
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        repeatSkipped = true;
+        return;
+      }
+
+      attempts = Number(latestTask.attempts || 0);
+      transaction.set(taskRef, {
+        status: "processing",
+        reviewRecipientId: recipientId,
+        processingStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      transaction.set(recipientRef, {
+        emailHash: recipientId,
+        status: "processing",
+        firstTaskId: taskRef.id,
+        firstBookingId: bookingId,
+        lastAttemptAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, {merge: true});
+      claimed = true;
+    });
+    if (repeatSkipped) {
+      skippedRepeat += 1;
+      console.log("processWpCardReviewEmails: repeat recipient skipped", {
+        bookingId,
+        recipientId,
+      });
+      continue;
+    }
+    if (!claimed) continue;
 
     try {
+      transporter = transporter || createReviewTransporter();
       const result = await sendReviewEmail({
         clientEmail,
         clientName,
         transporter,
       });
 
-      await taskRef.set({
-        status: "completed",
-        sentAt: admin.firestore.FieldValue.serverTimestamp(),
-        messageId: result.messageId,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, {merge: true});
-
-      await db.collection("bookings").doc(bookingId).set({
-        reviewEmailStatus: "sent",
-        reviewEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),
-        reviewEmailLastError: admin.firestore.FieldValue.delete(),
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      }, {merge: true});
+      await db.runTransaction(async (transaction) => {
+        transaction.set(taskRef, {
+          status: "completed",
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          messageId: result.messageId,
+          processingStartedAt: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        transaction.set(bookingRef, {
+          reviewEmailStatus: "sent",
+          reviewEmailSentAt: admin.firestore.FieldValue.serverTimestamp(),
+          reviewEmailLastError: admin.firestore.FieldValue.delete(),
+          reviewEmailRecipientId: recipientId,
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        transaction.set(recipientRef, {
+          emailHash: recipientId,
+          status: "sent",
+          firstTaskId: taskRef.id,
+          firstBookingId: bookingId,
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+          messageId: result.messageId,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+      });
 
       sent += 1;
       console.log("processWpCardReviewEmails: sent", {bookingId, clientEmail});
@@ -797,23 +879,34 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
       const retryAt = new Date(Date.now() + backoffMinutes * 60 * 1000);
       const errMsg = err instanceof Error ? err.message : String(err);
 
-      await taskRef.set({
-        status: isFinal ? "failed" : "pending",
-        attempts: nextAttempts,
-        lastError: errMsg,
-        scheduledFor: isFinal ?
-          admin.firestore.FieldValue.delete() :
-          admin.firestore.Timestamp.fromDate(retryAt),
-        failedAt: isFinal ? admin.firestore.FieldValue.serverTimestamp() :
-          admin.firestore.FieldValue.delete(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, {merge: true});
-
-      await db.collection("bookings").doc(bookingId).set({
-        reviewEmailStatus: isFinal ? "failed" : "retry_pending",
-        reviewEmailLastError: errMsg,
-        lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      }, {merge: true});
+      await db.runTransaction(async (transaction) => {
+        transaction.set(taskRef, {
+          status: isFinal ? "failed" : "pending",
+          attempts: nextAttempts,
+          lastError: errMsg,
+          scheduledFor: isFinal ?
+            admin.firestore.FieldValue.delete() :
+            admin.firestore.Timestamp.fromDate(retryAt),
+          failedAt: isFinal ? admin.firestore.FieldValue.serverTimestamp() :
+            admin.firestore.FieldValue.delete(),
+          processingStartedAt: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        transaction.set(bookingRef, {
+          reviewEmailStatus: isFinal ? "failed" : "retry_pending",
+          reviewEmailLastError: errMsg,
+          reviewEmailRecipientId: recipientId,
+          lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+        transaction.set(recipientRef, {
+          emailHash: recipientId,
+          status: isFinal ? "failed" : "retry_pending",
+          firstTaskId: taskRef.id,
+          firstBookingId: bookingId,
+          lastError: errMsg,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, {merge: true});
+      });
 
       failed += 1;
       console.error("processWpCardReviewEmails: failed", {
@@ -828,7 +921,8 @@ exports.processWpCardReviewEmails = onSchedule("every 5 minutes", async () => {
 
   console.log("processWpCardReviewEmails: done", {
     checked: snap.size,
-    rescheduled,
+    skippedLegacy,
+    skippedRepeat,
     deferred,
     sent,
     failed,
