@@ -1,3 +1,6 @@
+import { normalizeLoyaltyState, advanceLoyaltyAfterBooking, type LoyaltyState, type LoyaltyProgress } from "@/lib/loyalty-state"
+export * from "@/lib/loyalty-state"
+export { DEFAULT_LOYALTY_PROGRAM } from "@/lib/mobile-app-settings.shared"
 import {
   db,
   doc,
@@ -18,19 +21,6 @@ import {
   getLoyaltyProgramFromSettings,
   type LoyaltyProgramConfig,
 } from "@/lib/mobile-app-settings"
-
-export type LoyaltyState = {
-  reservationsCount?: number
-  freeDaysAvailable?: number
-  points?: number
-}
-
-export type LoyaltyProgress = {
-  remaining: number
-  freeDaysAvailable: number
-  reservationsCount: number
-  reservationsPerFreeDay: number
-}
 
 export type LoyaltyRedeemResult = {
   applied: boolean
@@ -64,30 +54,6 @@ export function calculateBookingPriceFromTiers(
   paymentMethod: PaymentMethod
 ): number {
   return computeBookingTotal(days, tiers, paymentMethod)
-}
-
-export function normalizeLoyaltyState(loyalty?: LoyaltyState | null): Required<LoyaltyState> {
-  return {
-    reservationsCount: Math.max(0, Number(loyalty?.reservationsCount) || 0),
-    freeDaysAvailable: Math.max(0, Number(loyalty?.freeDaysAvailable) || 0),
-    points: Math.max(0, Number(loyalty?.points) || 0),
-  }
-}
-
-export function computeLoyaltyProgress(
-  loyalty: LoyaltyState | undefined | null,
-  config: LoyaltyProgramConfig = DEFAULT_LOYALTY_PROGRAM
-): LoyaltyProgress {
-  const normalized = normalizeLoyaltyState(loyalty)
-  const threshold = Math.max(1, config.reservationsPerFreeDay)
-  const mod = normalized.reservationsCount % threshold
-  const remaining = mod === 0 ? threshold : threshold - mod
-  return {
-    remaining,
-    freeDaysAvailable: normalized.freeDaysAvailable,
-    reservationsCount: normalized.reservationsCount,
-    reservationsPerFreeDay: threshold,
-  }
 }
 
 export function canAutoRedeemFreeDay(
@@ -172,30 +138,8 @@ export async function resolveMobileBookingAmountWithLoyalty(params: {
   }
 }
 
-function profileDocRef(uid: string, col: ProfileCollection) {
+function profileDocRef(uid: string, col: ProfileCollection): FirebaseFirestore.DocumentReference {
   return doc(db, col, uid)
-}
-
-export function advanceLoyaltyAfterBooking(
-  loyalty: LoyaltyState | undefined | null,
-  config: LoyaltyProgramConfig = DEFAULT_LOYALTY_PROGRAM
-): Required<LoyaltyState> {
-  const existing = normalizeLoyaltyState(loyalty)
-  const threshold = Math.max(1, config.reservationsPerFreeDay)
-  let reservationsCount = existing.reservationsCount + 1
-  let freeDaysAvailable = existing.freeDaysAvailable
-
-  while (reservationsCount >= threshold) {
-    freeDaysAvailable += 1
-    reservationsCount -= threshold
-  }
-
-  return {
-    ...existing,
-    reservationsCount,
-    freeDaysAvailable,
-    points: existing.points + 1,
-  }
 }
 
 export async function redeemFreeDayIfEligible(
@@ -346,14 +290,36 @@ export async function processLoyaltyForCompletedMobileBooking(params: {
     return
   }
 
+  if (!params.firestoreId) return
   const userId = params.userId!
   const profileCol: ProfileCollection = params.profileIsGuest ? "guests" : "users"
   const config = await getLoyaltyProgramConfig()
-  const days = Math.max(1, Math.floor(Number(params.billableDays) || 1))
-
-  if (params.loyaltyFreeDayApplied) {
-    await redeemFreeDayIfEligible(userId, profileCol, days, config)
-  }
-
-  await awardLoyaltyAfterBooking(userId, profileCol, config)
+  const bookingRef: FirebaseFirestore.DocumentReference = doc(db, "bookings", params.firestoreId)
+  const ref = profileDocRef(userId, profileCol)
+  await runTransaction(db, async (tx) => {
+    const booking = await tx.get(bookingRef)
+    if (!booking.exists) return
+    const data = booking.data()!
+    if (data.loyaltyRecord?.reversedAt || (data.loyaltyRecord && data.loyaltyRecord.processingStatus !== "pending") || !isMobileLoyaltyEligibleBooking({
+      ...data, apiSuccess: data.apiSuccess === true,
+    })) return
+    const profile = await tx.get(ref)
+    let loyalty = normalizeLoyaltyState(profile.data()?.loyalty)
+    const days = Math.max(1, Math.floor(Number(params.billableDays) || 1))
+    const freeDaysUsed = params.loyaltyFreeDayApplied && canAutoRedeemFreeDay(loyalty, days, config) ? 1 : 0
+    loyalty.freeDaysAvailable -= freeDaysUsed
+    if (config.enabled) loyalty = advanceLoyaltyAfterBooking(loyalty, config)
+    if (config.enabled || freeDaysUsed) {
+      tx.set(ref, { ...(profile.exists ? {} : { uid: userId, cars: [] }), loyalty, updatedAt: new Date() }, { merge: true })
+    }
+    tx.update(bookingRef, {
+      loyaltyRecord: {
+        version: 1, processingStatus: "processed", profileCollection: profileCol, userId,
+        pointsAwarded: config.enabled ? 1 : 0,
+        reservationsPerFreeDay: Math.max(1, config.reservationsPerFreeDay),
+        freeDaysUsed, processedAt: new Date(),
+      },
+      loyaltyFreeDaysUsed: freeDaysUsed,
+    })
+  })
 }

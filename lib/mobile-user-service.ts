@@ -46,6 +46,7 @@ export type MobileUserProfile = {
   loyalty?: {
     points: number
     reservationsCount: number
+    pointsToRecover?: number
     freeDaysAvailable?: number
   }
   createdAt?: unknown

@@ -51,7 +51,7 @@ import { CalendarIcon, MoreHorizontal, Search, Eye, Loader2, AlertCircle, Refres
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useToast } from "@/components/ui/use-toast"
 import { useAuth } from "@/context/auth-context"
-import { cancelBooking as cancelParkingApiBooking, cleanupExpiredBookings, createManualBooking, sendManualBookingEmail } from "@/app/actions/booking-actions" // Acțiunea server pentru API parcare
+import { cleanupExpiredBookings, createManualBooking, sendManualBookingEmail } from "@/app/actions/booking-actions" // Acțiunea server pentru API parcare
 import { recoverSpecificBooking } from "@/app/actions/booking-recovery" // Recovery pentru rezervări eșuate
 import { TimePickerDemo } from "@/components/time-picker"
 import { checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
@@ -1272,6 +1272,9 @@ function BookingsPageContent() {
             )}
           </div>
         ) : null}
+        {(booking as any).loyaltyRecord?.reversalStatus === "needs_review" && (
+          <Badge variant="destructive">Puncte de verificat</Badge>
+        )}
         {!isPayOnSiteBooking(booking) && (
           <span>{booking.apiBookingNumber || booking.id.substring(0, 6)}</span>
         )}
@@ -1545,6 +1548,9 @@ function BookingsPageContent() {
           json?.multiparkCancelled
             ? "Rezervarea a fost anulată în Multipark și ștearsă local."
             : "Rezervarea a fost ștearsă.",
+          json?.loyaltyStatus === "needs_review"
+            ? "Punctele necesită verificare manuală; evidența este păstrată în arhivă."
+            : null,
           json?.decremented
             ? "Contorul de ocupare a fost ajustat (-1)."
             : null,
@@ -1583,49 +1589,19 @@ function BookingsPageContent() {
     setIsCancellingLocalBooking(true)
     try {
       const booking = bookingToCancel
-      const bookingRef = doc(db, "bookings", booking.id)
-      const doApiCancel = shouldCancelInMultipark(booking)
-      let apiResult: { success: boolean; message?: string } | null = null
-
-      if (doApiCancel) {
-        const result = await cancelParkingApiBooking(booking.apiBookingNumber!)
-        if (!result.success) {
-          await updateDoc(bookingRef, {
-            status: "api_error_cancel",
-            apiMessage: result.message,
-            lastUpdated: serverTimestamp(),
-          })
-          toast({
-            title: "Eroare Anulare API",
-            description: result.message || "Nu s-a putut anula rezervarea la API-ul de parcare.",
-            variant: "destructive",
-          })
-          return
-        }
-        apiResult = result
-      }
-
-      const updates: Record<string, any> = {
-        status: "cancelled_by_admin",
-        cancelledAt: serverTimestamp(),
-        cancelReason: cancelReasonInput.trim() || "Anulat local din admin",
-        lastUpdated: serverTimestamp(),
-      }
-      if (apiResult?.message) {
-        updates.apiMessage = apiResult.message
-      }
-      if (isPayOnSiteBooking(booking)) {
-        updates.payOnSiteStatus = "cancelled"
-      }
-      await updateDoc(bookingRef, updates)
-
-      if (apiResult?.success) {
-        const statsDocRef = doc(db, "config", "reservationStats")
-        await updateDoc(statsDocRef, { activeBookingsCount: increment(-1) })
+      const res = await adminAuthorizedFetch("/api/admin/bookings/cancel", user, {
+        method: "POST",
+        body: JSON.stringify({ bookingId: booking.id, reason: cancelReasonInput.trim() || undefined }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || "Nu am putut anula rezervarea.")
+      const doApiCancel = result.multiparkCancelled === true
+      if (result.loyaltyStatus === "needs_review") {
+        toast({ title: "Puncte de verificat", description: "Rezervarea a fost anulată. Beneficiarul punctelor nu a putut fi identificat sigur; verificați fidelitatea manual.", variant: "destructive" })
       }
 
       // Send cancellation confirmation email to client (if available)
-      if (booking.clientEmail) {
+      if (booking.clientEmail && !result.alreadyCancelled) {
         try {
           const res = await adminAuthorizedFetch("/api/admin/bookings/send-cancel-confirmation", user, {
             method: "POST",
@@ -1654,6 +1630,8 @@ function BookingsPageContent() {
             variant: "destructive",
           })
         }
+      } else if (result.alreadyCancelled) {
+        toast({ title: "Deja anulată", description: "Rezervarea era deja anulată. Punctele nu au fost retrase din nou." })
       } else {
         toast({
           title: "Anulată",
@@ -1675,7 +1653,7 @@ function BookingsPageContent() {
       console.error("Cancel booking failed", e)
       toast({
         title: "Eroare",
-        description: "Nu am putut anula rezervarea.",
+        description: e instanceof Error ? e.message : "Nu am putut anula rezervarea.",
         variant: "destructive",
       })
     } finally {
@@ -1767,20 +1745,25 @@ function BookingsPageContent() {
     setCancellingPayOnSiteBookingId(booking.id)
     
     try {
-      // Anularea se face doar în Firebase, nu prin API Multipark
-      const bookingDocRef = doc(db, "bookings", booking.id)
-      await updateDoc(bookingDocRef, {
-        status: "cancelled_by_admin",
-        payOnSiteStatus: "cancelled", // Adaugă status special pentru pay-on-site
-        cancelledAt: serverTimestamp(),
-        cancelledBy: "admin",
-        apiMessage: "Rezervare anulată de administrator (doar în sistemul local)",
+      const response = await adminAuthorizedFetch("/api/admin/bookings/cancel", user, {
+        method: "POST", body: JSON.stringify({ bookingId: booking.id }),
       })
-      
-      // Decrementez contorul de rezervări active
-      const statsDocRef = doc(db, "config", "reservationStats")
-      await updateDoc(statsDocRef, { activeBookingsCount: increment(-1) })
-      
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || "Nu am putut anula rezervarea.")
+      if (result.loyaltyStatus === "needs_review") {
+        toast({ title: "Puncte de verificat", description: "Rezervarea a fost anulată; fidelitatea necesită verificare manuală.", variant: "destructive" })
+      }
+      if (booking.clientEmail && !result.alreadyCancelled) {
+        try {
+          const emailResponse = await adminAuthorizedFetch("/api/admin/bookings/send-cancel-confirmation", user, {
+            method: "POST", body: JSON.stringify({ bookingId: booking.id }),
+          })
+          if (!emailResponse.ok) throw new Error("Emailul nu a putut fi trimis.")
+        } catch (error) {
+          toast({ title: "Anulată (email eșuat)", description: "Rezervarea și punctele au fost actualizate, dar emailul nu a putut fi trimis.", variant: "destructive" })
+        }
+      }
+
       toast({
         title: "Rezervare Anulată",
         description: `Rezervarea cu numărul ${booking.licensePlate} a fost anulată cu succes în sistemul local.`,
@@ -1793,7 +1776,7 @@ function BookingsPageContent() {
       console.error("Error cancelling pay-on-site booking:", error)
       toast({
         title: "Eroare Sistem",
-        description: "A apărut o eroare la procesul de anulare.",
+        description: error instanceof Error ? error.message : "A apărut o eroare la procesul de anulare.",
         variant: "destructive",
       })
     } finally {

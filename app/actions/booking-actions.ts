@@ -102,6 +102,7 @@ interface CompleteBookingData {
   
   // Loialitate
   loyaltyFreeDayApplied?: boolean
+  loyaltyRecord?: Record<string, unknown>
   loyaltyFreeDaysUsed?: number
   
   // Metadata
@@ -915,6 +916,16 @@ export async function createBookingWithFirestore(
       }
     }
     
+    // Mark new mobile reservations before saving so cancellation cannot mistake
+    // an award still in progress for an untracked legacy award.
+    if (additionalData?.bookingOrigin === "mobile-app" && additionalData?.userId) {
+      completeBookingData.loyaltyRecord = {
+        version: 1, processingStatus: "pending",
+        profileCollection: additionalData.profileIsGuest ? "guests" : "users",
+        userId: additionalData.userId, pointsAwarded: 0, freeDaysUsed: 0,
+      }
+    }
+
     if (apiResult.success) {
       debugLogs.push(`🎟️ Booking number: ${completeBookingData.apiBookingNumber}`)
     }

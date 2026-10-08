@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server"
 import { FieldValue } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
-import { cancelBooking as cancelParkingApiBooking } from "@/app/actions/booking-actions"
+import { prepareAdminCancellation, releaseAdminCancellation, BookingCancellationError } from "@/lib/admin-booking-cancellation"
+import { reverseBookingLoyalty } from "@/lib/booking-loyalty-reversal"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 
 export async function POST(req: Request) {
@@ -10,10 +11,11 @@ export async function POST(req: Request) {
     return authResult.response
   }
 
+  let prepared: Awaited<ReturnType<typeof prepareAdminCancellation>> | undefined
   try {
     const body = await req.json().catch(() => null)
     const bookingId = String(body?.bookingId || "").trim()
-    if (!bookingId) {
+    if (!bookingId || bookingId.includes("/")) {
       return NextResponse.json({ error: "Missing bookingId" }, { status: 400 })
     }
 
@@ -26,28 +28,8 @@ export async function POST(req: Request) {
     const nowDate = nowIso.split("T")[0]
     const nowTime = now.toTimeString().slice(0, 5)
 
-    const bookingSnap = await bookingRef.get()
-    if (!bookingSnap.exists) {
-      return NextResponse.json({ error: "Booking not found" }, { status: 404 })
-    }
-
-    const data: any = bookingSnap.data()
-    const shouldCancelInMultipark =
-      Boolean(data?.apiBookingNumber) &&
-      data?.source !== "pay_on_site" &&
-      !String(data?.status || "").toLowerCase().includes("cancelled")
-
-    let multiparkCancelled = false
-    if (shouldCancelInMultipark) {
-      const result = await cancelParkingApiBooking(String(data.apiBookingNumber))
-      if (!result.success) {
-        return NextResponse.json(
-          { error: result.message || "Failed to cancel booking in Multipark" },
-          { status: 502 },
-        )
-      }
-      multiparkCancelled = true
-    }
+    prepared = await prepareAdminCancellation(bookingId)
+    const { token, multiparkAttempted: shouldCancelInMultipark, multiparkCancelled } = prepared
 
     const result = await adminDb.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef)
@@ -56,6 +38,8 @@ export async function POST(req: Request) {
       }
 
       const data: any = bookingSnap.data()
+      if (data.adminCancellation?.token !== token) throw new BookingCancellationError("Anularea trebuie reîncercată.", 409)
+      const loyalty = await reverseBookingLoyalty(tx, data)
       const wasInside = data?.lpr?.isInside === true
       const occupancyIncrementedFlag = data?.occupancyIncremented === true
       const occupancyDecrementedFlag = data?.occupancyDecremented === true
@@ -63,6 +47,7 @@ export async function POST(req: Request) {
 
       const mergedForArchive = {
         ...data,
+        ...(loyalty.record ? { loyaltyRecord: loyalty.record } : {}),
         // force a consistent exit snapshot in archive
         lpr: {
           ...(data?.lpr || {}),
@@ -116,21 +101,24 @@ export async function POST(req: Request) {
       }
 
       tx.delete(bookingRef)
-      return { ok: true as const, shouldDecrement }
+      return { ok: true as const, shouldDecrement, loyaltyStatus: loyalty.status }
     })
 
     if (!result.ok) {
+      await releaseAdminCancellation(bookingRef, token)
       return NextResponse.json({ error: result.message }, { status: result.status })
     }
 
     return NextResponse.json({
       success: true,
       decremented: result.shouldDecrement,
+      loyaltyStatus: result.loyaltyStatus,
       multiparkCancelled,
       multiparkAttempted: shouldCancelInMultipark,
     })
   } catch (e) {
+    if (prepared) await releaseAdminCancellation(prepared.ref, prepared.token).catch(console.error)
     console.error("Failed to delete booking", e)
-    return NextResponse.json({ error: "Failed to delete booking" }, { status: 500 })
+    return NextResponse.json({ error: e instanceof BookingCancellationError ? e.message : "Failed to delete booking" }, { status: e instanceof BookingCancellationError ? e.status : 500 })
   }
 }
