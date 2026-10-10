@@ -38,14 +38,14 @@ export async function POST(req: Request) {
           activeBookingsCount: FieldValue.increment(-1),
         }, { merge: true })
       }
-      return { alreadyCancelled, loyaltyStatus: loyalty.status }
+      return { alreadyCancelled, loyaltyStatus: loyalty.status, loyalty: loyalty.impact }
     })
     return NextResponse.json({ success: true, ...result,
       multiparkCancelled: prepared.multiparkCancelled, multiparkAttempted: prepared.multiparkAttempted })
   } catch (error) {
     if (prepared) await releaseAdminCancellation(prepared.ref, prepared.token).catch(console.error)
     console.error("Admin cancellation failed", error)
-    return NextResponse.json({ error: error instanceof BookingCancellationError ? error.message : "Anularea nu a putut fi salvată. Reîncercați." },
+    return NextResponse.json({ code: error instanceof BookingCancellationError ? error.code : undefined, error: error instanceof BookingCancellationError ? error.message : "Anularea nu a putut fi salvată. Reîncercați." },
       { status: error instanceof BookingCancellationError ? error.status : 500 })
   }
 }

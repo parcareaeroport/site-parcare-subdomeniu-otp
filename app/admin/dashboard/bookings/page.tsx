@@ -1,5 +1,8 @@
 "use client"
 
+import { BookingCancellationDialog } from "@/components/admin/booking-cancellation-dialog"
+import { formatCancellationLoyaltyResult, type CancellationResult } from "@/lib/booking-cancellation-types"
+
 import { AlertDescription } from "@/components/ui/alert"
 
 import { AlertTitle } from "@/components/ui/alert"
@@ -279,9 +282,7 @@ function BookingsPageContent() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [bookingToDelete, setBookingToDelete] = useState<Booking | null>(null)
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false)
-  const [isCancellingLocalBooking, setIsCancellingLocalBooking] = useState(false)
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null)
-  const [cancelReasonInput, setCancelReasonInput] = useState("")
 
   const [isEditPlateDialogOpen, setIsEditPlateDialogOpen] = useState(false)
   const [bookingToEditPlate, setBookingToEditPlate] = useState<Booking | null>(null)
@@ -306,10 +307,6 @@ function BookingsPageContent() {
   // State pentru actualizarea statusului de plată manual
   const [isUpdatingPayment, setIsUpdatingPayment] = useState(false)
   const [updatingPaymentBookingId, setUpdatingPaymentBookingId] = useState<string | null>(null)
-  
-  // State pentru anularea rezervărilor pay-on-site
-  const [isCancellingPayOnSite, setIsCancellingPayOnSite] = useState(false)
-  const [cancellingPayOnSiteBookingId, setCancellingPayOnSiteBookingId] = useState<string | null>(null)
   
   // State pentru adăugarea manuală de rezervări
   const [isManualDialogOpen, setIsManualDialogOpen] = useState(false)
@@ -1576,89 +1573,39 @@ function BookingsPageContent() {
     }
   }
 
-  const handleCancelBooking = async () => {
-    if (!isAdmin) {
-      toast({
-        title: "Acces restricționat",
-        description: "Doar administratorii pot anula rezervări din admin.",
-        variant: "destructive",
-      })
-      return
-    }
-    if (!bookingToCancel?.id) return
-    setIsCancellingLocalBooking(true)
-    try {
-      const booking = bookingToCancel
-      const res = await adminAuthorizedFetch("/api/admin/bookings/cancel", user, {
-        method: "POST",
-        body: JSON.stringify({ bookingId: booking.id, reason: cancelReasonInput.trim() || undefined }),
-      })
-      const result = await res.json()
-      if (!res.ok) throw new Error(result.error || "Nu am putut anula rezervarea.")
-      const doApiCancel = result.multiparkCancelled === true
-      if (result.loyaltyStatus === "needs_review") {
-        toast({ title: "Puncte de verificat", description: "Rezervarea a fost anulată. Beneficiarul punctelor nu a putut fi identificat sigur; verificați fidelitatea manual.", variant: "destructive" })
-      }
+  const cancellationRequest = useCallback((url: string, init?: RequestInit) =>
+    adminAuthorizedFetch(url, user, init), [user])
 
-      // Send cancellation confirmation email to client (if available)
-      if (booking.clientEmail && !result.alreadyCancelled) {
-        try {
-          const res = await adminAuthorizedFetch("/api/admin/bookings/send-cancel-confirmation", user, {
-            method: "POST",
-            body: JSON.stringify({
-              bookingId: booking.id,
-              reason: cancelReasonInput.trim() || undefined,
-            }),
-          })
-          const json = await res.json().catch(() => null)
-          if (!res.ok) {
-            throw new Error(json?.error || `HTTP ${res.status}`)
-          }
-          toast({
-            title: "Anulată",
-            description: doApiCancel
-              ? "Rezervarea a fost anulată în Multipark și local, iar emailul de confirmare a fost trimis clientului."
-              : "Rezervarea a fost anulată local, iar emailul de confirmare a fost trimis clientului.",
-          })
-        } catch (e) {
-          console.error("Cancel confirmation email failed", e)
-          toast({
-            title: "Anulată (email eșuat)",
-            description: doApiCancel
-              ? "Rezervarea a fost anulată în Multipark și local, dar emailul către client nu a putut fi trimis."
-              : "Rezervarea a fost anulată local, dar emailul către client nu a putut fi trimis.",
-            variant: "destructive",
-          })
-        }
-      } else if (result.alreadyCancelled) {
-        toast({ title: "Deja anulată", description: "Rezervarea era deja anulată. Punctele nu au fost retrase din nou." })
-      } else {
-        toast({
-          title: "Anulată",
-          description: doApiCancel
-            ? "Rezervarea a fost anulată în Multipark și local. (Clientul nu are email în rezervare.)"
-            : "Rezervarea a fost anulată local. (Clientul nu are email în rezervare.)",
+  const handleBookingCancelled = async (result: CancellationResult, reason: string) => {
+    const booking = bookingToCancel
+    if (!booking) return
+    let emailFailed = false
+    if (booking.clientEmail && !result.alreadyCancelled) {
+      try {
+        const response = await adminAuthorizedFetch("/api/admin/bookings/send-cancel-confirmation", user, {
+          method: "POST", body: JSON.stringify({ bookingId: booking.id, reason: reason || undefined }),
         })
+        if (!response.ok) throw new Error("Emailul nu a putut fi trimis.")
+      } catch (error) {
+        console.error("Cancel confirmation email failed", error)
+        emailFailed = true
       }
-
-      // Refresh UI
-      await fetchBookings()
-      if (selectedBooking?.id === booking.id) {
-        setSelectedBooking((prev) => (prev ? { ...prev, status: "cancelled_by_admin" } : prev))
-      }
-      setIsCancelDialogOpen(false)
-      setBookingToCancel(null)
-      setCancelReasonInput("")
-    } catch (e) {
-      console.error("Cancel booking failed", e)
-      toast({
-        title: "Eroare",
-        description: e instanceof Error ? e.message : "Nu am putut anula rezervarea.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsCancellingLocalBooking(false)
     }
+    const description = [
+      result.alreadyCancelled ? "Rezervarea era deja anulată." : "Rezervarea a fost anulată.",
+      formatCancellationLoyaltyResult(result.loyalty),
+      emailFailed ? "Emailul de confirmare nu a putut fi trimis." : null,
+    ].filter(Boolean).join(" ")
+    toast({
+      title: result.alreadyCancelled ? "Deja anulată" : "Rezervare anulată",
+      description,
+      variant: emailFailed || result.loyaltyStatus === "needs_review" ? "destructive" : "default",
+    })
+    if (selectedBooking?.id === booking.id) {
+      setSelectedBooking(prev => prev ? { ...prev, status: "cancelled_by_admin" } : prev)
+    }
+    // An unsuccessful list refresh must not turn a completed cancellation into a retry.
+    void fetchBookings().catch(error => console.error("Bookings refresh failed", error))
   }
 
   const handleSaveNewLicensePlate = async () => {
@@ -1728,60 +1675,6 @@ function BookingsPageContent() {
       })
     } finally {
       setSavingPlate(false)
-    }
-  }
-
-  const handleCancelPayOnSiteBooking = async (booking: Booking) => {
-    if (!isPayOnSiteBooking(booking)) {
-      toast({
-        title: "Eroare",
-        description: "Această funcție este doar pentru rezervările cu plată la parcare.",
-        variant: "destructive",
-      })
-      return
-    }
-    
-    setIsCancellingPayOnSite(true)
-    setCancellingPayOnSiteBookingId(booking.id)
-    
-    try {
-      const response = await adminAuthorizedFetch("/api/admin/bookings/cancel", user, {
-        method: "POST", body: JSON.stringify({ bookingId: booking.id }),
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || "Nu am putut anula rezervarea.")
-      if (result.loyaltyStatus === "needs_review") {
-        toast({ title: "Puncte de verificat", description: "Rezervarea a fost anulată; fidelitatea necesită verificare manuală.", variant: "destructive" })
-      }
-      if (booking.clientEmail && !result.alreadyCancelled) {
-        try {
-          const emailResponse = await adminAuthorizedFetch("/api/admin/bookings/send-cancel-confirmation", user, {
-            method: "POST", body: JSON.stringify({ bookingId: booking.id }),
-          })
-          if (!emailResponse.ok) throw new Error("Emailul nu a putut fi trimis.")
-        } catch (error) {
-          toast({ title: "Anulată (email eșuat)", description: "Rezervarea și punctele au fost actualizate, dar emailul nu a putut fi trimis.", variant: "destructive" })
-        }
-      }
-
-      toast({
-        title: "Rezervare Anulată",
-        description: `Rezervarea cu numărul ${booking.licensePlate} a fost anulată cu succes în sistemul local.`,
-      })
-      
-      fetchBookings() // Reîncarcă lista
-      if (isViewDialogOpen) setIsViewDialogOpen(false)
-      
-    } catch (error) {
-      console.error("Error cancelling pay-on-site booking:", error)
-      toast({
-        title: "Eroare Sistem",
-        description: error instanceof Error ? error.message : "A apărut o eroare la procesul de anulare.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsCancellingPayOnSite(false)
-      setCancellingPayOnSiteBookingId(null)
     }
   }
 
@@ -3327,7 +3220,7 @@ function BookingsPageContent() {
                                   <DropdownMenuItem
                                     onClick={() => {
                                       setBookingToCancel(booking)
-                                      setCancelReasonInput("")
+
                                       setIsCancelDialogOpen(true)
                                     }}
                                     disabled={
@@ -3357,7 +3250,7 @@ function BookingsPageContent() {
                                 <Pencil className="mr-2 h-4 w-4" />
                                 Modifică nr. înmatriculare
                               </DropdownMenuItem>
-                              
+
 
                               {isAdmin && (
                                 <>
@@ -3511,60 +3404,19 @@ function BookingsPageContent() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog
-        open={isCancelDialogOpen}
-        onOpenChange={(open) => {
-          setIsCancelDialogOpen(open)
-          if (!open) {
-            setBookingToCancel(null)
-            setCancelReasonInput("")
-          }
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Anulezi rezervarea?</AlertDialogTitle>
-            <AlertDialogDescription>
-              După anulare, rezervarea nu va mai
-              apărea în Intrări/Ieșiri și statusul va fi marcat ca ANULATĂ.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="space-y-3">
-            <div className="text-sm text-gray-700">
-              <div>
-                <strong>Nr. API / ID:</strong> {bookingToCancel?.apiBookingNumber || bookingToCancel?.id || "-"}
-              </div>
-              <div>
-                <strong>Nr. înmatriculare:</strong> {bookingToCancel?.licensePlate || "-"}
-              </div>
-              <div>
-                <strong>Email client:</strong> {bookingToCancel?.clientEmail || "-"}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {shouldCancelInMultipark(bookingToCancel)
-                  ? "Se va anula și în Multipark (și apoi local)."
-                  : "Rezervarea nu are număr API; anularea va fi doar locală."}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="cancel-reason">Motiv anulare (opțional)</Label>
-              <Input
-                id="cancel-reason"
-                value={cancelReasonInput}
-                onChange={(e) => setCancelReasonInput(e.target.value)}
-                placeholder="Ex: Client a solicitat anularea"
-              disabled={isCancellingLocalBooking}
-              />
-            </div>
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isCancellingLocalBooking}>Renunță</AlertDialogCancel>
-          <AlertDialogAction onClick={handleCancelBooking} disabled={!bookingToCancel || isCancellingLocalBooking}>
-              {isCancellingLocalBooking ? "Se anulează..." : "Anulează"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {bookingToCancel && (
+        <BookingCancellationDialog
+          key={bookingToCancel.id}
+          open={isCancelDialogOpen}
+          booking={bookingToCancel}
+          request={cancellationRequest}
+          onCancelled={handleBookingCancelled}
+          onOpenChange={open => {
+            setIsCancelDialogOpen(open)
+            if (!open) setBookingToCancel(null)
+          }}
+        />
+      )}
 
       <Dialog
         open={isEditPlateDialogOpen}
@@ -4437,17 +4289,13 @@ function BookingsPageContent() {
                   variant="destructive"
                   onClick={() => {
                     setBookingToCancel(selectedBooking)
-                    setCancelReasonInput("")
+
                     setIsCancelDialogOpen(true)
                   }}
-                  disabled={isCancellingLocalBooking}
+                  disabled={isCancelDialogOpen}
                   className="w-full sm:w-auto"
                 >
-                  {isCancellingLocalBooking ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <XCircle className="mr-2 h-4 w-4" />
-                  )}
+                  <XCircle className="mr-2 h-4 w-4" />
                   Anulează
                 </Button>
               )}
@@ -4890,7 +4738,7 @@ function BookingsPageContent() {
                       }`}>
                         ⏰ {apiLogData.response.timestamp}
                       </div>
-                      
+
                       {/* Success/Error Summary */}
                       <div className={`mb-2 p-2 rounded text-sm ${
                         apiLogData.response.success 

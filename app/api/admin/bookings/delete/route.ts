@@ -101,7 +101,7 @@ export async function POST(req: Request) {
       }
 
       tx.delete(bookingRef)
-      return { ok: true as const, shouldDecrement, loyaltyStatus: loyalty.status }
+      return { ok: true as const, shouldDecrement, loyaltyStatus: loyalty.status, loyalty: loyalty.impact }
     })
 
     if (!result.ok) {
@@ -113,12 +113,13 @@ export async function POST(req: Request) {
       success: true,
       decremented: result.shouldDecrement,
       loyaltyStatus: result.loyaltyStatus,
+      loyalty: result.loyalty,
       multiparkCancelled,
       multiparkAttempted: shouldCancelInMultipark,
     })
   } catch (e) {
     if (prepared) await releaseAdminCancellation(prepared.ref, prepared.token).catch(console.error)
     console.error("Failed to delete booking", e)
-    return NextResponse.json({ error: e instanceof BookingCancellationError ? e.message : "Failed to delete booking" }, { status: e instanceof BookingCancellationError ? e.status : 500 })
+    return NextResponse.json({ code: e instanceof BookingCancellationError ? e.code : undefined, error: e instanceof BookingCancellationError ? e.message : "Failed to delete booking" }, { status: e instanceof BookingCancellationError ? e.status : 500 })
   }
 }

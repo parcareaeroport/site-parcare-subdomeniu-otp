@@ -1,64 +1,6 @@
-const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm'), path = require('node:path'), ts = require('typescript');
-function load(file, mocks) { const exports = {}; vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, { exports, require: id => { if (!(id in mocks))
-        throw Error(`Unexpected import ${id}`); return mocks[id]; }, Date, Error, console: { error() { }, warn() { } }, Number, String, Boolean, Promise }); return exports; }
-const config = { enabled: true, reservationsPerFreeDay: 4, freeDayHours: 24, maxBillableDaysForAutoRedeem: 1 };
-const shared = { DEFAULT_LOYALTY_PROGRAM: config, getLoyaltyProgramFromSettings: x => ({ ...config, ...x?.loyaltyProgram }) };
-const state = load('lib/loyalty-state.ts', { '@/lib/mobile-app-settings.shared': shared });
-const plain = x => JSON.parse(JSON.stringify(x)), zero = { points: 0, reservationsCount: 0, freeDaysAvailable: 0, pointsToRecover: 0 };
-function memoryDb(seed) {
-    const rows = new Map(Object.entries(plain(seed)));
-    let tail = Promise.resolve();
-    const db = { failProfileWrite: false };
-    function ref(key) { return { path: key, id: key.split('/')[1], parent: { id: key.split('/')[0] }, get: async () => snap(key) }; }
-    function snap(key) { return { exists: rows.has(key), data: () => plain(rows.get(key) || null), ref: ref(key) }; }
-    db.collection = name => ({ doc: id => ref(`${name}/${id}`) });
-    db.runTransaction = fn => {
-        const run = tail.then(async () => {
-            const changes = [];
-            const tx = { get: async (r) => { assert.equal(changes.length, 0, 'reads before writes'); return snap(r.path); }, update: (r, d) => { assert.ok(rows.has(r.path)); changes.push(['update', r.path, d]); }, set: (r, d, o) => changes.push([o?.merge ? 'update' : 'set', r.path, d]), delete: r => changes.push(['delete', r.path]) };
-            const result = await fn(tx);
-            if (db.failProfileWrite && changes.some(([, k]) => /^(users|guests)\//.test(k))) {
-                db.failProfileWrite = false;
-                throw Error('commit failure');
-            }
-            for (const [op, key, data] of changes) {
-                if (op === 'delete') {
-                    rows.delete(key);
-                    continue;
-                }
-                const next = op === 'set' ? {} : plain(rows.get(key) || {});
-                for (const [field, value] of Object.entries(data)) {
-                    const parts = field.split('.');
-                    let target = next;
-                    for (const part of parts.slice(0, -1))
-                        target = target[part] ||= {};
-                    const last = parts.at(-1);
-                    target[last] = value?.__increment !== undefined ? (target[last] || 0) + value.__increment : value;
-                }
-                rows.set(key, plain(next));
-            }
-            return result;
-        });
-        tail = run.catch(() => { });
-        return run;
-    };
-    db.row = key => plain(rows.get(key) || null);
-    return db;
-}
-function fixture(overrides = {}, opts = {}) {
-    const record = { version: 1, processingStatus: 'processed', profileCollection: 'users', userId: 'u', pointsAwarded: 1, freeDaysUsed: 0, reservationsPerFreeDay: 4 };
-    const booking = { bookingOrigin: 'mobile-app', userId: 'u', apiSuccess: true, status: 'confirmed_paid', apiBookingNumber: '123', source: 'webhook', loyaltyRecord: record, ...overrides };
-    const db = memoryDb({ 'bookings/b': booking, 'users/u': { loyalty: { points: 4, reservationsCount: 0, freeDaysAvailable: 1 } }, 'config/reservationStats': { activeBookingsCount: 1 }, ...opts.rows });
-    let calls = 0;
-    const reversal = load('lib/booking-loyalty-reversal.ts', { '@/lib/firebase-admin': { adminDb: db }, '@/lib/loyalty-state': state, '@/lib/mobile-app-settings.shared': shared });
-    const coordinator = load('lib/admin-booking-cancellation.ts', { 'node:crypto': require('node:crypto'), '@/lib/firebase-admin': { adminDb: db }, '@/lib/booking-loyalty-reversal': reversal, '@/app/actions/booking-actions': { cancelBooking: async () => { calls++; if (opts.delay)
-                await opts.delay(); return { success: !opts.failMultipark, message: 'Multipark failed' }; } } });
-    const mocks = { 'next/server': { NextResponse: { json: (body, o) => ({ body, status: o?.status || 200 }) } }, 'firebase-admin/firestore': { FieldValue: { serverTimestamp: () => new Date(), increment: x => ({ __increment: x }) } }, '@/lib/firebase-admin': { adminDb: db }, '@/lib/admin-api-auth': { authorizeAdminRequest: async () => opts.denied ? { ok: false, response: { status: 403 } } : { ok: true, user: { uid: 'admin' } } }, '@/lib/booking-loyalty-reversal': reversal, '@/lib/admin-booking-cancellation': coordinator };
-    const cancel = load('app/api/admin/bookings/cancel/route.ts', mocks), del = load('app/api/admin/bookings/delete/route.ts', mocks);
-    const program = load('lib/loyalty-program.ts', { '@/lib/loyalty-state': state, '@/lib/mobile-app-settings.shared': shared, '@/lib/server-firestore': { db, doc: (_db, col, id) => db.collection(col).doc(id), getDoc: async (r) => { const s = await r.get(); return { exists: () => s.exists, data: s.data }; }, runTransaction: (_db, fn) => db.runTransaction(fn) }, '@/lib/booking-pricing': {}, '@/lib/pricing-settings': {}, '@/lib/mobile-app-settings': shared });
-    const request = { json: async () => ({ bookingId: 'b', reason: 'test' }) };
-    return { db, program, cancel: () => cancel.POST(request), delete: () => del.POST(request), calls: () => calls };
-}
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { fixture, state, plain, zero, config, load } = require('./booking-loyalty-fixture.cjs');
 test('3 → 4 → cancellation restores 3 and removes reward', () => { const fourth = state.advanceLoyaltyAfterBooking({ ...zero, points: 3, reservationsCount: 3 }, config); assert.deepEqual(plain(state.reverseLoyaltyAfterBooking(fourth, 4)), { ...zero, points: 3, reservationsCount: 3 }); });
 test('spent reward creates debt and requires five future reservations', () => { let n = state.reverseLoyaltyAfterBooking({ ...zero, points: 4 }, 4); assert.equal(n.pointsToRecover, 1); assert.equal(state.computeLoyaltyProgress(n, config).remaining, 5); for (let i = 0; i < 4; i++)
     n = state.advanceLoyaltyAfterBooking(n, config); assert.equal(n.freeDaysAvailable, 0); assert.equal(n.reservationsCount, 3); assert.equal(state.advanceLoyaltyAfterBooking(n, config).freeDaysAvailable, 1); });
@@ -108,4 +50,144 @@ test('disabled program records no award and cancellation preserves balances', as
     assert.equal(f.db.row('bookings/b').loyaltyRecord.pointsAwarded, 0);
     await f.cancel();
     assert.equal(f.db.row('users/u').loyalty.points, 4);
+});
+
+test('preview is read-only, no-store and agrees with the applied result', async () => {
+    const f = fixture({ clientName: 'Ion Popescu' });
+    const before = f.db.row('bookings/b');
+    const preview = await f.preview();
+    assert.equal(preview.status, 200);
+    assert.match(preview.headers['Cache-Control'], /no-store/);
+    assert.equal(f.db.writeCount, 0);
+    assert.equal(f.calls(), 0);
+    assert.deepEqual(f.db.row('bookings/b'), before);
+    assert.equal(preview.body.loyalty.clientLabel, 'Ion Popescu');
+    assert.equal(preview.body.loyalty.before.points, 4);
+    assert.equal(preview.body.loyalty.after.points, 3);
+    const applied = await f.cancel();
+    assert.deepEqual(plain(applied.body.loyalty), plain(preview.body.loyalty));
+});
+
+test('confirmation recalculates if balance changed since preview', async () => {
+    const f = fixture();
+    assert.equal((await f.preview()).body.loyalty.after.points, 3);
+    await f.db.runTransaction(async tx => tx.update(f.db.collection('users').doc('u'), {
+        loyalty: { points: 5, reservationsCount: 1, freeDaysAvailable: 1 },
+    }));
+    const applied = await f.cancel();
+    assert.equal(applied.body.loyalty.before.points, 5);
+    assert.equal(applied.body.loyalty.after.points, 4);
+    assert.equal(f.db.row('users/u').loyalty.points, 4);
+});
+
+test('preview represents debt, returned days, zero awards and ambiguous profiles truthfully', async () => {
+    const debt = fixture({}, { rows: { 'users/u': { loyalty: { points: 4, reservationsCount: 0, freeDaysAvailable: 0 } } } });
+    assert.equal((await debt.preview()).body.loyalty.pointsToRecoverAdded, 1);
+    const returned = fixture({ loyaltyRecord: { profileCollection: 'users', userId: 'u', pointsAwarded: 1, freeDaysUsed: 1, reservationsPerFreeDay: 4 } }, {
+        rows: { 'users/u': { loyalty: { points: 5, reservationsCount: 1, freeDaysAvailable: 0 } } },
+    });
+    assert.equal((await returned.preview()).body.loyalty.freeDaysReturned, 1);
+    assert.equal((await returned.preview()).body.loyalty.after.freeDaysAvailable, 1);
+    const noAward = fixture({ loyaltyRecord: { profileCollection: 'users', userId: 'u', pointsAwarded: 0, freeDaysUsed: 0 } });
+    assert.equal((await noAward.preview()).body.loyalty.after.points, 4);
+    const ambiguous = fixture({ loyaltyRecord: undefined }, { rows: { 'guests/u': { loyalty: zero } } });
+    const unknown = (await ambiguous.preview()).body.loyalty;
+    assert.equal(unknown.status, 'needs_review');
+    assert.equal(unknown.before, null);
+    assert.equal(unknown.after, null);
+    assert.equal(ambiguous.db.writeCount, 0);
+});
+
+test('noneligible booking reports unchanged known balance and email fallback', async () => {
+    const f = fixture({ bookingOrigin: 'web', loyaltyRecord: undefined, clientEmail: 'client@example.test' });
+    const impact = (await f.preview()).body.loyalty;
+    assert.equal(impact.status, 'not_eligible');
+    assert.equal(impact.clientLabel, 'client@example.test');
+    assert.equal(impact.before.points, 4);
+    assert.equal(impact.after.points, 4);
+});
+
+test('lost Multipark success marker blocks cancel and delete retries instead of replaying', async () => {
+    const f = fixture();
+    f.db.failMarkerWrite = true;
+    assert.equal((await f.cancel()).body.code, 'MULTIPARK_CANCELLATION_UNCERTAIN');
+    assert.equal(f.db.row('bookings/b').adminCancellation.multiparkStatus, 'requested');
+    assert.equal((await f.cancel()).status, 409);
+    assert.equal((await f.delete()).status, 409);
+    assert.equal(f.calls(), 1);
+    assert.equal(f.db.row('users/u').loyalty.points, 4);
+    const preview = await f.preview();
+    assert.equal(preview.body.canConfirm, false);
+    assert.match(preview.body.blockingMessage, /incert/);
+});
+
+test('transport interruption or unknown response preserves intent and blocks replay', async () => {
+    for (const opts of [{ throwMultipark: true }, { failMultipark: true, outcomeUnknown: true }]) {
+        const f = fixture({}, opts);
+        assert.equal((await f.cancel()).status, 409);
+        assert.equal((await f.cancel()).status, 409);
+        assert.equal(f.calls(), 1);
+        assert.equal(f.db.row('users/u').loyalty.points, 4);
+    }
+});
+
+test('definitive rejection allows retry, but timed-out lease with unconfirmed intent does not', async () => {
+    const f = fixture({}, { failMultipark: true });
+    assert.equal((await f.cancel()).status, 502);
+    assert.equal(f.db.row('bookings/b').adminCancellation.multiparkStatus, 'rejected');
+    assert.equal((await f.preview()).body.canConfirm, true);
+    assert.equal((await f.cancel()).status, 502);
+    assert.equal(f.calls(), 2);
+    const interrupted = fixture({ adminCancellation: { multiparkStatus: 'requested', expiresAt: 0 } });
+    assert.equal((await interrupted.cancel()).status, 409);
+    assert.equal(interrupted.calls(), 0);
+});
+
+test('preview rejects non-admins, invalid identifiers and missing records without writes', async () => {
+    const denied = fixture({}, { denied: true });
+    assert.equal((await denied.preview()).status, 403);
+    assert.equal(denied.db.writeCount, 0);
+    const f = fixture();
+    assert.equal((await f.preview('missing')).status, 404);
+    assert.equal((await f.preview('')).status, 400);
+    assert.equal((await f.preview('a/b')).status, 400);
+    assert.equal(f.db.writeCount, 0);
+});
+
+test('success wording uses the actual returned balance, including changed rewards', async () => {
+    const wording = load('lib/booking-cancellation-types.ts', {});
+    const f = fixture({ clientName: 'Ion Popescu' });
+    const result = await f.cancel();
+    assert.match(wording.formatCancellationLoyaltyResult(result.body.loyalty), /Ion Popescu: 4 → 3 puncte/);
+    assert.match(wording.formatCancellationLoyaltyResult(result.body.loyalty), /1 → 0/);
+});
+
+test('Multipark adapter distinguishes rejection from timeout, HTTP failure and malformed XML', async () => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const vm = require('node:vm');
+    const ts = require('typescript');
+    const source = fs.readFileSync(path.join(__dirname, '../app/actions/booking-actions.ts'), 'utf8');
+    const start = source.indexOf('export async function cancelBooking(');
+    const code = ts.transpileModule(source.slice(start, source.indexOf('\n/**', start)), {
+        compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+    }).outputText;
+    for (const [reply, expectedUnknown, success] of [
+        [{ ok: true, text: async () => '<ErrorCode>1</ErrorCode>' }, undefined, true],
+        [{ ok: true, text: async () => '<ErrorCode>9</ErrorCode><Message>Rejected</Message>' }, false, false],
+        [{ ok: true, text: async () => '<invalid/>' }, true, false],
+        [{ ok: false, status: 503, statusText: 'Unavailable' }, true, false],
+        [new Error('Timeout'), true, false],
+    ]) {
+        const exports = {};
+        vm.runInNewContext(code, {
+            exports, API_CONFIG: { url: 'http://test.invalid', username: 'test', password: 'test', multiparkId: 'test' },
+            Buffer, AbortController, setTimeout, clearTimeout,
+            console: { error() {} },
+            fetch: async () => { if (reply instanceof Error) throw reply; return reply; },
+        });
+        const result = await exports.cancelBooking('test');
+        assert.equal(result.success, success);
+        assert.equal(result.outcomeUnknown, expectedUnknown);
+    }
 });

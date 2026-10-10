@@ -1315,7 +1315,7 @@ export async function createBookingWithFirestore(
   }
 }
 
-export async function cancelBooking(bookingNumber: string) {
+export async function cancelBooking(bookingNumber: string): Promise<{ success: boolean; message: string; outcomeUnknown?: boolean }> {
   try {
     // Create XML payload for cancellation
     const xmlPayload = `
@@ -1349,6 +1349,7 @@ export async function cancelBooking(bookingNumber: string) {
       if (!response.ok) {
         return {
           success: false,
+          outcomeUnknown: true,
           message: `Eroare de server: ${response.status} ${response.statusText}`,
         }
       }
@@ -1377,6 +1378,7 @@ export async function cancelBooking(bookingNumber: string) {
     } else {
       return {
         success: false,
+        outcomeUnknown: errorCode === null,
         message: `Eroare: ${message}`,
       }
     }
@@ -1384,6 +1386,7 @@ export async function cancelBooking(bookingNumber: string) {
     console.error("Cancellation error:", error)
     return {
       success: false,
+      outcomeUnknown: true,
       message: "A apărut o eroare la anularea rezervării. Vă rugăm să încercați din nou.",
     }
   }
