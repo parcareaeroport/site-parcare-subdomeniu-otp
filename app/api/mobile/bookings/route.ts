@@ -32,6 +32,7 @@ export async function GET(request: Request) {
       paymentStatus: b.paymentStatus,
       amount: b.amount,
       days: b.days,
+      numberOfPersons: b.numberOfPersons,
       apiBookingNumber: b.apiBookingNumber,
       bookingOrigin: b.bookingOrigin,
       paymentProvider: b.paymentProvider,
