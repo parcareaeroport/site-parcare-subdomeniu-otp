@@ -1,3 +1,4 @@
+import { isMobileBookingPlateBlocked, MOBILE_BOOKING_PLATE_REJECTION } from "@/lib/mobile-booking-whitelist"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import {
   canAccessMobileBooking,
@@ -112,6 +113,10 @@ export async function POST(
       lastName: booking.clientName ? String(booking.clientName).split(" ").slice(1).join(" ") : "OTP Parking",
       days: Number(mod.billableDays || booking.days || 1),
       amount: chargedAmount,
+    }
+
+    if (await isMobileBookingPlateBlocked(payload.licensePlate, String(booking.licensePlate || ""))) {
+      return mobileJsonResponse(MOBILE_BOOKING_PLATE_REJECTION, 409)
     }
 
     const orderId = requestedOrderId || `mobile_mod_${bookingId}_${Date.now()}`

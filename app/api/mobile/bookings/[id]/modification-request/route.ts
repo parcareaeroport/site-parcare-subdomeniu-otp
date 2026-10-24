@@ -1,3 +1,4 @@
+import { isMobileBookingPlateBlocked, MOBILE_BOOKING_PLATE_REJECTION } from "@/lib/mobile-booking-whitelist"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import {
   canAccessMobileBooking,
@@ -200,6 +201,10 @@ export async function POST(
     const finalStartTime = requested.newStartTime || currentStartTime
     const finalEndDate = requested.newEndDate || currentEndDate
     const finalEndTime = requested.newEndTime || currentEndTime
+
+    if (await isMobileBookingPlateBlocked(requested.newLicensePlate || String(booking.licensePlate || ""), String(booking.licensePlate || ""))) {
+      return mobileJsonResponse(MOBILE_BOOKING_PLATE_REJECTION, 409)
+    }
 
     if (
       finalStartDate &&

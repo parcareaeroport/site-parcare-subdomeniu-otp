@@ -1,3 +1,4 @@
+import { isMobileBookingPlateBlocked, LICENSE_PLATE_NOT_ALLOWED, LICENSE_PLATE_NOT_ALLOWED_MESSAGE } from "@/lib/mobile-booking-whitelist"
 import { conflictMessage, BOOKING_CHECK_UNAVAILABLE } from "@/lib/mobile-reservation-conflicts"
 import { checkMobileReservation, type ReservationCheckMetrics } from "@/lib/mobile-reservation-check.server"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
@@ -48,6 +49,15 @@ export async function POST(request: Request) {
       return respond({
         success: true, available: false,
         error: windowValidation.code, message: windowValidation.message,
+        conflictingBookings: 0, totalSpots: 0, maxBookingsInPeriod: 0,
+      })
+    }
+
+    if (input.licensePlate && await isMobileBookingPlateBlocked(input.licensePlate)) {
+      outcome = "plate_not_allowed"
+      return respond({
+        success: true, available: false,
+        code: LICENSE_PLATE_NOT_ALLOWED, message: LICENSE_PLATE_NOT_ALLOWED_MESSAGE,
         conflictingBookings: 0, totalSpots: 0, maxBookingsInPeriod: 0,
       })
     }

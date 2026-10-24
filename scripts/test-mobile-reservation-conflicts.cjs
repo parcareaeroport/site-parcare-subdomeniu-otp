@@ -5,6 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const ts = require('typescript');
 function load(file, mocks = {}) {
+  mocks = { '@/lib/mobile-booking-whitelist': { isMobileBookingPlateBlocked: async () => false }, ...mocks };
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
@@ -12,7 +13,7 @@ function load(file, mocks = {}) {
   vm.runInNewContext(code, { exports, require: id => {
     if (!(id in mocks)) throw new Error(`Unexpected dependency ${id}`);
     return mocks[id];
-  }, console: { error() {}, info() {}, warn() {} }, Date, Number, String, Boolean, Error });
+  }, console: { error() {}, info() {}, warn() {} }, Date, Number, String, Boolean, Error, performance });
   return exports;
 }
 const interval = load('lib/reservation-conflict-interval.ts');
@@ -33,10 +34,10 @@ test('exact effective end is allowed; later period allowed; invalid dates fail c
 });
 function guard(rows, failure = false) {
   return load('lib/mobile-reservation-conflicts.ts', {
-    '@/lib/firebase-admin': {adminDb: {collection: () => ({where: (_field, _op, statuses) => ({get: async () => {
+    '@/lib/firebase-admin': {adminDb: {collection: () => ({where: (_field, _op, statuses) => ({select: () => ({get: async () => {
       if (failure) throw new Error('offline');
       return {docs: rows.filter(x => statuses.includes(x.status)).map((x,i) => ({id: `booking-${i}`, data: () => x}))};
-    }})})}},
+    }})})})}},
     '@/lib/utils': {normalizeLicensePlate: x => x.replace(/[^a-z0-9]/gi, '').toUpperCase()},
     '@/lib/mobile-booking-ownership': {canAccessMobileBooking: (b,a) => b.clientEmail === a.email},
     '@/lib/reservation-conflict-interval': interval,
@@ -86,7 +87,14 @@ for (const capacityFailure of [false, true]) {
     const g = guard([], true);
     const route = load('app/api/mobile/check-availability/route.ts', {
       '@/lib/mobile-reservation-conflicts': g,
-      '@/lib/booking-utils': {checkAvailability: async () => ({available:!capacityFailure,verificationFailed:capacityFailure})},
+      '@/lib/mobile-reservation-check.server': load('lib/mobile-reservation-check.server.ts', {
+        'server-only': {},
+        '@/lib/firebase-admin': {adminDb: {collection: name => name === 'config'
+          ? {doc: () => ({get: async () => { if (capacityFailure) throw new Error('offline'); return {data: () => ({})}; }})}
+          : {where: () => ({select: () => ({get: async () => { if (!capacityFailure) throw new Error('offline'); return {size: 0, docs: []}; }})})}}},
+        '@/lib/mobile-reservation-conflicts': g,
+        '@/lib/reservation-availability-calculation': {},
+      }),
       '@/lib/mobile-api-auth': {verifyMobileUser: async () => ({ok:true,user:{uid:'u',email:'owner@example.test'}})},
       '@/lib/mobile-booking-window': {validateMobileBookingWindow: () => ({ok:true})},
       '@/lib/mobile-cors': {mobileJsonResponse: (body,status=200) => ({body,status})},

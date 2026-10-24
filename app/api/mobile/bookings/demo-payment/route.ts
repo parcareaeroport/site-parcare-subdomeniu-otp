@@ -1,3 +1,4 @@
+import { isMobileBookingPlateBlocked, MOBILE_BOOKING_PLATE_REJECTION } from "@/lib/mobile-booking-whitelist"
 import { createBookingWithFirestore } from "@/app/actions/booking-actions"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import {
@@ -36,6 +37,10 @@ export async function POST(request: Request) {
     }
 
     let payload = validated.data
+    if (await isMobileBookingPlateBlocked(payload.licensePlate)) {
+      return mobileJsonResponse(MOBILE_BOOKING_PLATE_REJECTION, 409)
+    }
+
     if (auth.user.email && !payload.email) {
       payload.email = auth.user.email
     }

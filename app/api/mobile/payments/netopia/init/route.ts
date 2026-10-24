@@ -1,3 +1,4 @@
+import { isMobileBookingPlateBlocked, MOBILE_BOOKING_PLATE_REJECTION } from "@/lib/mobile-booking-whitelist"
 import { getMobileAppSettings } from "@/lib/mobile-app-settings"
 import { verifyMobileUser } from "@/lib/mobile-api-auth"
 import {
@@ -110,6 +111,10 @@ export async function POST(request: Request) {
         },
         400
       )
+    }
+
+    if (await isMobileBookingPlateBlocked(payload.licensePlate)) {
+      return mobileJsonResponse(MOBILE_BOOKING_PLATE_REJECTION, 409)
     }
 
     const duplicateCheck = await checkMobileReservationConflict(
