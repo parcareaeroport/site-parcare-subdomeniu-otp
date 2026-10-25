@@ -93,9 +93,13 @@ for (const capacityFailure of [false, true]) {
       '@/lib/mobile-reservation-conflicts': g,
       '@/lib/mobile-reservation-check.server': load('lib/mobile-reservation-check.server.ts', {
         'server-only': {},
-        '@/lib/firebase-admin': {adminDb: {collection: name => name === 'config'
+        '@/lib/reservation-check-snapshot.server': load('lib/reservation-check-snapshot.server.ts', {
+          'server-only': {},
+          '@/lib/firebase-admin': {adminDb: {collection: name => name === 'config'
           ? {doc: () => ({get: async () => { if (capacityFailure) throw new Error('offline'); return {data: () => ({})}; }})}
           : {where: () => ({select: () => ({get: async () => { if (!capacityFailure) throw new Error('offline'); return {size: 0, docs: []}; }})})}}},
+          '@/lib/mobile-reservation-conflicts': {...g, CONFLICT_STATUSES: ['confirmed_paid'], RESERVATION_CHECK_FIELDS: ['status']},
+        }),
         '@/lib/mobile-reservation-conflicts': g,
         '@/lib/reservation-availability-calculation': {},
       }),

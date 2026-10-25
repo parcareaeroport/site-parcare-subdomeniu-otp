@@ -1,6 +1,7 @@
 import { db } from './firebase'
 import { collection, query, where, getDocs, orderBy, limit, Timestamp, doc, updateDoc, increment, serverTimestamp, getDoc } from 'firebase/firestore'
 import { getLprPresenceState } from '@/lib/lpr-presence'
+import { lprAdminReviewReason } from '@/lib/lpr-admin-review'
 
 // Interfețe pentru tipurile de date
 export interface MonthlyStats {
@@ -57,6 +58,7 @@ export interface DailyEntryExit {
   hasArrived?: boolean
   // Same effective presence used by the occupancy API.
   isEffectivelyInside?: boolean
+  adminReviewReason?: string
   // Admin manual LPR markers (used for quick operator visibility in entries/exits tables)
   manualLprOverride?: boolean
   manualLprEventType?: "entry" | "exit" | string
@@ -871,6 +873,7 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         bookingStatus: booking.status,
         hasArrived: Boolean(lpr.arrivedAt) || lpr.isInside === true,
         isEffectivelyInside: getLprPresenceState({ lpr }).isEffectivelyInside,
+        adminReviewReason: lprAdminReviewReason({ ...booking, lpr }),
         actualTime,
         delayMinutes,
         amount: coerceMoney(booking.amount),

@@ -1,6 +1,7 @@
 "use client"
 
 import { getLprPresenceState } from "@/lib/lpr-presence"
+import { lprAdminReviewReason, LPR_ADMIN_REVIEW_LABEL } from "@/lib/lpr-admin-review"
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -628,6 +629,7 @@ export default function EntriesExitsPage() {
           bookingStatus: b.status,
           hasArrived: true,
           isEffectivelyInside: true,
+          adminReviewReason: lprAdminReviewReason(b),
           actualTime: undefined,
           delayMinutes: undefined,
           amount: coerceMoney(b.amount),
@@ -993,6 +995,11 @@ export default function EntriesExitsPage() {
           amountDueText = "Achitat"
         }
       }
+    }
+
+    if (kind === "exit" && row.adminReviewReason) {
+      amountDueValue = undefined
+      amountDueText = LPR_ADMIN_REVIEW_LABEL
     }
 
     return {
@@ -1646,7 +1653,11 @@ export default function EntriesExitsPage() {
                 )}
               {kind === "exit" && (
                 <td className="py-3 px-2">
-                  {typeof row.amountDueValue === "number" && row.amountDueValue > 0 ? (
+                  {row.adminReviewReason ? (
+                    <Badge variant="outline" title={row.adminReviewReason} className="whitespace-normal border-amber-400 bg-amber-100 text-amber-900">
+                      {LPR_ADMIN_REVIEW_LABEL}
+                    </Badge>
+                  ) : typeof row.amountDueValue === "number" && row.amountDueValue > 0 ? (
                     <span className="text-red-700 font-semibold">{row.amountDueText ?? `${row.amountDueValue.toFixed(2)} LEI`}</span>
                   ) : row.amountDueText?.toLowerCase().includes("achitat") ? (
                       <span className="text-green-700 font-semibold">Achitat</span>
@@ -1760,7 +1771,9 @@ export default function EntriesExitsPage() {
                 <>
                   <div className="text-muted-foreground">De plată</div>
                   <div className="text-right text-gray-900">
-                    {typeof row.amountDueValue === "number" && row.amountDueValue > 0
+                    {row.adminReviewReason
+                      ? <Badge variant="outline" title={row.adminReviewReason} className="whitespace-normal border-amber-400 bg-amber-100 text-amber-900">{LPR_ADMIN_REVIEW_LABEL}</Badge>
+                      : typeof row.amountDueValue === "number" && row.amountDueValue > 0
                       ? <span className="text-red-700 font-semibold">{row.amountDueText ?? `${row.amountDueValue.toFixed(2)} LEI`}</span>
                       : row.amountDueText?.toLowerCase().includes("achitat")
                         ? <span className="text-green-700 font-semibold">Achitat</span>

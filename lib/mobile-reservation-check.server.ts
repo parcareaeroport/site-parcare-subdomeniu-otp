@@ -1,8 +1,8 @@
 import "server-only"
 
-import { adminDb } from "@/lib/firebase-admin"
+import { readReservationCheckSnapshot } from "@/lib/reservation-check-snapshot.server"
 import type { MobileAuthContext } from "@/lib/mobile-booking-ownership"
-import { CONFLICT_STATUSES, RESERVATION_CHECK_FIELDS, findMobileReservationConflict } from "@/lib/mobile-reservation-conflicts"
+import { findMobileReservationConflict } from "@/lib/mobile-reservation-conflicts"
 import { calculateReservationAvailability } from "@/lib/reservation-availability-calculation"
 
 export type ReservationCheckMetrics = { readMs: number; calculationMs: number; documents: number }
@@ -13,25 +13,18 @@ export async function checkMobileReservation(
   metrics: ReservationCheckMetrics
 ) {
   const readStarted = performance.now()
-  let snapshots
+  let snapshot
   try {
-    snapshots = await Promise.all([
-      adminDb.collection("config").doc("reservationSettings").get(),
-      adminDb.collection("bookings").where("status", "in", [...CONFLICT_STATUSES, "unmatched_lpr"])
-        .select(...RESERVATION_CHECK_FIELDS).get(),
-    ])
+    snapshot = await readReservationCheckSnapshot()
   } finally {
     metrics.readMs = performance.now() - readStarted
   }
-  const [settings, bookings] = snapshots
-  metrics.documents = bookings.size
+  metrics.documents = snapshot.rows.length
   const calculationStarted = performance.now()
   try {
-    const rows = bookings.docs.map(doc => ({ id: doc.id, booking: doc.data() }))
-    // Match the existing default for an absent configuration or an unset/zero limit.
-    const limit = settings.data()?.maxTotalReservations || 100
+    const { rows, limit, now } = snapshot
     const availability = calculateReservationAvailability(rows,
-      input.startDate, input.startTime, input.endDate, input.endTime, limit)
+      input.startDate, input.startTime, input.endDate, input.endTime, limit, now)
     const conflict = input.licensePlate ? findMobileReservationConflict(rows,
       input.licensePlate, input.startDate, input.endDate, input.startTime, input.endTime,
       { auth, paymentMethod: input.paymentMethod }) : { exists: false, unavailable: false, existingBooking: undefined }
