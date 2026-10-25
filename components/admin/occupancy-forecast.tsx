@@ -64,20 +64,25 @@ export function OccupancyForecast() {
     return () => { ++requestId.current; controller.current?.abort() }
   }, [user, reload, initialInput])
   const dirty = response !== null && JSON.stringify(input) !== JSON.stringify(response.input)
+  const displayDate = (date: string) => date.split("-").reverse().join(".")
+  const intervalText = (result: ForecastResult) => `${displayDate(result.interval.startDate)} ${result.interval.startTime} → ${displayDate(result.interval.endDate)} ${result.interval.endTime}`
+  const occupied = (result: ForecastResult) => result.conflictingBookings + result.delayedCount + result.unmatchedInsideCount
+  const remaining = (result: ForecastResult) => Math.max(0, result.totalSpots - result.conflictingBookings)
   const renderResult = (result: ForecastResult, daily: boolean) => <TableRow key={forecastIntervalLabel(result)}>
-    {daily && <TableCell>{result.interval.startDate}</TableCell>}
-    <TableCell className="whitespace-nowrap">{forecastIntervalLabel(result)}</TableCell>
-    <TableCell>{result.conflictingBookings}</TableCell><TableCell>{result.delayedCount}</TableCell>
-    <TableCell>{result.unmatchedInsideCount}</TableCell><TableCell>{response?.capacity}</TableCell>
-    <TableCell>{result.totalSpots}</TableCell>
-    <TableCell className={result.available ? "text-green-800 dark:text-green-300" : "text-red-700 dark:text-red-300"}>{result.available ? "Permisă" : "Blocată"}</TableCell>
-    <TableCell><Button size="icon" variant="outline" aria-label={`Explicație ${forecastIntervalLabel(result)}`} onClick={() => setSelected(result)}><Info className="h-4 w-4" /></Button></TableCell>
+    <TableCell className="whitespace-nowrap">
+      {daily ? <><div>{displayDate(result.interval.startDate)}</div><div className="text-xs text-muted-foreground">00:00 → 00:00 a doua zi</div></> : intervalText(result)}
+    </TableCell>
+    <TableCell>{occupied(result)} din {response?.capacity}</TableCell>
+    <TableCell>{remaining(result)}</TableCell>
+    <TableCell><div className="flex items-center gap-2">
+      <span className={result.available ? "text-green-800 dark:text-green-300" : "text-red-700 dark:text-red-300"}>{result.available ? "Da" : "Nu"}</span>
+      <Button size="icon" variant="outline" aria-label={`Explicație ${forecastIntervalLabel(result)}`} onClick={() => setSelected(result)}><Info className="h-4 w-4" /></Button>
+    </div></TableCell>
   </TableRow>
   const resultTable = (results: ForecastResult[], daily: boolean) => <div className="overflow-x-auto"><Table>
     <TableHeader><TableRow>
-      {daily && <TableHead>Ziua</TableHead>}<TableHead>Interval simulat</TableHead><TableHead>Rezervări suprapuse</TableHead>
-      <TableHead>Întârziați</TableHead><TableHead>Fără rezervare</TableHead><TableHead>Capacitate configurată</TableHead>
-      <TableHead>Capacitate rămasă după scăderi</TableHead><TableHead>Rezultat</TableHead><TableHead>Detalii</TableHead>
+      <TableHead>Perioada</TableHead><TableHead>Locuri calculate ca ocupate</TableHead>
+      <TableHead>Locuri rămase conform calculului</TableHead><TableHead>Se poate rezerva?</TableHead>
     </TableRow></TableHeader><TableBody>{results.map(result => renderResult(result, daily))}</TableBody>
   </Table></div>
   return <div className="space-y-4 min-w-0">
@@ -89,7 +94,7 @@ export function OccupancyForecast() {
             <div className="space-y-1"><Label htmlFor="forecast-to">Ultima zi</Label><Input required id="forecast-to" type="date" value={input.to} onChange={e => setInput(prev => ({ ...prev, to: e.target.value }))} /></div>
           </div>
           <h3 className="font-semibold">Simulator de interval</h3>
-          <p className="text-sm text-muted-foreground">Verifică disponibilitatea după capacitate, ca pentru o rezervare nouă. Blacklist, whitelist și rezervările duplicate pentru un client sau număr nu sunt simulate.</p>
+          <p className="text-sm text-muted-foreground">Alege perioada clientului și verifică dacă sistemul permite încă o rezervare. Rezultatul verifică locurile disponibile; restricțiile pentru un anumit client sau număr se verifică separat în aplicație.</p>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {([ ["startDate", "Data intrării", "date"], ["startTime", "Ora intrării", "time"], ["endDate", "Data ieșirii", "date"], ["endTime", "Ora ieșirii", "time"] ] as const).map(([key, label, type]) =>
               <div key={key} className="space-y-1"><Label htmlFor={`forecast-${key}`}>{label}</Label><Input required id={`forecast-${key}`} type={type} value={input.simulator[key]} onChange={e => setInput(prev => ({ ...prev, simulator: { ...prev.simulator, [key]: e.target.value } }))} /></div>)}
@@ -100,9 +105,17 @@ export function OccupancyForecast() {
         {error && <p role="alert" className="text-red-700 dark:text-red-300">{error}</p>}
         {dirty && <p role="status" className="text-amber-800 dark:text-amber-300">Formular modificat — necesită recalculare. Rezultatele de mai jos corespund intervalelor afișate.</p>}
         {response && <>
-          <p className="text-sm text-muted-foreground">Calcul: {response.calculatedAt} · Fus orar server: {response.serverTimeZone}. Intervalele sunt interpretate pe server. Fiecare zi simulează o rezervare 00:00–00:00 a doua zi.</p>
-          <p className="text-sm text-muted-foreground">Întârziații actuali și mașinile fără rezervare reduc capacitatea inclusiv pentru zilele viitoare.</p>
-          <h3 className="font-semibold">Rezultatul simulatorului</h3>{resultTable([response.simulator], false)}
+          <p className="text-sm text-muted-foreground">Actualizat la {new Intl.DateTimeFormat("ro-RO", { timeZone: "Europe/Bucharest", dateStyle: "short", timeStyle: "short" }).format(new Date(response.calculatedAt))} (ora României).</p>
+          <h3 className="font-semibold">Rezultatul simulatorului</h3>
+          <p className="rounded-md bg-muted p-3" role="status">
+            Pentru {intervalText(response.simulator)}, sistemul calculează <strong>{occupied(response.simulator)} de locuri ocupate din {response.capacity}</strong>.
+            {occupied(response.simulator) > response.capacity
+              ? ` Limita este depășită cu ${occupied(response.simulator) - response.capacity} locuri.`
+              : ` Rămân ${remaining(response.simulator)} locuri.`}
+            <strong>{response.simulator.available ? " O rezervare nouă este permisă." : " O rezervare nouă este blocată."}</strong>
+          </p>
+          <p className="text-sm text-muted-foreground">Aceste valori reproduc calculul aplicației mobile, nu o numărătoare fizică a mașinilor. Întârziații actuali și mașinile fără rezervare sunt incluși și pentru zilele viitoare. Apasă „i” pentru explicația completă.</p>
+          {resultTable([response.simulator], false)}
           <h3 className="font-semibold">Tabel zilnic</h3>{resultTable(response.days, true)}
         </>}
       </CardContent>
