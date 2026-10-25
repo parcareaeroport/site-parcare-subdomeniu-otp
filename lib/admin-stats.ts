@@ -1,3 +1,4 @@
+import { readEffectiveLprOccupancy } from '@/lib/lpr-occupancy-client'
 import { db } from './firebase'
 import { collection, query, where, getDocs, orderBy, limit, Timestamp, doc, updateDoc, increment, serverTimestamp, getDoc } from 'firebase/firestore'
 import { getLprPresenceState } from '@/lib/lpr-presence'
@@ -295,22 +296,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     const settingsSnap = await getDoc(doc(db, 'config', 'reservationSettings'))
     const maxLimit = settingsSnap.exists() ? Number(settingsSnap.data()?.maxTotalReservations || 0) : 0
 
-    // Preferă contorul live din parkingLive; fallback la numărarea isInside
-    let presentCount = 0
-    const liveSnap = await getDoc(doc(db, 'config', 'parkingLive'))
-    if (liveSnap.exists()) {
-      presentCount = Math.max(0, Number(liveSnap.data()?.occupiedCount || 0))
-    }
-    if (!presentCount) {
-      const todayIso = new Date().toISOString().split('T')[0]
-      const lprInsideQuery = query(
-      bookingsRef,
-        where('lpr.isInside', '==', true),
-        where('endDate', '>=', todayIso)
-    )
-      const lprInsideSnap = await getDocs(lprInsideQuery)
-      presentCount = lprInsideSnap.size
-    }
+    const presentCount = await readEffectiveLprOccupancy()
 
     const currentOccupancy = maxLimit > 0
       ? Math.min(Math.round((presentCount / maxLimit) * 100), 100)
@@ -608,48 +594,10 @@ async function markExpiredBookingsAsInactive() {
  */
 export async function getOccupancyData(): Promise<OccupancyStats[]> {
   try {
-    // Preferă contorul LIVE din Firestore (LPR), cu fallback pe calculul clasic din rezervări
-    const totalSpots = await getMaxTotalReservations()
-    const liveDoc = await getDoc(doc(db, 'config', 'parkingLive'))
-    if (liveDoc.exists()) {
-      const occupiedCount = Math.max(0, Number(liveDoc.data().occupiedCount || 0))
-      const occupiedPercentage = Math.min(100, Math.round((occupiedCount / totalSpots) * 100))
-      const freePercentage = 100 - occupiedPercentage
-      
-      console.log('🚗 Using LIVE LPR occupancy:', {
-        occupiedCount,
-        totalSpots,
-        occupiedPercentage
-      })
-      
-      return [
-        { name: 'Ocupat', value: occupiedPercentage },
-        { name: 'Liber', value: freePercentage }
-      ]
-    }
-    
-    // Fallback: calculează din rezervări (backward-compatible)
-    const bookingsRef = collection(db, 'bookings')
-    const now = new Date()
-    const currentDateStr = now.toISOString().split('T')[0]
-    const now_timestamp = now.getTime()
-    const activeBookingsQuery = query(
-      bookingsRef,
-      where('startDate', '<=', currentDateStr),
-      where('endDate', '>=', currentDateStr),
-      where('status', 'in', ['confirmed_paid', 'confirmed_test', 'confirmed', 'paid', 'confirmed_pay_on_site'])
-    )
-    const snapshot = await getDocs(activeBookingsQuery)
-    let reallyActiveBookings = 0
-    snapshot.forEach(docSnap => {
-      const booking = docSnap.data()
-      const startDateTime = new Date(`${booking.startDate}T${booking.startTime}:00`)
-      const endDateTime = new Date(`${booking.endDate}T${booking.endTime}:00`)
-      if (startDateTime.getTime() <= now_timestamp && endDateTime.getTime() > now_timestamp) {
-        reallyActiveBookings++
-      }
-    })
-    const occupiedPercentage = Math.round((reallyActiveBookings / totalSpots) * 100)
+    const [totalSpots, occupiedCount] = await Promise.all([
+      getMaxTotalReservations(), readEffectiveLprOccupancy(),
+    ])
+    const occupiedPercentage = totalSpots > 0 ? Math.min(100, Math.round((occupiedCount / totalSpots) * 100)) : 0
     return [
       { name: 'Ocupat', value: occupiedPercentage },
       { name: 'Liber', value: 100 - occupiedPercentage }
@@ -1005,7 +953,7 @@ export async function getDailyStatistics(selectedDate: string): Promise<DailySta
     // Obține toate datele în paralel pentru eficiență
     const [
       totalSpots,
-      occupancyData,
+      occupiedCount,
       scheduledEntries,
       actualEntries,
       scheduledExits,
@@ -1013,7 +961,7 @@ export async function getDailyStatistics(selectedDate: string): Promise<DailySta
       expiredReservations
     ] = await Promise.all([
       getMaxTotalReservations(),
-      getOccupancyData(),
+      readEffectiveLprOccupancy(),
       getDailyEntries(selectedDate),
       getActualEntries(selectedDate),
       getDailyExits(selectedDate),
@@ -1022,9 +970,7 @@ export async function getDailyStatistics(selectedDate: string): Promise<DailySta
     ])
 
     // Calculează locurile disponibile
-    const occupiedPercentage = occupancyData.find(item => item.name === 'Ocupat')?.value || 0
-    const occupiedSpots = Math.round((occupiedPercentage / 100) * totalSpots)
-    const availableSpots = totalSpots - occupiedSpots
+    const availableSpots = Math.max(0, totalSpots - occupiedCount)
 
     // Calculează statisticile
     const scheduledEntriesCount = scheduledEntries.length

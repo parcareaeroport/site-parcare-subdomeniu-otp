@@ -43,8 +43,7 @@ import {
   type ExpiredReservation,
   type DailyEntryExit,
 } from "@/lib/admin-stats"
-import { db } from "@/lib/firebase"
-import { doc, onSnapshot } from "firebase/firestore"
+import { subscribeEffectiveLprOccupancy } from "@/lib/lpr-occupancy-client"
 
 const COLORS = ["#22c55e", "#f59e0b", "#ef4444", "#3b82f6", "#8b5cf6"]
 
@@ -79,27 +78,9 @@ export default function StatisticsPage() {
     // Încarcă limita maximă de rezervări
     getMaxTotalReservations().then(setMaxTotalReservations)
 
-    // Ascultă în timp real ocuparea LIVE din LPR (parkingLive.occupiedCount)
-    const occupancyDocRef = doc(db, "config", "parkingLive")
-    const unsub = onSnapshot(
-      occupancyDocRef,
-      (snap) => {
-        const data = snap.data() || {}
-        const occupiedCount = Math.max(0, Number(data.occupiedCount || 0))
-        setOccupiedLpr(occupiedCount)
-        console.log("📊 [Statistics] Occupancy from LPR:", {
-          occupiedCount,
-          lastUpdated: data.lastUpdated?.toDate?.().toISOString?.() ?? null,
-        })
-      },
-      (err) => {
-        console.error("❌ [Statistics] Error listening to LPR occupancy:", err)
-      },
-    )
-
-    return () => {
-      unsub()
-    }
+    return subscribeEffectiveLprOccupancy(setOccupiedLpr, error => {
+      console.error("[Statistics] Effective LPR occupancy unavailable", error)
+    })
   }, [])
 
   useEffect(() => {
@@ -156,7 +137,7 @@ export default function StatisticsPage() {
   ]
 
   // Locuri disponibile și ocupate DOAR din LPR (isInside)
-  const occupiedFromLpr = Math.min(occupiedLpr, maxTotalReservations)
+  const occupiedFromLpr = occupiedLpr
   const availableFromLpr = Math.max(0, maxTotalReservations - occupiedFromLpr)
 
   const occupancyChartData = [
@@ -229,7 +210,8 @@ export default function StatisticsPage() {
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4 mb-6 md:mb-4">
         <OccupancyCounter 
-          title="Ocupare Parcare" 
+          title="Ocupare Parcare"
+          countOverride={occupiedLpr}
           icon={<MapPin className="h-5 w-5" />}
         />
 

@@ -14,7 +14,6 @@ import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { OccupancyCounter } from "./occupancy-counter"
 import { useAuth } from "@/context/auth-context"
-import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 
 export function ReservationLimitManager() {
   const { toast } = useToast()
@@ -31,8 +30,6 @@ export function ReservationLimitManager() {
   const [reservationsEnabled, setReservationsEnabled] = useState<boolean | null>(null)
 
   // statistici
-  const [activeBookings, setActiveBookings] = useState<number | null>(null)
-  const [lprInsideCount, setLprInsideCount] = useState<number | null>(null)
   const [payOnSiteCancelMinutes, setPayOnSiteCancelMinutes] = useState<number | null>(null)
   const [payOnSiteCancelMinutesInput, setPayOnSiteCancelMinutesInput] = useState("")
   const [payOnSiteAutoCancelEnabled, setPayOnSiteAutoCancelEnabled] = useState<boolean | null>(null)
@@ -81,58 +78,6 @@ export function ReservationLimitManager() {
     )
     return () => unsub()
   }, [toast])
-
-  /*──────────────────────────────────┐
-  │   SNAPSHOT: Occupancy live        │
-  │   Rezervări Active Acum = parkingLive.occupiedCount
-  └──────────────────────────────────*/
-  useEffect(() => {
-    const unsub = onSnapshot(
-      doc(db, "config", "parkingLive"),
-      (snap) => {
-        const count = Math.max(0, Number(snap.data()?.occupiedCount || 0))
-        setActiveBookings(count)
-        console.log("📊 Active bookings from parkingLive.occupiedCount:", { count })
-      },
-      (err) => {
-        console.error("❌ Error listening to parkingLive occupancy:", err)
-      },
-    )
-
-    return () => unsub()
-  }, [])
-
-  // IMPORTANT: Keep the dashboard occupancy card consistent with /admin/dashboard/ocupare:
-  // use strict LPR reality (count of bookings where lpr.isInside == true) via /api/admin/occupancy
-  useEffect(() => {
-    let cancelled = false
-
-    const refresh = async () => {
-      if (!user) return
-
-      try {
-        const res = await adminAuthorizedFetch("/api/admin/occupancy", user)
-        if (!res.ok) return
-        const json = (await res.json()) as { occupiedCount?: number; plates?: any[] }
-        const count =
-          typeof json?.occupiedCount === "number"
-            ? json.occupiedCount
-            : Array.isArray(json?.plates)
-              ? json.plates.length
-              : null
-        if (!cancelled) setLprInsideCount(typeof count === "number" ? Math.max(0, count) : null)
-      } catch {
-        // ignore: we'll just fall back to live counter
-      }
-    }
-
-    refresh()
-    const id = setInterval(refresh, 60000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [user])
 
   /*──────────────────────────────────┐
   │   HANDLERS                       │
@@ -383,8 +328,6 @@ export function ReservationLimitManager() {
           <OccupancyCounter 
             title="Ocupare curenta" 
             compact
-            // same as /admin/dashboard/ocupare
-            countOverride={typeof lprInsideCount === "number" ? lprInsideCount : undefined}
           />
           <div className="space-y-2 p-4 rounded-lg border-2 bg-blue-50 border-blue-200">
             <Label>Status Rezervări</Label>

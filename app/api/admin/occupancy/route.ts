@@ -1,3 +1,4 @@
+import { recalculateLiveOccupancy } from "@/lib/occupancy-recalculation.server"
 import { NextResponse } from "next/server"
 import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
@@ -67,50 +68,8 @@ export async function POST(req: Request) {
     const action = body?.action || "reset"
 
     if (action === "recalculate") {
-      // Recalculează contorul din realitatea LPR efectivă, nu doar din boolean-ul isInside.
-      const bookingsRef = adminDb.collection("bookings")
-      const snap = await bookingsRef.where("lpr.isInside", "==", true).get()
-      const effectivelyInsideDocs: any[] = []
-      const staleInsideDocs: any[] = []
-      for (const docSnap of snap.docs) {
-        const data: any = docSnap.data() || {}
-        const presence = getLprPresenceState({ lpr: data?.lpr })
-        if (presence.isEffectivelyInside) {
-          effectivelyInsideDocs.push(docSnap)
-        } else {
-          staleInsideDocs.push(docSnap)
-        }
-      }
-
-      for (const docSnap of staleInsideDocs) {
-        await docSnap.ref.update({
-          "lpr.isInside": false,
-          lastUpdated: FieldValue.serverTimestamp(),
-          occupancyConsistencyRepair: {
-            repairedAt: FieldValue.serverTimestamp(),
-            reason: "isInside_true_but_lpr_exit_state",
-          },
-        })
-      }
-
-      const count = effectivelyInsideDocs.length
-
-      await ref.set(
-        {
-          occupiedCount: count,
-          lastUpdated: FieldValue.serverTimestamp(),
-          lastChange: {
-            type: "recalculate_from_isInside",
-            at: new Date().toISOString(),
-            note: "Recalculat din starea LPR efectivă; documentele inconsistente au fost marcate outside",
-            count,
-            repairedStaleInside: staleInsideDocs.length,
-          },
-        },
-        { merge: true },
-      )
-
-      return NextResponse.json({ success: true, occupiedCount: count, repairedStaleInside: staleInsideDocs.length })
+      const result = await recalculateLiveOccupancy(authResult.user.uid)
+      return NextResponse.json(result)
     }
 
     if (action === "reset") {

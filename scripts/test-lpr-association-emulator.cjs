@@ -24,6 +24,7 @@ function load(relative) {
   const mod = { exports: {} }; cache.set(filename, mod)
   const js = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true } }).outputText
   new Function('require', 'module', 'exports', js)(name => {
+    if (name === 'server-only') return {}
     if (name === '@/lib/firebase-admin') return { adminDb }
     if (name === '@/lib/firebase' || name === './firebase') return { db: clientDb }
     if (name === '@/lib/admin-api-auth') return { authorizeAdminRequest: async () => ({ ok: true }) }

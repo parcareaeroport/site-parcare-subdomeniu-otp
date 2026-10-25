@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { AlertTriangle, Car } from "lucide-react"
 import { db } from "@/lib/firebase"
 import { collection, doc, getCountFromServer, getDocs, limit, onSnapshot, orderBy, query, where } from "firebase/firestore"
+import { subscribeEffectiveLprOccupancy } from "@/lib/lpr-occupancy-client"
 import { cn } from "@/lib/utils"
 import { format as formatDateFn } from "date-fns"
 
@@ -24,7 +25,7 @@ interface OccupancyCounterProps {
   size?: "default" | "sm"
 
   /**
-   * mode="live": afișează ocuparea live (parkingLive), cu fallback la count(lpr.isInside==true)
+   * mode="live": numără documentele efectiv prezente, ca pagina Ocupare
    * mode="active": calculează ocuparea pentru o zi/interval (rezervări active în range + LPR fără rezervare inside)
    */
   mode?: "live" | "active"
@@ -48,52 +49,22 @@ export function OccupancyCounter({
   countOverride,
 }: OccupancyCounterProps) {
   const [occupiedCount, setOccupiedCount] = useState<number>(0)
-  const [fallbackOccupiedCount, setFallbackOccupiedCount] = useState<number>(0)
   const [activeRangeCount, setActiveRangeCount] = useState<number>(0)
   const [maxLimit, setMaxLimit] = useState<number>(0)
   const [loading, setLoading] = useState(true)
 
-  // Snapshot pentru occupiedCount din parkingLive
+  // Never display the increment/decrement cache as physical occupancy.
   useEffect(() => {
-    if (mode !== "live") return
-    const unsub = onSnapshot(
-      doc(db, "config", "parkingLive"),
-      (snap) => {
-        const count = Math.max(0, Number(snap.data()?.occupiedCount || 0))
-        setOccupiedCount(count)
-        setLoading(false)
-      },
-      (err) => {
-        console.error("Error listening to parkingLive:", err)
-        setLoading(false)
-      }
-    )
-    return () => unsub()
-  }, [mode])
-
-  // Fallback: dacă parkingLive e 0/stale, calculează ocuparea din realitatea LPR (count where lpr.isInside=true)
-  useEffect(() => {
-    if (mode !== "live") return
-    let cancelled = false
-    const refresh = async () => {
-      try {
-        const q = query(collection(db, "bookings"), where("lpr.isInside", "==", true))
-        const snap = await getCountFromServer(q)
-        const c = Math.max(0, Number((snap.data() as any)?.count ?? 0))
-        if (!cancelled) setFallbackOccupiedCount(c)
-      } catch (e) {
-        // Dacă nu există permisiuni pentru count, păstrăm fallback-ul curent
-        console.error("Error computing fallback occupancy (count isInside)", e)
-      }
-    }
-
-    refresh()
-    const id = setInterval(refresh, 60000) // refresh la 60s (ieftin: server-side count)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [mode])
+    if (mode !== "live" || typeof countOverride === "number") return
+    setLoading(true)
+    return subscribeEffectiveLprOccupancy(count => {
+      setOccupiedCount(count)
+      setLoading(false)
+    }, error => {
+      console.error("Error reading effective LPR occupancy:", error)
+      setLoading(true) // Unknown must not silently fall back to a stale counter.
+    })
+  }, [mode, countOverride])
 
   // mode="active": calculează ocuparea pentru zi/interval:
   // (1) Rezervări active care se suprapun peste range-ul selectat (manual + pay_on_site + online paid)
@@ -186,9 +157,9 @@ export function OccupancyCounter({
   const displayOccupiedCount = useMemo(() => {
     if (typeof countOverride === "number") return Math.max(0, countOverride)
     if (mode === "active") return activeRangeCount
-    // parkingLive can lag behind the real LPR state; prefer the safer (higher) of the two.
-    return Math.max(occupiedCount, fallbackOccupiedCount)
-  }, [activeRangeCount, countOverride, fallbackOccupiedCount, mode, occupiedCount])
+    return occupiedCount
+  }, [activeRangeCount, countOverride, mode, occupiedCount])
+  const isLoading = typeof countOverride !== "number" && loading
   const percentage = maxLimit > 0 ? Math.min(100, Math.round((displayOccupiedCount / maxLimit) * 100)) : 0
   const isWarning = percentage >= 80 && percentage < 100
   const isCritical = percentage >= 100
@@ -219,7 +190,7 @@ export function OccupancyCounter({
         {icon || <Car className="h-4 w-4 text-gray-600" />}
         {title && <span className="text-xs font-medium text-gray-700">{title}</span>}
         <span className="text-sm font-semibold tabular-nums">
-          {loading ? "—" : displayOccupiedCount} / {loading ? "—" : maxLimit}
+          {isLoading ? "—" : displayOccupiedCount} / {isLoading ? "—" : maxLimit}
         </span>
       </div>
     )
@@ -248,16 +219,16 @@ export function OccupancyCounter({
       {/* Contor principal cu gradient */}
       <div className={cn("flex items-baseline", gapSize)}>
         <div className={cn("font-bold tabular-nums", countSize, statusColor)}>
-          {loading ? "—" : displayOccupiedCount}
+          {isLoading ? "—" : displayOccupiedCount}
         </div>
         <div className={cn("font-medium text-gray-400", totalSize === "text-xl" ? "text-xl" : "text-2xl")}>/</div>
         <div className={cn("font-semibold text-gray-600 tabular-nums", totalSize)}>
-          {loading ? "—" : maxLimit}
+          {isLoading ? "—" : maxLimit}
         </div>
       </div>
 
       {/* Status */}
-      {!loading && (
+      {!isLoading && (
         <div className="flex items-center justify-between text-xs text-gray-500">
           <span>{percentage}% ocupat</span>
           {maxLimit > 0 && (
