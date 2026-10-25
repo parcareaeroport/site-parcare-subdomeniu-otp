@@ -18,6 +18,7 @@ import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth"
 import { useToast } from "@/components/ui/use-toast"
 import { writeManualLprEvent } from "@/lib/manual-lpr-event"
+import { formatOccupancyLprTime, occupancyEventLabel, occupancyEventOutsidePeriod, type OccupancyLpr } from "@/lib/occupancy-lpr-display"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,6 +41,7 @@ type PlateItem = {
   endDate: string | null
   endTime: string | null
   apiBookingNumber: string | null
+  lpr?: OccupancyLpr
 }
 
 type ApiResponse = {
@@ -159,6 +161,7 @@ export default function OccupancyPage() {
         <head>
           <title>Numarul total al masinilor prezente in parecare/grad ocupare</title>
           <style>
+            @page { size: landscape; margin: 10mm; }
             body { font-family: sans-serif; padding: 16px; }
             table { width: 100%; border-collapse: collapse; font-size: 12px; }
             th, td { padding: 8px; border-bottom: 1px solid #e5e7eb; text-align: left; }
@@ -167,6 +170,11 @@ export default function OccupancyPage() {
             .unpaid { color: #b91c1c; font-weight: 700; }
             .title { font-size: 18px; font-weight: 700; margin-bottom: 8px; }
             .subtitle { color: #6b7280; margin-bottom: 12px; }
+            @media print {
+              .overflow-x-auto { overflow: visible !important; }
+              table { min-width: 0 !important; }
+              th, td { white-space: normal !important; min-width: 0 !important; }
+            }
           </style>
         </head>
         <body>
@@ -545,13 +553,16 @@ export default function OccupancyPage() {
               ) : filteredPlates.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Niciun rezultat pentru căutarea curentă.</p>
               ) : (
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[1200px] text-sm">
                   <thead>
                     <tr className="text-left text-xs text-muted-foreground border-b">
                       <th className="py-2">Nr. Înmatriculare</th>
                       <th className="py-2">Perioada</th>
                       <th className="py-2">Sursă</th>
                       <th className="py-2">Status plată</th>
+                      <th className="py-2 px-3">Intrare înregistrată</th>
+                      <th className="py-2 px-3">Ieșire înregistrată</th>
+                      <th className="py-2 px-3">Ultimul eveniment</th>
                       {isAdmin && <th className="py-2">Acțiuni</th>}
                     </tr>
                   </thead>
@@ -576,6 +587,24 @@ export default function OccupancyPage() {
                           <td className="py-2 text-xs">{srcLabel}</td>
                           <td className="py-2">
                             <Badge className={pay.className}>{pay.label}</Badge>
+                          </td>
+                          <td className="py-2 px-3 text-xs whitespace-nowrap">
+                            {formatOccupancyLprTime(p.lpr?.arrivedAt)}
+                          </td>
+                          <td className="py-2 px-3 text-xs whitespace-nowrap">
+                            {p.lpr?.departedAt === undefined ? "Fără ieșire" : formatOccupancyLprTime(p.lpr.departedAt)}
+                          </td>
+                          <td className="py-2 px-3 text-xs min-w-[220px]">
+                            <div className="font-medium">{occupancyEventLabel(p.lpr?.lastEventType)}</div>
+                            <div className="whitespace-nowrap">{formatOccupancyLprTime(p.lpr?.lastSeenAt)}</div>
+                            <div className="text-muted-foreground">
+                              {p.lpr?.lastSeenDeviceId === "manual_admin" ? "Manual" : p.lpr?.lastSeenDeviceId?.trim() || "Necunoscut"}
+                            </div>
+                            {occupancyEventOutsidePeriod(p) && (
+                              <p className="mt-1 text-amber-800 font-medium">
+                                Eveniment în afara perioadei — verifică asocierea
+                              </p>
+                            )}
                           </td>
                           {isAdmin && (
                             <td className="py-2">

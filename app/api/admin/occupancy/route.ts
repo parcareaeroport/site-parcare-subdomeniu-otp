@@ -3,6 +3,7 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 import { getLprPresenceState } from "@/lib/lpr-presence"
+import { occupancyLprTimestamp } from "@/lib/occupancy-lpr-display"
 
 export async function GET(request: Request) {
   const authResult = await authorizeAdminRequest(request, ["admin", "employee"])
@@ -37,6 +38,13 @@ export async function GET(request: Request) {
         endDate: b.endDate || null,
         endTime: b.endTime || null,
         apiBookingNumber: b.apiBookingNumber || null,
+        lpr: {
+          arrivedAt: occupancyLprTimestamp(b.lpr?.arrivedAt),
+          departedAt: occupancyLprTimestamp(b.lpr?.departedAt),
+          lastSeenAt: occupancyLprTimestamp(b.lpr?.lastSeenAt),
+          lastEventType: typeof b.lpr?.lastEventType === "string" ? b.lpr.lastEventType : null,
+          lastSeenDeviceId: typeof b.lpr?.lastSeenDeviceId === "string" ? b.lpr.lastSeenDeviceId : null,
+        },
       }
     })
 

@@ -16,6 +16,7 @@ import {
   Menu,
   ArrowLeftRight,
   ShieldCheck,
+  ShieldBan,
   UserPlus,
 } from "lucide-react"
 import { canAccessAdminPath, getAdminRoleLabel } from "@/lib/admin-roles"
@@ -85,6 +86,7 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
             // { href: "/admin/dashboard/statistics", label: "Statistici", icon: RefreshCw }, AICI TREBUIE SA LASI COMENTAT LA DIVERSE MODIFICARI, NU PUNE DIN NOU ACEST LINK IN SIDEBAR
             { href: "/admin/dashboard/prices", label: "Prețuri", icon: Tag },
             { href: "/admin/dashboard/whitelist", label: "Numere whitelist", icon: ShieldCheck },
+            { href: "/admin/dashboard/blacklist", label: "Clienți blocați", icon: ShieldBan },
             { href: "/admin/dashboard/users/create", label: "Creare angajați", icon: UserPlus },
             { href: "/admin/dashboard/api-test", label: "Test API", icon: ListTree },
           ]

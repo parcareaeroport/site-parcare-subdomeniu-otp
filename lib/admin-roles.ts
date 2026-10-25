@@ -18,6 +18,7 @@ const ROLE_ALLOWED_PATHS: Record<AdminRole, string[]> = {
     "/admin/dashboard/ocupare",
     "/admin/dashboard/prices",
     "/admin/dashboard/whitelist",
+    "/admin/dashboard/blacklist",
     "/admin/dashboard/api-test",
     "/admin/dashboard/statistics",
     "/admin/dashboard/recovery",

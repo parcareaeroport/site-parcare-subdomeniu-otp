@@ -56,9 +56,9 @@ test('unchanged existing plate and empty input never read the whitelist', async 
 const window = { startDate: '2099-10-24', startTime: '10:00', endDate: '2099-10-25', endTime: '10:00' };
 const creationRoutes = ['check-availability', 'bookings/pay-on-site', 'bookings/demo-payment', 'payments/stripe/intent', 'payments/netopia/init'];
 const modificationRoutes = ['bookings/[id]/modification-quote', 'bookings/[id]/modification-request', 'bookings/[id]/modification-payment'];
-function fixture(route, mode, { unchanged = false, isGuest = false, authorized = true, conflict = false } = {}) {
+function fixture(route, mode, { unchanged = false, isGuest = false, authorized = true, conflict = false, blacklistRejection = null, email = 'booking@example.test' } = {}) {
   const g = whitelist({ listed: mode !== 'clear', failure: mode === 'failure' });
-  const effects = [], checks = [];
+  const effects = [], checks = [], blacklistChecks = [];
   const effect = (name, result) => async () => { effects.push(name); return result; };
   const currentPlate = unchanged ? 'B40DEX' : 'B1ABC';
   const booking = { ...window, licensePlate: currentPlate, activeModificationRequestId: 'mod', amount: 100, clientEmail: 'client@example.test' };
@@ -69,6 +69,7 @@ function fixture(route, mode, { unchanged = false, isGuest = false, authorized =
   const conflictResult = { exists: conflict, unavailable: false };
   const mocks = {
     '@/lib/mobile-booking-whitelist': g.api,
+    '@/lib/mobile-booking-blacklist': { getMobileBookingBlacklistRejection: async input => { blacklistChecks.push(input); return blacklistRejection; } },
     '@/lib/mobile-api-auth': { verifyMobileUser: async () => authorized ? { ok: true, user: { uid: 'u', email: 'client@example.test', isGuest } } : { ok: false, response: { status: 401 } } },
     '@/lib/mobile-cors': { mobileJsonResponse: (body, status = 200) => ({ body, status }), mobileOptionsResponse() {} },
     '@/lib/mobile-booking-window': { validateMobileBookingWindow: () => ({ ok: true }) },
@@ -106,8 +107,8 @@ function fixture(route, mode, { unchanged = false, isGuest = false, authorized =
     '@/lib/booking-pricing': {}, '@/lib/booking-modifications': {},
   };
   const handler = load(`app/api/mobile/${route}/route.ts`, mocks);
-  const payload = route.includes('modification-') ? { newLicensePlate: ' b40-dex ' } : { ...window, licensePlate: ' b40-dex ', amount: 100 };
-  return { ...g, effects, checks, async run() { return handler.POST({ json: async () => payload }, { params: Promise.resolve({ id: 'booking' }) }); } };
+  const payload = route.includes('modification-') ? { newLicensePlate: ' b40-dex ' } : { ...window, licensePlate: ' b40-dex ', email, amount: 100 };
+  return { ...g, effects, checks, blacklistChecks, async run() { return handler.POST({ json: async () => payload }, { params: Promise.resolve({ id: 'booking' }) }); } };
 }
 for (const route of [...creationRoutes, ...modificationRoutes]) {
   for (const isGuest of [false, true]) test(`${route}: direct ${isGuest ? 'guest' : 'user'} call rejected before booking/payment/credit`, async () => {
@@ -145,6 +146,7 @@ for (const route of [...creationRoutes, ...modificationRoutes]) {
     assert.equal((await f.run()).status, 401);
     assert.deepEqual(f.reads, []);
     assert.deepEqual(f.effects, []);
+    assert.deepEqual(f.blacklistChecks, []);
   });
 }
 for (const route of modificationRoutes) test(`${route}: existing listed plate unchanged is allowed without whitelist read`, async () => {
@@ -165,3 +167,33 @@ for (const mode of ['clear', 'failure']) for (const route of creationRoutes.filt
     assert.deepEqual(f.effects, []);
   });
 }
+
+for (const route of creationRoutes) for (const isGuest of [false, true]) {
+  for (const status of [409, 503]) test(`${route}: blacklist ${status} stops ${isGuest ? 'guest' : 'user'} before side effects`, async () => {
+    const code = status === 409 ? 'MOBILE_BOOKING_BLOCKED' : 'BOOKING_CHECK_UNAVAILABLE';
+    const error = status === 409 ? 'Rezervarea din aplicație nu este permisă pentru aceste date. Contactează parcarea.' : 'Nu putem verifica rezervarea momentan. Încearcă din nou';
+    const f = fixture(route, 'clear', { isGuest, blacklistRejection: { status, body: { success: false, code, error } } });
+    const response = await f.run();
+    assert.equal(response.status, route === 'check-availability' && status === 409 ? 200 : status);
+    assert.equal(response.body.code, code);
+    assert.equal(response.body.message || response.body.error, error);
+    if (route === 'check-availability' && status === 409) assert.equal(response.body.available, false);
+    assert.deepEqual(f.effects, []);
+    assert.deepEqual(f.reads, []);
+    assert.deepEqual(f.checks, []);
+    assert.equal(f.blacklistChecks.length, 1);
+    assert.equal(f.blacklistChecks[0].licensePlate, ' b40-dex ');
+    assert.deepEqual(Array.from(f.blacklistChecks[0].emails), ['client@example.test', 'booking@example.test']);
+  });
+  test(`${route}: authenticated email checked even with missing payload email`, async () => {
+    // Explicit null avoids the fixture's default argument.
+    const empty = fixture(route, 'clear', { isGuest, email: null });
+    await empty.run();
+    assert.equal(empty.blacklistChecks[0].emails[0], 'client@example.test');
+  });
+}
+for (const route of modificationRoutes) test(`${route}: new booking blacklist does not restrict existing modifications`, async () => {
+  const f = fixture(route, 'clear', { blacklistRejection: {status:409,body:{code:'MOBILE_BOOKING_BLOCKED'}} });
+  await f.run();
+  assert.equal(f.blacklistChecks.length, 0);
+});

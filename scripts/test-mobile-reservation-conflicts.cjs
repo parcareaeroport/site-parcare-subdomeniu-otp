@@ -5,7 +5,11 @@ const vm = require('node:vm');
 const path = require('node:path');
 const ts = require('typescript');
 function load(file, mocks = {}) {
-  mocks = { '@/lib/mobile-booking-whitelist': { isMobileBookingPlateBlocked: async () => false }, ...mocks };
+  mocks = {
+    '@/lib/mobile-booking-whitelist': { isMobileBookingPlateBlocked: async () => false },
+    '@/lib/mobile-booking-blacklist': { getMobileBookingBlacklistRejection: async () => null },
+    ...mocks,
+  };
   const code = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
