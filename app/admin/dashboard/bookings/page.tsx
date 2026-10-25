@@ -64,6 +64,7 @@ import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 import { Clock, XCircle } from "lucide-react"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { ManualLprExitDialog } from "@/components/admin/manual-lpr-exit-dialog"
 import { writeManualLprEvent } from "@/lib/manual-lpr-event"
 import {
   AlertDialog,
@@ -481,9 +482,12 @@ function BookingsPageContent() {
     return Number.isNaN(parsed.getTime()) ? null : iso
   }
 
+  const [manualExitBookingId, setManualExitBookingId] = useState<string | null>(null)
+
   const openManualLprDialog = (booking: Booking) => {
     const lpr: any = (booking as any).lpr || {}
     const defaultType: "entry" | "exit" = lpr?.isInside === true ? "exit" : "entry"
+    if (defaultType === "exit") { setManualExitBookingId(booking.id); return }
     setManualLprBooking(booking)
     setManualLprEventType(defaultType)
     setManualLprDate(formatInputDate(new Date()))
@@ -522,7 +526,7 @@ function BookingsPageContent() {
       })
       return
     }
-    if (!manualLprBooking?.id) return
+    if (!manualLprBooking?.id || manualLprEventType !== "entry") return
 
     const lpr: any = (manualLprBooking as any).lpr || {}
     const relevantExisting = manualLprEventType === "entry" ? lpr?.arrivedAt : lpr?.departedAt
@@ -550,7 +554,7 @@ function BookingsPageContent() {
       await writeManualLprEvent({
         bookingId: manualLprBooking.id,
         plateNumber: manualLprBooking.licensePlate || "",
-        eventType: manualLprEventType,
+        eventType: "entry",
         eventTimeIsoZ: isoZ,
         adminUid: user?.uid ?? null,
         adminEmail: user?.email ?? null,
@@ -3418,6 +3422,7 @@ function BookingsPageContent() {
         />
       )}
 
+      {manualExitBookingId && <ManualLprExitDialog key={manualExitBookingId} bookingId={manualExitBookingId} onClose={() => setManualExitBookingId(null)} onSaved={fetchBookings} />}
       <Dialog
         open={isEditPlateDialogOpen}
         onOpenChange={(open) => {
@@ -3525,7 +3530,7 @@ function BookingsPageContent() {
               <div className="grid gap-4">
                 <div className="space-y-2">
                   <Label>Tip eveniment</Label>
-                  <Select value={manualLprEventType} onValueChange={(v) => setManualLprEventType(v as any)}>
+                  <Select value={manualLprEventType} onValueChange={(v) => { if (v === "exit" && manualLprBooking) { setIsManualLprDialogOpen(false); setManualExitBookingId(manualLprBooking.id) } else setManualLprEventType("entry") }}>
                     <SelectTrigger>
                       <SelectValue placeholder="Selectează tipul" />
                     </SelectTrigger>

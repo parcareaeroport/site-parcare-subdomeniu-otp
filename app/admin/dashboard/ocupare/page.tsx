@@ -17,7 +17,7 @@ import { auth } from "@/lib/firebase"
 import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth"
 import { useToast } from "@/components/ui/use-toast"
-import { writeManualLprEvent } from "@/lib/manual-lpr-event"
+import { ManualLprExitDialog } from "@/components/admin/manual-lpr-exit-dialog"
 import { formatOccupancyLprTime, occupancyEventLabel, occupancyEventOutsidePeriod, type OccupancyLpr } from "@/lib/occupancy-lpr-display"
 import {
   AlertDialog,
@@ -50,11 +50,7 @@ type ApiResponse = {
   plates: PlateItem[]
 }
 
-type RemoveDialogState = {
-  open: boolean
-  plate: PlateItem | null
-  error: string | null
-}
+
 
 export default function OccupancyPage() {
   const searchParams = useSearchParams()
@@ -64,12 +60,8 @@ export default function OccupancyPage() {
   const [loading, setLoading] = useState(false)
   const [resetting, setResetting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [removeDialog, setRemoveDialog] = useState<RemoveDialogState>({
-    open: false,
-    plate: null,
-    error: null,
-  })
-  const [removingId, setRemovingId] = useState<string | null>(null)
+  const [manualExitBookingId, setManualExitBookingId] = useState<string | null>(null)
+
   const [dangerOpen, setDangerOpen] = useState(false)
   const [dangerPassword, setDangerPassword] = useState("")
   const [dangerConfirmText, setDangerConfirmText] = useState("")
@@ -231,83 +223,12 @@ export default function OccupancyPage() {
   }, [data?.plates, plateSearch])
 
   const openRemoveDialog = (plate: PlateItem) => {
-    if (!isAdmin) return
-    if (removingId) return
-    setRemoveDialog({
-      open: true,
-      plate,
-      error: null,
-    })
+    setManualExitBookingId(plate.id)
   }
 
-  const closeRemoveDialog = () => {
-    if (removingId) return
-    setRemoveDialog({
-      open: false,
-      plate: null,
-      error: null,
-    })
-  }
 
-  const confirmRemoveFromParking = async () => {
-    const selectedPlate = removeDialog.plate
-    if (!selectedPlate) return
-    if (removingId) return
 
-    if (!isAdmin || !user) {
-      const msg = "Doar administratorii pot executa această acțiune."
-      setRemoveDialog((prev) => ({ ...prev, error: msg }))
-      toast({
-        title: "Acces restricționat",
-        description: msg,
-        variant: "destructive",
-      })
-      return
-    }
 
-    try {
-      setRemovingId(selectedPlate.id)
-      setRemoveDialog((prev) => ({ ...prev, error: null }))
-
-      const result = await writeManualLprEvent({
-        bookingId: selectedPlate.id,
-        plateNumber: selectedPlate.licensePlate || "",
-        eventType: "exit",
-        eventTimeIsoZ: new Date().toISOString(),
-        adminUid: user.uid ?? null,
-        adminEmail: user.email ?? null,
-      })
-
-      await fetchData()
-
-      setRemoveDialog({
-        open: false,
-        plate: null,
-        error: null,
-      })
-
-      toast({
-        title: "Mașină scoasă din parcare",
-        description:
-          result.occupancyChanged === "decremented"
-            ? "Mașina a fost marcată ieșită și gradul de ocupare a fost actualizat."
-            : "Mașina a fost marcată ieșită. Gradul de ocupare era deja sincronizat.",
-      })
-    } catch (e: any) {
-      const message = e?.message
-        ? String(e.message)
-        : "Nu s-a putut marca ieșirea manuală."
-      console.error("Occupancy: failed to mark manual exit", e)
-      setRemoveDialog((prev) => ({ ...prev, error: message }))
-      toast({
-        title: "Eroare la actualizare",
-        description: message,
-        variant: "destructive",
-      })
-    } finally {
-      setRemovingId(null)
-    }
-  }
 
   const performSetAllOutside = async () => {
     setResetting(true)
@@ -612,11 +533,8 @@ export default function OccupancyPage() {
                                 variant="outline"
                                 size="sm"
                                 onClick={() => openRemoveDialog(p)}
-                                disabled={Boolean(removingId)}
                               >
-                                {removingId === p.id && (
-                                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                                )}
+
                                 Scoate din parcare
                               </Button>
                             </td>
@@ -636,53 +554,7 @@ export default function OccupancyPage() {
         </TabsContent>
       </Tabs>
 
-      <AlertDialog
-        open={removeDialog.open}
-        onOpenChange={(open) => {
-          if (!open) {
-            closeRemoveDialog()
-            return
-          }
-          setRemoveDialog((prev) => ({ ...prev, open: true }))
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirmare: scoate mașina din parcare</AlertDialogTitle>
-            <AlertDialogDescription>
-              Mașina <strong>{removeDialog.plate?.licensePlate || "-"}</strong> va
-              fi marcată ca ieșită manual, iar gradul de ocupare va fi actualizat.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-
-          <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-            <div>
-              <span className="font-medium">Booking ID:</span>{" "}
-              <code>{removeDialog.plate?.id || "-"}</code>
-            </div>
-            <div>
-              <span className="font-medium">Nr. booking API:</span>{" "}
-              <code>{removeDialog.plate?.apiBookingNumber || "-"}</code>
-            </div>
-          </div>
-
-          {removeDialog.error && (
-            <div className="text-sm text-red-700">{removeDialog.error}</div>
-          )}
-
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={Boolean(removingId)}>
-              Renunță
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={confirmRemoveFromParking}
-              disabled={!removeDialog.plate || Boolean(removingId)}
-            >
-              {removingId ? "Se procesează..." : "Confirmă ieșirea"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {manualExitBookingId && <ManualLprExitDialog key={manualExitBookingId} bookingId={manualExitBookingId} onClose={() => setManualExitBookingId(null)} onSaved={fetchData} />}
 
       <AlertDialog open={dangerOpen} onOpenChange={setDangerOpen}>
         <AlertDialogContent>

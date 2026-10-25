@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@/context/auth-context"
+import { ManualLprExitDialog } from "@/components/admin/manual-lpr-exit-dialog"
 import { writeManualLprEvent } from "@/lib/manual-lpr-event"
 import { normalizeLicensePlate } from "@/lib/utils"
 
@@ -71,11 +72,7 @@ type ManualLprDialogState = {
   saving: boolean
 }
 
-type QuickExitDialogState = {
-  open: boolean
-  row: EnrichedRow | null
-  saving: boolean
-}
+
 
 function coerceMoney(value: any): number | undefined {
   if (value === undefined || value === null) return undefined
@@ -295,11 +292,7 @@ export default function EntriesExitsPage() {
     confirmOverwrite: false,
     saving: false,
   })
-  const [quickExitDialog, setQuickExitDialog] = useState<QuickExitDialogState>({
-    open: false,
-    row: null,
-    saving: false,
-  })
+
   const [simulatedExits, setSimulatedExits] = useState<DailyEntryExit[]>([])
   const [simDialogOpen, setSimDialogOpen] = useState(false)
   const [simType, setSimType] = useState<"pay_on_site" | "online">("pay_on_site")
@@ -401,7 +394,10 @@ export default function EntriesExitsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isClient, selectedDate, includeFuture])
 
+  const [manualExitBookingId, setManualExitBookingId] = useState<string | null>(null)
+
   const openManualLprDialog = (row: EnrichedRow, kind: ManualLprKind) => {
+    if (kind === "exit") { setManualExitBookingId(row.id); return }
     const fallbackDate =
       kind === "entry" ? (row.startDate ?? selectedDate) : (row.endDate ?? selectedDate)
     const defaultTime = normalizeHHmm(row.actualTime) || normalizeHHmm(row.time) || normalizeHHmm(currentTime) || "12:00"
@@ -420,13 +416,7 @@ export default function EntriesExitsPage() {
     setManualLpr((s) => ({ ...s, open: false, row: null, saving: false, confirmOverwrite: false }))
   }
 
-  const closeQuickExitDialog = () => {
-    setQuickExitDialog({
-      open: false,
-      row: null,
-      saving: false,
-    })
-  }
+
 
   const toManualLprIsoZ = (date: string, time: string): string | null => {
     if (!date || !time) return null
@@ -644,7 +634,7 @@ export default function EntriesExitsPage() {
 
   const saveManualLpr = async () => {
     const row = manualLpr.row
-    if (!row?.id) return
+    if (!row?.id || manualLpr.kind !== "entry") return
 
     if (!user) {
       toast({
@@ -682,7 +672,7 @@ export default function EntriesExitsPage() {
       await writeManualLprEvent({
         bookingId: row.id,
         plateNumber: row.licensePlate || "",
-        eventType: kind,
+        eventType: "entry",
         eventTimeIsoZ: isoZ,
         adminUid: user?.uid ?? null,
         adminEmail: user?.email ?? null,
@@ -706,50 +696,7 @@ export default function EntriesExitsPage() {
     }
   }
 
-  const markQuickExitNow = async () => {
-    const row = quickExitDialog.row
-    if (!row?.id) return
 
-    if (!user || !isAdmin) {
-      toast({
-        title: "Acces restricționat",
-        description: "Doar administratorii pot marca ieșirea din această pagină.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    try {
-      setQuickExitDialog((s) => ({ ...s, saving: true }))
-      const result = await writeManualLprEvent({
-        bookingId: row.id,
-        plateNumber: row.licensePlate || "",
-        eventType: "exit",
-        eventTimeIsoZ: new Date().toISOString(),
-        adminUid: user?.uid ?? null,
-        adminEmail: user?.email ?? null,
-      })
-
-      toast({
-        title: "Ieșire marcată",
-        description:
-          result.occupancyChanged === "decremented"
-            ? "Mașina a fost marcată ieșită și gradul de ocupare a fost actualizat."
-            : "Mașina a fost marcată ieșită. Gradul de ocupare era deja sincronizat.",
-      })
-
-      closeQuickExitDialog()
-      await loadData()
-    } catch (e: any) {
-      console.error("Quick exit mark failed", e)
-      toast({
-        title: "Eroare la marcarea ieșirii",
-        description: e?.message ? String(e.message) : "Nu s-a putut marca ieșirea.",
-        variant: "destructive",
-      })
-      setQuickExitDialog((s) => ({ ...s, saving: false }))
-    }
-  }
 
   const loadData = async () => {
     try {
@@ -1916,51 +1863,7 @@ export default function EntriesExitsPage() {
             </TabsContent>
           </Tabs>
 
-      <Dialog
-        open={quickExitDialog.open}
-        onOpenChange={(open) => {
-          if (!open) closeQuickExitDialog()
-        }}
-      >
-        <DialogContent className="sm:max-w-[500px]">
-          <DialogHeader>
-            <DialogTitle>Confirmi ieșirea din parcare?</DialogTitle>
-            <DialogDescription>
-              Această acțiune marchează mașina ca ieșită acum, fără ștergerea rezervării.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 text-sm text-gray-700">
-            <div>
-              <strong>Nr. înmatriculare:</strong> {quickExitDialog.row?.licensePlate || "-"}
-            </div>
-            <div>
-              <strong>Booking ID:</strong> {quickExitDialog.row?.id || "-"}
-            </div>
-            <div className="text-xs text-gray-500">
-              Rezervarea va fi actualizată cu `lpr.isInside=false` și eveniment LPR manual de ieșire.
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={closeQuickExitDialog}
-              disabled={quickExitDialog.saving}
-            >
-              Renunță
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              onClick={markQuickExitNow}
-              disabled={quickExitDialog.saving || !quickExitDialog.row?.id}
-            >
-              {quickExitDialog.saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-            
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {manualExitBookingId && <ManualLprExitDialog key={manualExitBookingId} bookingId={manualExitBookingId} onClose={() => setManualExitBookingId(null)} onSaved={loadData} />}
 
       <Dialog
         open={manualLpr.open}
