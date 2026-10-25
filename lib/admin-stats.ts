@@ -55,6 +55,8 @@ export interface DailyEntryExit {
   bookingStatus?: string
   // For exits list: whether the car actually entered the parking (LPR arrivedAt or isInside)
   hasArrived?: boolean
+  // Same effective presence used by the occupancy API.
+  isEffectivelyInside?: boolean
   // Admin manual LPR markers (used for quick operator visibility in entries/exits tables)
   manualLprOverride?: boolean
   manualLprEventType?: "entry" | "exit" | string
@@ -840,7 +842,7 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
       const scheduledTimeStr: string = booking.endTime || 'N/A'
       let actualTime: string | undefined
       let delayMinutes: number | undefined
-      if (lpr.departedAt) {
+      if (lpr.departedAt && !getLprPresenceState({ lpr }).isEffectivelyInside) {
         const actual = parseFirestoreDate(lpr.departedAt)
         if (actual) {
           actualTime = actual.toISOString().slice(11, 16)
@@ -868,6 +870,7 @@ export async function getDailyExits(selectedDate: string, includeFuture = false)
         paymentStatus: booking.paymentStatus,
         bookingStatus: booking.status,
         hasArrived: Boolean(lpr.arrivedAt) || lpr.isInside === true,
+        isEffectivelyInside: getLprPresenceState({ lpr }).isEffectivelyInside,
         actualTime,
         delayMinutes,
         amount: coerceMoney(booking.amount),

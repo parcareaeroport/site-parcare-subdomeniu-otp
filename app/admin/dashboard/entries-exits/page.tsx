@@ -1,5 +1,7 @@
 "use client"
 
+import { getLprPresenceState } from "@/lib/lpr-presence"
+
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -609,8 +611,7 @@ export default function EntriesExitsPage() {
         const b: any = d.data()
         if (!isCarryOverEligibleStatus(b)) return
         const lpr = b.lpr || {}
-        if (lpr?.departedAt) return
-        if (lpr?.isInside !== true) return
+        if (!getLprPresenceState({ lpr }).isEffectivelyInside) return
         out.push({
           id: d.id,
           startDate: b.startDate || undefined,
@@ -626,6 +627,7 @@ export default function EntriesExitsPage() {
           paymentStatus: b.paymentStatus,
           bookingStatus: b.status,
           hasArrived: true,
+          isEffectivelyInside: true,
           actualTime: undefined,
           delayMinutes: undefined,
           amount: coerceMoney(b.amount),
@@ -1201,6 +1203,7 @@ export default function EntriesExitsPage() {
       source: simType === "pay_on_site" ? "pay_on_site" : "webhook",
       bookingStatus: simType === "pay_on_site" ? "confirmed_pay_on_site" : "confirmed_paid",
       hasArrived: true,
+      isEffectivelyInside: true,
       // IMPORTANT: keep delay undefined so UI computes lateness consistently (timezone compensation included).
       delayMinutes: undefined,
     }
@@ -1423,9 +1426,9 @@ export default function EntriesExitsPage() {
       const isSimulated = Boolean((e as any).__simulated)
       if (isSimulated) {
         // For simulations, route based on lateness, regardless of endDate.
-        return e.hasArrived === true && !e.isLate && !e.actualTime
+        return e.isEffectivelyInside === true && !e.isLate && !e.actualTime
       }
-      return (e.endDate ?? selectedDate) === selectedDate && e.hasArrived === true && !e.isLate && !e.actualTime
+      return (e.endDate ?? selectedDate) === selectedDate && e.isEffectivelyInside === true && !e.isLate && !e.actualTime
     })
     return [...rows].sort(
       (a, b) => getScheduledSortKey(a, "exit", selectedDate) - getScheduledSortKey(b, "exit", selectedDate),
@@ -1458,10 +1461,10 @@ export default function EntriesExitsPage() {
         getScheduledSortKey(a, "entry", selectedDate) - getScheduledSortKey(b, "entry", selectedDate),
     )
   }, [visibleEnrichedEntries, selectedDate])
-  // "Ieșiri întârziate" should list only bookings that are late AND still not departed (no LPR actualTime yet).
+  // Use the same effective presence as Occupancy; an old departure may belong to a previous visit.
   // Once LPR confirms departure, it should disappear from this list.
   const lateExits = useMemo(() => {
-    const rows = visibleEnrichedExits.filter((e) => e.hasArrived === true && e.isLate && !e.actualTime)
+    const rows = visibleEnrichedExits.filter((e) => e.isEffectivelyInside === true && e.isLate && !e.actualTime)
     return [...rows].sort((a, b) => {
       // Most recent scheduled exit first (so newest late is on top, oldest at the bottom).
       const ka = getScheduledSortKey(a, "exit", selectedDate)
