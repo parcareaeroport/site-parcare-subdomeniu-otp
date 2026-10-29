@@ -1,4 +1,5 @@
-// Isolated Next harness using actual pages and local Firestore. Auth is stubbed; no production credentials.
+// Isolated Next harness using actual pages, API authorization and local Firestore.
+// Auth context and token verification are fixture stubs; no production credentials.
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict')
 const { spawn } = require('node:child_process'), { createRequire } = require('node:module')
 assert.match(process.env.FIRESTORE_EMULATOR_HOST || '', /^(127\.0\.0\.1|localhost):\d+$/, 'Local emulator required')
@@ -11,14 +12,13 @@ function write(file, value) { fs.mkdirSync(path.dirname(path.join(temp, file)), 
 fs.symlinkSync(root + '/node_modules', temp + '/node_modules', 'dir')
 write('package.json', '{"private":true}')
 write('tsconfig.json', JSON.stringify({ compilerOptions: { jsx: 'preserve', module: 'esnext', moduleResolution: 'bundler', target: 'es2020', esModuleInterop: true, paths: { '@/*': [root + '/*'] } } }))
-const aliases = { '@/app/actions/booking-actions$': 'actions.ts', '@/app/actions/booking-recovery$': 'actions.ts', '@/context/auth-context$': 'auth.tsx', '@/lib/firebase$': 'firebase.ts', '@/lib/firebase-admin$': 'db.ts', '@/lib/admin-api-auth$': 'api-auth.ts', '@/components/admin/occupancy-counter$': 'counter.tsx', '@/components/admin/occupancy-forecast$': 'forecast.tsx' }
+const aliases = { '@/app/actions/booking-actions$': 'actions.ts', '@/app/actions/booking-recovery$': 'actions.ts', '@/context/auth-context$': 'auth.tsx', '@/lib/firebase$': 'firebase.ts', '@/lib/firebase-admin$': 'db.ts', '@/components/admin/occupancy-counter$': 'counter.tsx', '@/components/admin/occupancy-forecast$': 'forecast.tsx' }
 write('next.config.mjs', `export default {devIndicators:false,experimental:{externalDir:true},webpack(c){${Object.entries(aliases).map(([a,b]) => `c.resolve.alias[${JSON.stringify(a)}]=${JSON.stringify(temp+'/'+b)};`).join('')}c.resolve.alias['@']=${JSON.stringify(root)};c.resolve.alias[${JSON.stringify(root+'/lib/firebase.ts')}]=${JSON.stringify(temp+'/firebase.ts')};return c}}`)
 write('actions.ts', `export const cleanupExpiredBookings=async()=>({});export const createManualBooking=async()=>{throw Error('not part of fixture')};export const sendManualBookingEmail=async()=>{};export const recoverSpecificBooking=async()=>{throw Error('not part of fixture')};`)
-write('auth.tsx', `'use client';const user={uid:'fixture',email:'fixture@example.invalid',getIdToken:async()=> 'fixture'};export const useAuth=()=>({user,isAdmin:true});`)
+write('auth.tsx', `'use client';const users={};export const useAuth=()=>{const role=typeof window==='undefined'?'admin':localStorage.getItem('fixtureRole')||'admin';const user=users[role]||(users[role]={uid:role+'-fixture',email:role+'@example.invalid',getIdToken:async()=>role});return {user,role,isAdmin:role==='admin'}};`)
 const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(':')
 write('firebase.ts', `import {initializeApp,getApps} from 'firebase/app';import {getFirestore,connectFirestoreEmulator} from 'firebase/firestore';const app=getApps()[0]||initializeApp({projectId:'${projectId}',apiKey:'emulator-only',appId:'emulator-only'});export const db=getFirestore(app);if(!(globalThis as any).__lprEmulator){connectFirestoreEmulator(db,'${host}',${port});(globalThis as any).__lprEmulator=true;}export const auth={};`)
-write('db.ts', `import {initializeApp,getApps} from 'firebase-admin/app';import {getFirestore} from 'firebase-admin/firestore';const app=getApps()[0]||initializeApp({projectId:'${projectId}'});export const adminDb=getFirestore(app);`)
-write('api-auth.ts', `export const authorizeAdminRequest=async()=>({ok:true,user:{uid:'fixture',email:'fixture@example.invalid',role:'admin'}});`)
+write('db.ts', `import {initializeApp,getApps} from 'firebase-admin/app';import {getFirestore} from 'firebase-admin/firestore';const app=getApps()[0]||initializeApp({projectId:'${projectId}'});export const adminDb=getFirestore(app);export const adminAuth={verifyIdToken:async(token)=>{if(!['admin','employee','entriesOperator'].includes(token))throw Error('Invalid fixture token');return {uid:token+'-fixture',email:token+'@example.invalid',role:token}}};`)
 write('counter.tsx', `export const OccupancyCounter=({countOverride})=><div>Ocupare: {countOverride}</div>;`)
 write('forecast.tsx', `export const OccupancyForecast=()=>null;`)
 for (const page of ['ocupare', 'entries-exits', 'bookings']) write(`app/admin/dashboard/${page}/page.tsx`, `export {default} from '${root}/app/admin/dashboard/${page}/page';`)
@@ -40,7 +40,7 @@ let server, browser, logs = ''
   server = spawn(process.execPath, [root+'/node_modules/next/dist/bin/next', 'dev', '-p', '3182'], { cwd: temp, env: { ...process.env, TZ: 'UTC' }, stdio: ['ignore','pipe','pipe'] })
   server.stdout.on('data', x => logs += x); server.stderr.on('data', x => logs += x)
   let ready = false
-  for (let i=0;i<90;i++) { try { if ((await fetch('http://localhost:3182/api/admin/occupancy')).ok) { ready=true; break } } catch {} await new Promise(r=>setTimeout(r,500)) }
+  for (let i=0;i<90;i++) { try { if ((await fetch('http://localhost:3182/api/admin/occupancy',{headers:{Authorization:'Bearer admin'}})).ok) { ready=true; break } } catch {} await new Promise(r=>setTimeout(r,500)) }
   assert.ok(ready, logs)
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
   const page = await browser.newPage({ viewport: { width:1440, height:1000 }, timezoneId:'Europe/Bucharest' })
@@ -161,6 +161,33 @@ let server, browser, logs = ''
   await page.unroute('**/api/admin/manual-lpr-exit')
   await dlg.getByRole('button',{name:'Salvează',exact:true}).click();await expect(dlg).toHaveCount(0)
   assert.equal((await db.doc('bookings/ui-missing').get()).data().lpr.isInside,false)
+
+  // Operator access through the real route/authorization, on desktop and mobile.
+  await page.evaluate(() => localStorage.setItem('fixtureRole', 'entriesOperator'))
+  for (const width of [1440, 390]) {
+    const id = 'operator-'+width, plate = 'OP'+width
+    await db.doc('bookings/'+id).set({...base, licensePlate:plate})
+    const before = (await db.doc('config/parkingLive').get()).data().occupiedCount
+    await db.doc('config/parkingLive').update({occupiedCount:before+1})
+    await page.setViewportSize({width,height:width===390?844:1000})
+    await page.goto('http://localhost:3182/admin/dashboard/entries-exits')
+    await page.getByRole(width===390?'button':'tab',{name:'Ieșiri',exact:true}).click()
+    await page.locator('#exits-late button:visible').filter({hasText:plate}).click()
+    const operatorDialog = page.getByRole('dialog')
+    await expect(operatorDialog).toContainText('Intrare înregistrată pentru șederea actuală:')
+    await page.locator('#manual-lpr-date').fill('2026-10-25')
+    await page.locator('#manual-lpr-time').fill('10:00:00')
+    await page.screenshot({path:'/tmp/manual-exit-operator-'+width+'.png'})
+    await operatorDialog.getByRole('button',{name:'Salvează',exact:true}).click()
+    await expect(operatorDialog).toHaveCount(0)
+    await expect(page.locator('#exits-late')).not.toContainText(plate)
+    assert.equal((await db.doc('bookings/'+id).get()).data().lpr.isInside,false)
+    assert.equal((await db.doc('config/parkingLive').get()).data().occupiedCount,before)
+    const events = await db.collection('bookings/'+id+'/gateEvents').get()
+    assert.equal(events.size,1)
+    assert.equal(events.docs[0].data().adminUid,'entriesOperator-fixture')
+    console.log('PASS entriesOperator manual exit, audit and occupancy at width '+width)
+  }
 
   assert.equal(errors.length,0,errors.join('\n'))
   console.log('PASS protected manual exit from ALL THREE PAGES, duplicate/date/conflict/missing-arrival guards, foreign browser timezone; actual late-exits page (carry-over + same-day), desktop/mobile, manual exit UI → Firestore → occupancy page; no runtime errors or production Firebase requests')

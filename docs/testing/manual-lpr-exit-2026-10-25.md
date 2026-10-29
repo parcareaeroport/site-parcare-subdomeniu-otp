@@ -4,7 +4,7 @@ Implemented locally; not deployed. No production Firestore data, camera commands
 
 ## Behavior and interface
 
-All supported manual exits from Entries/Exits, Bookings and Occupancy use the same `ManualLprExitDialog` and authenticated `POST /api/admin/manual-lpr-exit` route (admin role).
+All supported manual exits from Entries/Exits, Bookings and Occupancy use the same `ManualLprExitDialog` and authenticated `POST /api/admin/manual-lpr-exit` route (originally admin-only; see the 29 October access update below).
 
 - `action: prepare`, `bookingId`: returns a sanitized booking, current arrival/departure/presence, Romania server clock, open duplicate rows and an optimistic context version.
 - `action: save`: requires bookingId, version, requestId, either date/time or useServerNow, and explicit confirmations where applicable. Actor identity comes from the verified token, never from the request body.
@@ -49,3 +49,18 @@ Evidence logs are `/tmp/manual-exit-new-tests.log`, `/tmp/manual-exit-all-pages-
 ## Remaining production checks
 
 After a separately approved deployment: verify real admin/employee access, one dedicated controlled manual exit with the production pages, and its agreement with the real camera clock/payload convention. Emulator authentication is stubbed and rules are permissive; it is not proof of production auth behavior or production-size transaction latency. Existing inconsistent historical rows still need operator reconciliation. This change does not infer missed physical camera events or prevent duplicates created through manual entry.
+
+## Employee access update — 29 October 2026
+
+The existing endpoint now permits `admin`, `employee` and `entriesOperator` for both `prepare` and `save`. Page permissions, other actions, token verification, role normalization, payloads and transaction protections are unchanged. In particular, employee accounts created by the user-management route use `entriesOperator`.
+
+Verification:
+
+- 27 protected manual-exit scenarios passed against the local demo Firestore emulator. The route tests now use the actual authorization helper, stubbing only token verification. All three roles can prepare/save; missing and invalid tokens are rejected for both actions without writes. Audit identity comes from the verified actor despite forged body fields, and retries produce one event and one occupancy decrement.
+- Browser suite passed on all three existing admin entrypoints. Additional `entriesOperator` journeys passed on desktop (1440px) and mobile (390px) through Entries/Exits, including the actual mobile navigation, dialog preparation, save, audit identity and occupancy. Browser auth context and token verification are fixtures; the API authorization helper is real. No production Firebase requests or browser runtime errors occurred.
+- All 24 existing camera/LPR association emulator scenarios passed (`/tmp/manual-exit-roles-camera.log`).
+- TypeScript diagnostics compared with the original route from HEAD: identical 34 existing Jest-global and Stripe errors; no new diagnostics. `git diff --check` passed.
+
+Evidence: `/tmp/manual-exit-roles-emulator.log`, `/tmp/manual-exit-roles-browser.log`, `/tmp/manual-exit-roles-tsc.log`; screenshots `/tmp/manual-exit-operator-1440.png` and `/tmp/manual-exit-operator-390.png`.
+
+Local change only. No deployment, account-role mutation or production booking mutation was performed. Real account verification remains a post-deployment check.

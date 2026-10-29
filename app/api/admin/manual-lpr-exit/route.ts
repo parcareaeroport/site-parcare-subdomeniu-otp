@@ -4,7 +4,7 @@ import { ManualExitError, prepareManualExit, saveManualExit } from "@/lib/manual
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 export async function POST(request: Request) {
-  const auth = await authorizeAdminRequest(request, ["admin"])
+  const auth = await authorizeAdminRequest(request, ["admin", "employee", "entriesOperator"])
   if (!auth.ok) return auth.response
   try {
     const input = await request.json().catch(() => null)

@@ -6,15 +6,21 @@ const app = initializeApp({ projectId:'demo-parking-lpr' }, 'manual-exit-tests')
 const {initializeApp:clientInit,deleteApp:clientDelete}=require('firebase/app'), sdk=require('firebase/firestore')
 const clientApp=clientInit({projectId:'demo-parking-lpr',apiKey:'emulator-only',appId:'emulator-only'},'manual-exit-tests');const clientDb=sdk.getFirestore(clientApp);const [host,port]=process.env.FIRESTORE_EMULATOR_HOST.split(':');sdk.connectFirestoreEmulator(clientDb,host,Number(port))
 const root = path.resolve(__dirname, '..'), cache = new Map()
-let authorized = true
+// Exercise real role authorization; only cryptographic token verification is stubbed.
+const adminAuth = { verifyIdToken: async token => {
+  if (!['admin', 'employee', 'entriesOperator'].includes(token)) throw Error('Invalid fixture token')
+  return { uid: `${token}-test`, email: `${token}@example.invalid`, role: token }
+} }
+const post = (body, token) => POST(new Request('http://localhost/api/admin/manual-lpr-exit', {
+  method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: JSON.stringify(body),
+}))
 function load(relative) {
   const filename = path.resolve(root, relative); if (cache.has(filename)) return cache.get(filename).exports
   const mod = {exports:{}}; cache.set(filename,mod)
   const js = ts.transpileModule(fs.readFileSync(filename,'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,esModuleInterop:true}}).outputText
   new Function('require','module','exports',js)(name => {
     if(name==='server-only') return {}
-    if(name==='@/lib/firebase-admin') return {adminDb:db}
-    if(name==='@/lib/admin-api-auth') return {authorizeAdminRequest:async()=>authorized?{ok:true,user:{uid:'admin-test',email:'admin@example.invalid',role:'admin'}}:{ok:false,response:new Response('{}',{status:403})}}
+    if(name==='@/lib/firebase-admin') return {adminDb:db,adminAuth}
     if(name==='@/lib/firebase'||name==='./firebase') return {db:clientDb}
     if(name.startsWith('@/')) return load(name.slice(2)+'.ts')
     if(name.startsWith('.')) return load(path.relative(root,path.resolve(path.dirname(filename),name))+'.ts')
@@ -60,7 +66,37 @@ async function rejected(p,code){await assert.rejects(p,e=>e.code===code);assert.
  await check('legacy reopened row checks newer entry instead of old arrival',async()=>{await seed('active',{lpr:{...base.lpr,arrivedAt:'2026-05-01T10:00:00Z',departedAt:'2026-05-08T10:00:00Z',lastSeenAt:'2026-07-18T10:00:00Z'}});const ctx=await prepare('active');assert.equal(ctx.arrival,'2026-07-18T10:00:00.000Z');await rejected(save(input(ctx),actor),'EXIT_BEFORE_ENTRY')})
  await check('useServerNow stores Romania civil clock and ignores client date',async()=>{await seed();const before=clock();await save(input(await prepare('active'),{useServerNow:true,date:'2099-01-01'}),actor);const at=(await read()).lpr.departedAt;assert.ok(at>=before&&at<=clock())})
  await check('clock independent from host timezone with DST fallback',async()=>{const before=process.env.TZ;for(const tz of ['UTC','America/New_York','Asia/Tokyo']){process.env.TZ=tz;assert.equal(clock(new Date('2026-10-25T00:30:00Z')),'2026-10-25T03:30:00.000Z');assert.equal(clock(new Date('2026-10-25T01:30:00Z')),'2026-10-25T03:30:00.000Z')}process.env.TZ=before;assert.equal(parse('2026-07-17','10:00'),'2026-07-17T10:00:00.000Z')})
- await check('HTTP prepare/save uses authenticated actor; access denied rejected',async()=>{await seed();const post=body=>POST(new Request('http://localhost/api/admin/manual-lpr-exit',{method:'POST',body:JSON.stringify(body)}));authorized=false;assert.equal((await post({action:'prepare',bookingId:'active'})).status,403);authorized=true;const ctx=await (await post({action:'prepare',bookingId:'active'})).json();const response=await post({...input(ctx),action:'save',adminUid:'forged'});assert.equal(response.status,200);const result=await response.json();assert.equal((await db.doc('lpr_events/'+result.lprEventId).get()).data().adminUid,'admin-test')})
+ for (const role of ['admin', 'employee', 'entriesOperator']) {
+  await check(`HTTP ${role}: prepare/save, verified audit actor and idempotent occupancy`, async () => {
+   await seed()
+   const prepared = await post({action:'prepare',bookingId:'active'}, role)
+   assert.equal(prepared.status, 200)
+   const payload = {...input(await prepared.json()), action:'save', adminUid:'forged', adminEmail:'forged@example.invalid'}
+   const response = await post(payload, role)
+   assert.equal(response.status, 200)
+   const result = await response.json()
+   const audit = (await db.doc('lpr_events/'+result.lprEventId).get()).data()
+   assert.equal(audit.adminUid, `${role}-test`)
+   assert.equal(audit.adminEmail, `${role}@example.invalid`)
+   const retry = await post(payload, role)
+   assert.equal(retry.status, 200)
+   assert.deepEqual(await retry.json(), result)
+   assert.equal(await count(), 0)
+   assert.equal((await read()).lpr.isInside, false)
+   assert.equal((await db.collection('lpr_events').get()).size, 1)
+   assert.equal((await db.collection('bookings/active/gateEvents').get()).size, 1)
+  })
+ }
+ await check('HTTP missing/invalid token rejects prepare and save without writes', async () => {
+  await seed()
+  const payload = input(await prepare('active'))
+  for (const token of [undefined, 'invalid-token']) for (const action of ['prepare', 'save']) {
+   assert.equal((await post({...payload, action}, token)).status, 401)
+  }
+  assert.equal(await count(), 1)
+  assert.equal((await read()).lpr.isInside, true)
+  assert.equal((await db.collection('lpr_events').get()).size, 0)
+ })
  await check('transaction failure leaves booking/counter/audits untouched',async()=>{await seed();const ctx=await prepare('active'),original=db.runTransaction.bind(db);db.runTransaction=fn=>original(async tx=>{await fn(tx);throw Error('abort')});try{await assert.rejects(save(input(ctx),actor),/abort/)}finally{db.runTransaction=original}assert.equal((await read()).lpr.isInside,true);assert.equal(await count(),1);assert.equal((await db.collection('lpr_events').get()).size,0)})
 
  await check('camera exit racing manual exit closes once with conflict on stale manual context',async()=>{
