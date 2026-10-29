@@ -35,7 +35,17 @@ function load(relative) {
   return mod.exports
 }
 const { handleLprEvent } = load('lib/lpr-service.ts')
-const { writeManualLprEvent } = load('lib/manual-lpr-event.ts')
+const { prepareManualExit, saveManualExit } = load('lib/manual-lpr-exit.server.ts')
+const { saveManualEntry } = load('lib/manual-lpr-entry.server.ts')
+async function writeManualLprEvent({bookingId,eventType,eventTimeIsoZ}, context) {
+  const ctx = context || await prepareManualExit(bookingId)
+  return (eventType === 'entry' ? saveManualEntry : saveManualExit)({bookingId, version:ctx.version,
+    requestId:require('node:crypto').randomUUID(), date:eventTimeIsoZ.slice(0,10), time:eventTimeIsoZ.slice(11,19)}, {uid:'fixture',email:'fixture@example.invalid'})
+}
+function assertOnlyContextConflicts(results) {
+  assert.ok(results.some(r => r.status === 'fulfilled'))
+  for (const r of results) if (r.status === 'rejected') assert.equal(r.reason.code, 'CONTEXT_CHANGED')
+}
 const { getDailyExits } = load('lib/admin-stats.ts')
 const { getLprPresenceState } = load('lib/lpr-presence.ts')
 const { GET: occupancy } = load('app/api/admin/occupancy/route.ts')
@@ -123,7 +133,8 @@ async function main() {
   })
   await check('manual duplicate concurrent exits decrement once', async () => {
     await seed('active'); await event('entry', '2026-07-16T10:00:00Z')
-    await Promise.all(Array.from({ length: 3 }, () => writeManualLprEvent({ bookingId: 'active', plateNumber: 'TEST01', eventType: 'exit', eventTimeIsoZ: '2026-07-17T10:00:00Z' })))
+    const ctx = await prepareManualExit('active')
+    assertOnlyContextConflicts(await Promise.allSettled(Array.from({ length: 3 }, () => writeManualLprEvent({ bookingId: 'active', eventType: 'exit', eventTimeIsoZ: '2026-07-17T10:00:00Z' }, ctx))))
     assert.equal(await count(), 0); assert.equal(inside(await read('active')), false)
   })
   await check('daily exits and occupancy agree when old departure precedes latest entry', async () => {
@@ -160,7 +171,8 @@ async function main() {
   })
   await check('manual and camera exits racing decrement once', async () => {
     await seed('active'); await event('entry', '2026-07-16T10:00:00Z')
-    await Promise.all([event('exit', '2026-07-17T10:00:00Z'), writeManualLprEvent({ bookingId: 'active', plateNumber: 'TEST01', eventType: 'exit', eventTimeIsoZ: '2026-07-17T10:00:00Z' })])
+    const ctx = await prepareManualExit('active')
+    assertOnlyContextConflicts(await Promise.allSettled([event('exit', '2026-07-17T10:00:00Z'), writeManualLprEvent({ bookingId: 'active', eventType: 'exit', eventTimeIsoZ: '2026-07-17T10:00:00Z' }, ctx)]))
     assert.equal(await count(), 0); assert.equal(inside(await read('active')), false)
   })
   await check('legacy reopened old reservation is quarantined on repeated entry', async () => {

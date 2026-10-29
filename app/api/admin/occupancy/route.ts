@@ -6,6 +6,8 @@ import { authorizeAdminRequest } from "@/lib/admin-api-auth"
 import { getLprPresenceState } from "@/lib/lpr-presence"
 import { occupancyLprTimestamp } from "@/lib/occupancy-lpr-display"
 
+export const dynamic = "force-dynamic"
+
 export async function GET(request: Request) {
   const authResult = await authorizeAdminRequest(request, ["admin", "employee"])
   if (!authResult.ok) {
@@ -49,7 +51,7 @@ export async function GET(request: Request) {
       }
     })
 
-    return NextResponse.json({ occupiedCount, maxLimit, plates })
+    return NextResponse.json({ occupiedCount, maxLimit, plates }, { headers: { "Cache-Control": "no-store" } })
   } catch (e) {
     console.error("Failed to fetch occupancy data", e)
     return NextResponse.json({ error: "Failed to fetch occupancy" }, { status: 500 })

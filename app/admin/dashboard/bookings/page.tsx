@@ -19,9 +19,7 @@ import {
   query,
   orderBy,
   Timestamp, // Import Timestamp (runtime + type)
-  increment,
   serverTimestamp,
-  setDoc,
   onSnapshot,
   where,
   limit,
@@ -65,7 +63,6 @@ import { Clock, XCircle } from "lucide-react"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ManualLprExitDialog } from "@/components/admin/manual-lpr-exit-dialog"
-import { writeManualLprEvent } from "@/lib/manual-lpr-event"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -272,9 +269,6 @@ function BookingsPageContent() {
   const [isCleaningUp, setIsCleaningUp] = useState(false)
   const [isSendingEmail, setIsSendingEmail] = useState(false)
   const [sendingEmailBookingId, setSendingEmailBookingId] = useState<string | null>(null)
-  const [markingExitId, setMarkingExitId] = useState<string | null>(null)
-  const [isMarkExitDialogOpen, setIsMarkExitDialogOpen] = useState(false)
-  const [bookingToMarkExit, setBookingToMarkExit] = useState<Booking | null>(null)
   const [recalculatingOcc, setRecalculatingOcc] = useState(false)
   const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
   const [pricesLoading, setPricesLoading] = useState(false)
@@ -291,14 +285,7 @@ function BookingsPageContent() {
   const [savingPlate, setSavingPlate] = useState(false)
 
   // Manual LPR event (admin fallback): write as if it came from LPR API (lpr_events + gateEvents + booking lpr.*)
-  const [isManualLprDialogOpen, setIsManualLprDialogOpen] = useState(false)
   const [modificationActionLoading, setModificationActionLoading] = useState<string | null>(null)
-  const [manualLprBooking, setManualLprBooking] = useState<Booking | null>(null)
-  const [manualLprEventType, setManualLprEventType] = useState<"entry" | "exit">("entry")
-  const [manualLprDate, setManualLprDate] = useState(() => formatInputDate(new Date()))
-  const [manualLprTime, setManualLprTime] = useState(() => new Date().toTimeString().slice(0, 5))
-  const [manualLprConfirmOverwrite, setManualLprConfirmOverwrite] = useState(false)
-  const [savingManualLpr, setSavingManualLpr] = useState(false)
 
   const handleDateInputChange = (key: "from" | "to") => (value: string) => {
     const parsed = value ? new Date(`${value}T00:00:00`) : undefined
@@ -472,28 +459,11 @@ function BookingsPageContent() {
     })
   }
 
-  const toManualLprIsoZ = (date: string, time: string): string | null => {
-    const d = String(date || "").trim()
-    const t = String(time || "").trim()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null
-    if (!/^\d{2}:\d{2}$/.test(t)) return null
-    const iso = `${d}T${t}:00Z`
-    const parsed = new Date(iso)
-    return Number.isNaN(parsed.getTime()) ? null : iso
-  }
-
   const [manualExitBookingId, setManualExitBookingId] = useState<string | null>(null)
-
+  const [manualEntryBookingId, setManualEntryBookingId] = useState<string | null>(null)
   const openManualLprDialog = (booking: Booking) => {
-    const lpr: any = (booking as any).lpr || {}
-    const defaultType: "entry" | "exit" = lpr?.isInside === true ? "exit" : "entry"
-    if (defaultType === "exit") { setManualExitBookingId(booking.id); return }
-    setManualLprBooking(booking)
-    setManualLprEventType(defaultType)
-    setManualLprDate(formatInputDate(new Date()))
-    setManualLprTime(new Date().toTimeString().slice(0, 5))
-    setManualLprConfirmOverwrite(false)
-    setIsManualLprDialogOpen(true)
+    if (getLprPresenceState(booking as any).isEffectivelyInside) setManualExitBookingId(booking.id)
+    else setManualEntryBookingId(booking.id)
   }
 
   const parseFirestoreDate = (value: any): Date | null => {
@@ -515,67 +485,6 @@ function BookingsPageContent() {
     const start = startOfDay(d).toISOString()
     const end = endOfDay(d).toISOString()
     return { start, end }
-  }
-
-  const saveManualLprEvent = async () => {
-    if (!isAdmin) {
-      toast({
-        title: "Acces restricționat",
-        description: "Doar administratorii pot seta manual evenimente LPR.",
-        variant: "destructive",
-      })
-      return
-    }
-    if (!manualLprBooking?.id || manualLprEventType !== "entry") return
-
-    const lpr: any = (manualLprBooking as any).lpr || {}
-    const relevantExisting = manualLprEventType === "entry" ? lpr?.arrivedAt : lpr?.departedAt
-    if (relevantExisting && !manualLprConfirmOverwrite) {
-      toast({
-        title: "Confirmare necesară",
-        description: "Există deja un timp LPR. Bifează confirmarea pentru suprascriere.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const isoZ = toManualLprIsoZ(manualLprDate, manualLprTime)
-    if (!isoZ) {
-      toast({
-        title: "Dată/Oră invalidă",
-        description: "Verifică data și ora (ex: 2025-12-24 și 14:30).",
-        variant: "destructive",
-      })
-      return
-    }
-
-    try {
-      setSavingManualLpr(true)
-      await writeManualLprEvent({
-        bookingId: manualLprBooking.id,
-        plateNumber: manualLprBooking.licensePlate || "",
-        eventType: "entry",
-        eventTimeIsoZ: isoZ,
-        adminUid: user?.uid ?? null,
-        adminEmail: user?.email ?? null,
-      })
-      toast({
-        title: "Salvat",
-        description: manualLprEventType === "entry" ? "Intrarea LPR a fost setată manual." : "Ieșirea LPR a fost setată manual.",
-      })
-      setIsManualLprDialogOpen(false)
-      setManualLprBooking(null)
-      await fetchBookings()
-    } catch (e: any) {
-      console.error("Manual LPR save failed", e)
-      toast({
-        title: "Eroare la salvare",
-        description: e?.message ? String(e.message) : "Nu s-a putut salva evenimentul LPR manual.",
-        variant: "destructive",
-      })
-    } finally {
-      setSavingManualLpr(false)
-    }
   }
 
   const loadPrices = useCallback(async () => {
@@ -1439,66 +1348,6 @@ function BookingsPageContent() {
     }
   }
 
-  const handleMarkOutside = async (booking: Booking) => {
-    setMarkingExitId(booking.id)
-    try {
-      const bookingRef = doc(db, "bookings", booking.id)
-      const snap = await getDoc(bookingRef)
-      if (!snap.exists()) throw new Error("Booking not found")
-
-      const data: any = snap.data()
-      const wasInside = getLprPresenceState({ lpr: data?.lpr }).isEffectivelyInside
-      const occupancyIncrementedFlag = data?.occupancyIncremented === true
-      const occupancyDecrementedFlag = data?.occupancyDecremented === true
-      const shouldDecrement = wasInside && occupancyIncrementedFlag && !occupancyDecrementedFlag
-
-      await updateDoc(bookingRef, {
-        "lpr.isInside": false,
-        "lpr.departedAt": serverTimestamp(),
-        "lpr.lastEventType": "exit",
-        ...(shouldDecrement
-          ? {
-              occupancyDecremented: true,
-              occupancyDecrementedAt: serverTimestamp(),
-            }
-          : {}),
-        lastUpdated: serverTimestamp(),
-      })
-
-      // Manual -1 la contor (idempotent, doar dacă era inside și nu a fost deja decremented)
-      if (shouldDecrement) {
-        const occupancyDocRef = doc(db, "config", "parkingLive")
-        await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
-        await updateDoc(occupancyDocRef, {
-          occupiedCount: increment(-1),
-          lastUpdated: serverTimestamp(),
-          lastChange: {
-            type: "exit_manual",
-            bookingId: booking.id,
-            plateNumber: data?.licensePlate || booking.licensePlate || "N/A",
-            at: new Date().toISOString(),
-          },
-        })
-      }
-      toast({
-        title: "Marcat ca ieșit",
-        description: shouldDecrement
-          ? `Booking ${booking.id} setat cu isInside=false și contorul a fost decrementat (-1).`
-          : `Booking ${booking.id} setat cu isInside=false (contorul nu a fost modificat — deja decrementat / never incremented).`,
-      })
-      fetchBookings()
-    } catch (e) {
-      console.error("Mark outside failed", e)
-      toast({
-        title: "Eroare",
-        description: "Nu am putut marca ieșirea.",
-        variant: "destructive",
-      })
-    } finally {
-      setMarkingExitId(null)
-    }
-  }
-
   const handleRecalculateOccupancy = async () => {
     setRecalculatingOcc(true)
     try {
@@ -1893,6 +1742,8 @@ function BookingsPageContent() {
       formData.append('numberOfPersons', manualNumberOfPersons)
       formData.append('manualPaymentStatus', manualPaymentStatusInput)
       formData.append('manualIsInside', manualIsInside ? 'true' : 'false')
+      if (!user) throw new Error('Autentificarea este necesară.')
+      formData.append('adminToken', await user.getIdToken())
 
       console.log(`🏗️ [${uiProcessId}] FormData prepared with all fields`)
       console.log(`🏗️ [${uiProcessId}] Calling createManualBooking server action...`)
@@ -3204,15 +3055,10 @@ function BookingsPageContent() {
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
                                     onClick={() => {
-                                      setBookingToMarkExit(booking)
-                                      setIsMarkExitDialogOpen(true)
+                                      setManualExitBookingId(booking.id)
                                     }}
                                     className="text-red-600 focus:text-white focus:bg-red-600 hover:text-white hover:bg-red-600"
-                                    disabled={markingExitId === booking.id}
                                   >
-                                    {markingExitId === booking.id ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : null}
                                     Marchează ieșire
                                   </DropdownMenuItem>
                                 </>
@@ -3364,49 +3210,7 @@ function BookingsPageContent() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog
-        open={isMarkExitDialogOpen}
-        onOpenChange={(open) => {
-          setIsMarkExitDialogOpen(open)
-          if (!open) setBookingToMarkExit(null)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Marchezi ieșirea manual?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Această acțiune setează <strong>lpr.isInside=false</strong> și <strong>lpr.departedAt=acum</strong>. Dacă
-              rezervarea a incrementat contorul de ocupare și nu a fost încă decrementată, sistemul va face și{" "}
-              <strong>-1</strong> la ocupare (idempotent).
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="text-sm text-gray-700">
-            <div>
-              <strong>Nr. API / ID:</strong>{" "}
-              {bookingToMarkExit?.apiBookingNumber || bookingToMarkExit?.id || "-"}
-            </div>
-            <div>
-              <strong>Nr. înmatriculare:</strong> {bookingToMarkExit?.licensePlate || "-"}
-            </div>
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={Boolean(bookingToMarkExit?.id && markingExitId === bookingToMarkExit.id)}>
-              Renunță
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={async () => {
-                if (!bookingToMarkExit) return
-                const b = bookingToMarkExit
-                setIsMarkExitDialogOpen(false)
-                await handleMarkOutside(b)
-              }}
-              disabled={!bookingToMarkExit || Boolean(bookingToMarkExit?.id && markingExitId === bookingToMarkExit.id)}
-            >
-              {bookingToMarkExit?.id && markingExitId === bookingToMarkExit.id ? "Se marchează..." : "Marchează ieșire"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+
 
       {bookingToCancel && (
         <BookingCancellationDialog
@@ -3422,7 +3226,8 @@ function BookingsPageContent() {
         />
       )}
 
-      {manualExitBookingId && <ManualLprExitDialog key={manualExitBookingId} bookingId={manualExitBookingId} onClose={() => setManualExitBookingId(null)} onSaved={fetchBookings} />}
+      {manualEntryBookingId && <ManualLprExitDialog eventType="entry" key={manualEntryBookingId} bookingId={manualEntryBookingId} onEventTypeChange={type => { if (type === "exit") { setManualExitBookingId(manualEntryBookingId); setManualEntryBookingId(null) } }} onClose={() => setManualEntryBookingId(null)} onSaved={fetchBookings} />}
+      {manualExitBookingId && <ManualLprExitDialog key={manualExitBookingId} bookingId={manualExitBookingId} onEventTypeChange={type => { if (type === "entry") { setManualEntryBookingId(manualExitBookingId); setManualExitBookingId(null) } }} onClose={() => setManualExitBookingId(null)} onSaved={fetchBookings} />}
       <Dialog
         open={isEditPlateDialogOpen}
         onOpenChange={(open) => {
@@ -3478,144 +3283,6 @@ function BookingsPageContent() {
             </Button>
             <Button type="button" onClick={handleSaveNewLicensePlate} disabled={savingPlate || !bookingToEditPlate?.id}>
               {savingPlate ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Salvează
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={isManualLprDialogOpen}
-        onOpenChange={(open) => {
-          setIsManualLprDialogOpen(open)
-          if (!open) {
-            setManualLprBooking(null)
-            setManualLprConfirmOverwrite(false)
-            setSavingManualLpr(false)
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-[560px]">
-          <DialogHeader>
-            <DialogTitle>Setează LPR manual (ca în API)</DialogTitle>
-          </DialogHeader>
-
-          {manualLprBooking && (
-            <div className="space-y-4">
-              <div className="text-sm text-gray-700">
-                <div>
-                  <strong>Nr. API / ID:</strong>{" "}
-                  {!isPayOnSiteBooking(manualLprBooking)
-                    ? manualLprBooking.apiBookingNumber || manualLprBooking.id
-                    : manualLprBooking.id}
-                </div>
-                <div>
-                  <strong>Nr. înmatriculare:</strong> {manualLprBooking.licensePlate || "-"}
-                </div>
-                <div>
-                  <strong>Stare curentă:</strong>{" "}
-                  {((manualLprBooking as any).lpr?.isInside === true) ? "În parcare (isInside=true)" : "În afara parcării"}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">
-                  Notă: această acțiune scrie în Firestore ca un eveniment LPR: `lpr_events` + `gateEvents` + `bookings.lpr.*` + ocupare idempotentă.
-                </div>
-              </div>
-
-              {!isAdmin && (
-                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-                  Doar administratorii pot salva modificări manuale LPR.
-                </div>
-              )}
-
-              <div className="grid gap-4">
-                <div className="space-y-2">
-                  <Label>Tip eveniment</Label>
-                  <Select value={manualLprEventType} onValueChange={(v) => { if (v === "exit" && manualLprBooking) { setIsManualLprDialogOpen(false); setManualExitBookingId(manualLprBooking.id) } else setManualLprEventType("entry") }}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selectează tipul" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="entry">Intrare</SelectItem>
-                      <SelectItem value="exit">Ieșire</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label htmlFor="manual-lpr-date-bookings">Data</Label>
-                    <Input
-                      id="manual-lpr-date-bookings"
-                      type="date"
-                      value={manualLprDate}
-                      disabled={savingManualLpr}
-                      onChange={(e) => setManualLprDate(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="manual-lpr-time-bookings">Ora</Label>
-                    <Input
-                      id="manual-lpr-time-bookings"
-                      type="time"
-                      value={manualLprTime}
-                      disabled={savingManualLpr}
-                      onChange={(e) => setManualLprTime(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                {(() => {
-                  const lpr: any = (manualLprBooking as any).lpr || {}
-                  const existing = manualLprEventType === "entry" ? lpr?.arrivedAt : lpr?.departedAt
-                  if (!existing) return null
-                  return (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
-                      <div className="text-sm text-amber-900">
-                        Există deja un timp LPR pentru acest eveniment:{" "}
-                        <span className="font-semibold">{formatLprDateTime(existing)}</span>. Pentru suprascriere, bifează confirmarea.
-                      </div>
-                      <div className="mt-3 flex items-center gap-2">
-                        <Checkbox
-                          id="manual-lpr-overwrite-bookings"
-                          checked={manualLprConfirmOverwrite}
-                          disabled={savingManualLpr}
-                          onCheckedChange={(v) => setManualLprConfirmOverwrite(v === true)}
-                        />
-                        <Label htmlFor="manual-lpr-overwrite-bookings" className="text-sm">
-                          Confirm suprascrierea valorii LPR existente
-                        </Label>
-                      </div>
-                    </div>
-                  )
-                })()}
-              </div>
-            </div>
-          )}
-
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => setIsManualLprDialogOpen(false)}
-              disabled={savingManualLpr}
-            >
-              Renunță
-            </Button>
-            <Button
-              type="button"
-              onClick={saveManualLprEvent}
-              disabled={
-                savingManualLpr ||
-                !isAdmin ||
-                !manualLprBooking?.id ||
-                (() => {
-                  const lpr: any = (manualLprBooking as any)?.lpr || {}
-                  const existing = manualLprEventType === "entry" ? lpr?.arrivedAt : lpr?.departedAt
-                  return Boolean(existing) && !manualLprConfirmOverwrite
-                })()
-              }
-            >
-              {savingManualLpr ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Salvează
             </Button>
           </DialogFooter>
@@ -4567,6 +4234,7 @@ function BookingsPageContent() {
                   />
                   <span>{manualIsInside ? "Da (ocupă un loc)" : "Nu (doar rezervare, nu ocupă loc)"}</span>
                 </label>
+                {manualIsInside && <p className="text-sm text-muted-foreground">Se înregistrează sosirea la ora confirmării. Dacă numărul este deja prezent pe altă rezervare, salvarea este blocată.</p>}
               </div>
 
               <div className="space-y-2">

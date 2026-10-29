@@ -1,5 +1,7 @@
 "use server"
 
+import { authorizeAdminRequest } from "@/lib/admin-api-auth"
+import { createManualBookingRecord } from "@/lib/manual-lpr-entry.server"
 import { z } from "zod"
 // Adăugăm Firestore pentru salvarea completă a datelor
 import { addDoc, collection, db, doc, getDoc, getDocs, increment, query, serverTimestamp, setDoc, updateDoc, where } from "@/lib/server-firestore"
@@ -1560,6 +1562,11 @@ export async function createManualBooking(formData: FormData) {
   const manualProcessId = `MANUAL_${Date.now()}`
   
   try {
+    const authorization = await authorizeAdminRequest(new Request("http://internal/manual-booking", {
+      headers: { Authorization: `Bearer ${String(formData.get("adminToken") || "")}` },
+    }), ["admin"])
+    if (!authorization.ok) return { success: false, message: "Autentificare admin necesară pentru crearea rezervării." }
+
     console.log(`🔧 [${manualProcessId}] ===== MANUAL BOOKING CREATION STARTED =====`)
     console.log(`🔧 [${manualProcessId}] Timestamp: ${new Date().toISOString()}`)
     
@@ -1673,50 +1680,12 @@ export async function createManualBooking(formData: FormData) {
     console.log(`💾 [${manualProcessId}]   Duration: ${bookingData.durationMinutes} minutes (${bookingData.days} days)`)
 
     // Salvează în Firestore
-    const bookingsRef = collection(db, 'bookings')
     const firestoreStartTime = Date.now()
     
     console.log(`💾 [${manualProcessId}] Saving to Firestore...`)
-    const bookingDocRef = await addDoc(bookingsRef, bookingData)
+    const bookingDocRef = await createManualBookingRecord(bookingData, manualIsInside, authorization.user)
     const firestoreDuration = Date.now() - firestoreStartTime
-
-    console.log(`✅ [${manualProcessId}] Firestore save successful:`)
-    console.log(`✅ [${manualProcessId}]   Document ID: ${bookingDocRef.id}`)
-    console.log(`✅ [${manualProcessId}]   Save Duration: ${firestoreDuration}ms`)
-
-    // Dacă admin-ul bifează "Mașina se află înăuntru?", atunci marcăm isInside=true și incrementăm ocuparea.
-    if (manualIsInside) {
-      try {
-        await updateDoc(bookingDocRef, {
-          occupancyIncremented: true,
-          occupancyIncrementedAt: serverTimestamp(),
-          occupancyAt: serverTimestamp(),
-          "lpr.isInside": true,
-          // IMPORTANT: manual bookings are NOT LPR events; do not set lpr.arrivedAt here
-          // (otherwise it shows up in LPR column with confusing timezone/clock semantics).
-          "lpr.lastEventType": "entry",
-          lastUpdated: serverTimestamp()
-        })
-        const occupancyDocRef = doc(db, "config", "parkingLive")
-        // IMPORTANT: don't reset occupiedCount to 0 here; just ensure doc exists
-        await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
-        await updateDoc(occupancyDocRef, {
-          occupiedCount: increment(1),
-          lastUpdated: serverTimestamp(),
-          lastChange: {
-            type: "entry_manual",
-            bookingId: bookingDocRef.id,
-            plateNumber: normalizeLicensePlate(licensePlate),
-            at: new Date().toISOString()
-          }
-        })
-        console.log(`➕ [${manualProcessId}] Occupancy incremented for manual booking (manualIsInside=true)`)
-      } catch (occErr) {
-        console.error(`❌ [${manualProcessId}] Failed to increment occupancy for manual booking`, occErr)
-      }
-    } else {
-      console.log(`ℹ️ [${manualProcessId}] manualIsInside=false -> skipping occupancy increment and lpr.isInside`)
-    }
+    console.log(`✅ [${manualProcessId}] Booking and LPR presence saved atomically in ${firestoreDuration}ms: ${bookingDocRef.id}`)
 
     console.log(`🌐 [${manualProcessId}] ===== CALLING PARKING API =====`)
 

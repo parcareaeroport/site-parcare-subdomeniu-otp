@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -85,29 +85,45 @@ export default function OccupancyPage() {
   const [activeTab, setActiveTab] = useState<"live" | "forecast">(initialTab as "live" | "forecast")
   const [plateSearch, setPlateSearch] = useState("")
 
-  const fetchData = async () => {
-    if (!user) {
-      setLoading(false)
-      return
-    }
-
-    setLoading(true)
-    setError(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+  const request = useRef<{ abort: AbortController; generation: number } | null>(null)
+  const generation = useRef(0)
+  const fetchData = useCallback(async (background = false) => {
+    if (!user || (background && request.current)) return
+    request.current?.abort.abort()
+    const current = { abort: new AbortController(), generation: ++generation.current }
+    request.current = current
+    let timedOut = false
+    const timeout = setTimeout(() => { timedOut = true; current.abort.abort() }, 12000)
+    if (!background) setLoading(true)
     try {
-      const res = await adminAuthorizedFetch("/api/admin/occupancy", user)
+      const res = await adminAuthorizedFetch("/api/admin/occupancy", user, { cache: "no-store", signal: current.abort.signal })
       if (!res.ok) throw new Error(`Status ${res.status}`)
       const json = await res.json()
-      setData(json)
-    } catch (e: any) {
-      setError("Nu am putut încărca ocuparea.")
+      if (generation.current !== current.generation) return
+      setData(json); setLastUpdated(new Date().toISOString()); setError(null)
+    } catch (e) {
+      if ((!current.abort.signal.aborted || timedOut) && generation.current === current.generation) setError("Actualizarea ocupării nu a reușit. Datele afișate pot fi vechi.")
     } finally {
-      setLoading(false)
+      clearTimeout(timeout)
+      if (generation.current === current.generation) { request.current = null; setLoading(false) }
     }
-  }
+  }, [user])
 
   useEffect(() => {
-    fetchData()
-  }, [user])
+    setData(null); setLastUpdated(null)
+    void fetchData()
+    const refresh = () => { if (!document.hidden) void fetchData(true) }
+    const interval = setInterval(refresh, 15000)
+    window.addEventListener("focus", refresh)
+    window.addEventListener("online", refresh)
+    document.addEventListener("visibilitychange", refresh)
+    return () => {
+      clearInterval(interval); window.removeEventListener("focus", refresh); window.removeEventListener("online", refresh)
+      document.removeEventListener("visibilitychange", refresh)
+      ++generation.current; request.current?.abort.abort(); request.current = null
+    }
+  }, [fetchData])
 
   const isPaid = (status: string) => status === "paid"
 
@@ -430,7 +446,7 @@ export default function OccupancyPage() {
               Reverse (25 Dec 12:15–12:22 UTC)
             </Button> */}
 
-            <Button onClick={fetchData} disabled={loading}>
+            <Button onClick={() => void fetchData()} disabled={loading}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
               Reîncarcă
             </Button>
@@ -443,7 +459,8 @@ export default function OccupancyPage() {
           )}
 
           {/* IMPORTANT: on /ocupare we want strict LPR reality: count must match table length */}
-          <OccupancyCounter title="Ocupare Curentă" countOverride={lprCount} />
+          {data ? <OccupancyCounter title="Ocupare Curentă" countOverride={lprCount} /> : <p role="status">Se încarcă ocuparea...</p>}
+          <p className="text-sm text-gray-500" aria-live="polite">Actualizare automată la 15 secunde.{lastUpdated ? ` Ultima actualizare: ${new Date(lastUpdated).toLocaleTimeString("ro-RO", { timeZone: "Europe/Bucharest" })}.` : ""}</p>
 
           <Card id="plates-table-section">
             <CardHeader>

@@ -1,5 +1,7 @@
-import { addDoc, collection, db, doc, getDoc, increment, serverTimestamp, updateDoc } from "@/lib/server-firestore"
+import { addDoc, collection, db, doc, getDoc, serverTimestamp, updateDoc } from "@/lib/server-firestore"
 import { getLprPresenceState, lprTimestampToMillis } from "@/lib/lpr-presence"
+import { writeLprVisit } from "@/lib/lpr-visit.server"
+import { LPR_ACTIVE_STATUSES as ACTIVE_STATUSES, LPR_TOLERANCE_MS as TOLERANCE_MS, inLprBookingWindow as inBookingWindow } from "@/lib/lpr-booking-window"
 import { normalizeLicensePlate } from "@/lib/utils"
 
 type Nullable<T> = T | null
@@ -36,17 +38,6 @@ function inferEventType(deviceId: Nullable<string>, direction: Nullable<string>)
   return "unknown"
 }
 
-
-const ACTIVE_STATUSES = ["confirmed_paid", "confirmed_test", "confirmed", "paid", "confirmed_pay_on_site"]
-const TOLERANCE_MS = 120 * 60_000
-
-function inBookingWindow(data: any, time: number): boolean {
-  // Preserve the camera/booking time convention; no historical timestamp migration here.
-  const start = parseToDate(`${data.startDate}T${data.startTime}`)?.getTime()
-  const end = parseToDate(`${data.endDate}T${data.endTime}`)?.getTime()
-  return start !== undefined && end !== undefined && end >= start &&
-    time >= start - TOLERANCE_MS && time <= end + TOLERANCE_MS
-}
 
 /** Raw receipts remain available even when association needs an administrator's review.
  * The per-plate state serializes camera events and remembers the booking opened on entry.
@@ -167,30 +158,13 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
       const data = selected?.data || {}
       const wasInside = getLprPresenceState(data).isEffectivelyInside
       const visitId = wasInside ? (data.lpr?.visitId || saved.id) : saved.id
-      const delta = eventType === "entry"
-        ? (!wasInside && (!data.occupancyIncremented || data.occupancyDecremented) ? 1 : 0)
-        : (wasInside && data.occupancyIncremented && !data.occupancyDecremented ? -1 : 0)
-      const lpr = {
-        ...(data.lpr || {}), isInside: eventType === "entry", visitId,
-        lastSeenAt: at, lastSeenDeviceId: input.deviceId ?? null,
-        lastSeenLaneNo: input.laneNo ?? null, lastSeenPlateNumber: normalizedPlate,
-        lastEventType: eventType, lastEventAccurateTime: input.accurateTime ?? null,
-        manualOverride: false,
-        ...(eventType === "entry" && !wasInside ? { arrivedAt: at, departedAt: null } : {}),
-        ...(eventType === "exit" ? { departedAt: at } : {}),
-      }
-      const patch: Record<string, any> = { lpr, lastUpdated: serverTimestamp() }
-      if (delta === 1) Object.assign(patch, {
-        occupancyIncremented: true, occupancyDecremented: false, occupancyIncrementedAt: serverTimestamp(),
-      })
-      if (delta === -1) Object.assign(patch, { occupancyDecremented: true, occupancyDecrementedAt: serverTimestamp() })
+      const patch: Record<string, any> = {}
       if (isNew) {
         Object.assign(patch, {
           licensePlate: normalizedPlate, source: "lpr", status: "unmatched_lpr",
           startDate: at.slice(0, 10), startTime: at.slice(11, 16),
           endDate: "", endTime: "", durationMinutes: 0, createdAt: serverTimestamp(),
         })
-        tx.set(bookingRef, patch)
       } else {
         if (eventType === "exit" && data.status === "unmatched_lpr") {
           const arrived = lprTimestampToMillis(data.lpr?.arrivedAt)
@@ -199,12 +173,11 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
             durationMinutes: arrived === null ? (data.durationMinutes || 0) : Math.max(0, Math.round((eventMs - arrived) / 60_000)),
           })
         }
-        tx.update(bookingRef, patch)
       }
-      tx.set(stateRef, {
-        bookingId: bookingRef.id, visitId, isInside: eventType === "entry",
-        lastEventAt: at, lastEventType: eventType, lastDeviceId: input.deviceId ?? null,
-        updatedAt: serverTimestamp(),
+      writeLprVisit(tx, db, { ref: bookingRef, data, plate: normalizedPlate, at,
+        eventType, eventId: saved.id, visitId, deviceId: input.deviceId, create: isNew, patch,
+        unmatched: isNew || data.status === "unmatched_lpr",
+        lprExtra: { lastSeenLaneNo: input.laneNo ?? null, lastEventAccurateTime: input.accurateTime ?? null },
       })
       tx.set(bookingRef.collection("gateEvents").doc(saved.id), {
         eventType, plateNumber: normalizedPlate, laneNo: input.laneNo ?? null,
@@ -212,11 +185,6 @@ export async function handleLprEvent(input: LprEventInput): Promise<{
         snapTime: input.snapTime ?? null, accurateTime: input.accurateTime ?? null,
         lprEventId: saved.id, visitId, createdAt: serverTimestamp(),
       })
-      if (delta) tx.set(db.collection("config").doc("parkingLive"), {
-        occupiedCount: increment(delta), lastUpdated: serverTimestamp(),
-        lastChange: { type: eventType + (isNew || data.status === "unmatched_lpr" ? "_unmatched" : ""),
-          bookingId: bookingRef.id, plateNumber: normalizedPlate, deviceId: input.deviceId ?? null, at },
-      }, { merge: true })
       tx.update(eventRef, {
         matchedBookingId: bookingRef.id, visitId,
         associationStatus: isNew || data.status === "unmatched_lpr" ? "unmatched_visit" : "matched",

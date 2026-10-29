@@ -1,4 +1,5 @@
 import "server-only"
+import { writeLprVisit } from "@/lib/lpr-visit.server"
 import { createHash } from "node:crypto"
 import { FieldValue } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
@@ -29,7 +30,7 @@ export function parseManualExitClock(date?: string, time?: string) {
 }
 const text = (value: unknown) => typeof value === "string" && value ? value : null
 const row = (id: string, b: any): ManualExitRow => ({ id, licensePlate: String(b.licensePlate || ""), startDate: text(b.startDate), startTime: text(b.startTime), endDate: text(b.endDate), endTime: text(b.endTime) })
-async function readContext(tx: FirebaseFirestore.Transaction, bookingId: string) {
+export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bookingId: string) {
   const ref = adminDb.collection("bookings").doc(bookingId)
   const snap = await tx.get(ref)
   if (!snap.exists) throw new ManualExitError("NOT_FOUND", "Rezervarea nu mai există.", 404)
@@ -60,7 +61,7 @@ async function readContext(tx: FirebaseFirestore.Transaction, bookingId: string)
   return { ref, b, plate, context, state, stateRef }
 }
 export async function prepareManualExit(bookingId: string) {
-  return adminDb.runTransaction(async tx => (await readContext(tx, bookingId)).context)
+  return adminDb.runTransaction(async tx => (await readManualLprContext(tx, bookingId)).context)
 }
 export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: string; email: string | null }) {
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestId || "")) throw new ManualExitError("INVALID_REQUEST", "Identificator de salvare invalid.")
@@ -79,7 +80,7 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       if (receipt.data()?.requestFingerprint !== fingerprint) throw new ManualExitError("REQUEST_REUSED", "Identificatorul salvării a fost deja folosit.", 409)
       return receipt.data()!.result
     }
-    const { ref, b, plate, context, state, stateRef } = await readContext(tx, input.bookingId)
+    const { ref, b, plate, context, state, stateRef } = await readManualLprContext(tx, input.bookingId)
     if (context.version !== input.version) throw changed()
     const now = manualExitClock()
     const at = input.useServerNow === true ? now : parseManualExitClock(input.date, input.time)
@@ -96,22 +97,12 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
     const audit = { eventType: "exit", plateNumber: plate, normalizedPlate: plate, deviceId: "manual_admin", direction: "manual", snapTime: at, accurateTime: at, matchedBookingId: ref.id, visitId: b.lpr?.visitId || null, manual: true, adminUid: actor.uid, adminEmail: actor.email, confirmations, reviewedDocuments: context.duplicates.map(d => d.id) }
     tx.set(eventRef, { ...audit, associationStatus: "manual", receivedAt: FieldValue.serverTimestamp(), requestFingerprint: fingerprint, result, raw: { manual: true, bookingId: ref.id, adminUid: actor.uid, adminEmail: actor.email } })
     tx.set(gateRef, { ...audit, lprEventId: eventRef.id, createdAt: FieldValue.serverTimestamp() })
-    tx.update(ref, {
-      "lpr.departedAt": at, "lpr.isInside": false, "lpr.lastSeenAt": at, "lpr.lastEventType": "exit",
-      "lpr.lastSeenDeviceId": "manual_admin", "lpr.lastSeenPlateNumber": plate, "lpr.lastEventAccurateTime": at,
-      "lpr.manualOverride": true, "lpr.manualOverrideAt": FieldValue.serverTimestamp(),
-      "lpr.manualOverrideByUid": actor.uid, "lpr.manualOverrideByEmail": actor.email,
-      ...(shouldDecrement ? { occupancyDecremented: true, occupancyDecrementedAt: FieldValue.serverTimestamp() } : {}),
-      lastUpdated: FieldValue.serverTimestamp(),
+    writeLprVisit(tx, adminDb, { ref, data: b, plate, at, eventType: "exit", eventId: eventRef.id,
+      deviceId: "manual_admin", manual: true, actor,
+      lprExtra: { lastEventAccurateTime: at },
+      // A historical correction must never close a different visit's pointer.
+      updatePointer: state.exists && state.data()?.bookingId === ref.id && state.data()?.visitId === b.lpr?.visitId,
     })
-    // Only close the pointer belonging to this visit; another booking's pointer is preserved.
-    if (state.exists && state.data()?.bookingId === ref.id && state.data()?.visitId === b.lpr?.visitId) {
-      tx.set(stateRef, { isInside: false, lastEventAt: at, lastEventType: "exit", lastDeviceId: "manual_admin", updatedAt: FieldValue.serverTimestamp() }, { merge: true })
-    }
-    tx.set(adminDb.collection("config").doc("parkingLive"), {
-      lastUpdated: FieldValue.serverTimestamp(),
-      ...(shouldDecrement ? { occupiedCount: FieldValue.increment(-1), lastChange: { type: "exit_manual_override", bookingId: ref.id, plateNumber: plate, deviceId: "manual_admin", at, adminUid: actor.uid, adminEmail: actor.email } } : {}),
-    }, { merge: true })
     return result
   })
 }
