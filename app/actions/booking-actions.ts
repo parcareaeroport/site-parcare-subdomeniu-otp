@@ -1515,7 +1515,10 @@ export async function createManualBooking(formData: FormData) {
     const manualPaymentStatusRaw = String(formData.get('manualPaymentStatus') || 'not_paid')
     const manualPaymentStatus =
       manualPaymentStatusRaw === 'paid' ? 'paid' : 'not_paid'
-    const manualIsInsideRaw = String(formData.get('manualIsInside') || 'true')
+    const manualIsInsideRaw = formData.get('manualIsInside')
+    if (manualIsInsideRaw !== 'true' && manualIsInsideRaw !== 'false') {
+      return { success: false, message: "Alege explicit dacă mașina este în parcare sau este doar o rezervare." }
+    }
     const manualIsInside = manualIsInsideRaw === 'true'
 
     console.log(`🔧 [${manualProcessId}] Form data extracted:`)

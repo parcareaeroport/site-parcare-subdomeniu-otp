@@ -11,15 +11,19 @@ export type OccupancyLpr = {
 // Undefined means absent; null means present but unreadable.
 export function occupancyLprTimestamp(value: unknown): string | null | undefined {
   if (value === undefined || value === null || value === "") return undefined
-  // A timezone-free string cannot identify an instant without guessing its timezone.
+  // Reject ambiguous input; normalized LPR values use the storage convention below.
   if (typeof value === "string" && !/(Z|[+-]\d{2}:?\d{2})$/i.test(value)) return null
   const ms = lprTimestampToMillis(value)
   return ms !== null && Number.isFinite(ms) && !Number.isNaN(new Date(ms).getTime())
     ? new Date(ms).toISOString() : null
 }
 
+// LPR writers normalize to Romania CIVIL time stored with a Z suffix (legacy
+// contract), including cameras configured with genuine instants. Render those
+// clock components without a second UTC -> Bucharest conversion. This is display
+// only; it neither converts historical data nor infers an unknown legacy clock.
 const dateFormat = new Intl.DateTimeFormat("ro-RO", {
-  timeZone: "Europe/Bucharest", day: "2-digit", month: "2-digit", year: "numeric",
+  timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric",
   hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
 })
 

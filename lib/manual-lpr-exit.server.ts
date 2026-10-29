@@ -57,6 +57,7 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
   const context: ManualExitContext = {
     booking: row(snap.id, b), version, serverNow: manualExitClock(),
     arrival: arrivalMs === null ? null : new Date(arrivalMs).toISOString(),
+    hasPreviousVisit: Boolean(lpr.visitId || lpr.arrivedAt || lpr.departedAt || lpr.lastSeenAt || lpr.lastEventType === "exit"),
     departure: iso(lpr.departedAt), inside, lastEntry:lastEntry === null ? null : new Date(lastEntry).toISOString(),
     duplicates: open.length > 1 ? open.map(d => row(d.id, d.data())) : open.filter(d => d.id !== snap.id).map(d => row(d.id, d.data())),
   }
@@ -104,7 +105,7 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
     const gateRef = ref.collection("gateEvents").doc(eventRef.id)
     const result = { lprEventId: eventRef.id, gateEventId: gateRef.id, occupancyChanged: shouldDecrement ? "decremented" : "none" }
     const confirmations = { missingArrival: !context.arrival && input.confirmMissingArrival === true, duplicates: context.duplicates.length > 0 && input.confirmDuplicates === true, overwrite: !context.inside && !!context.departure && input.confirmOverwrite === true }
-    const audit = { eventType: "exit", plateNumber: plate, normalizedPlate: plate, deviceId: "manual_admin", direction: "manual", snapTime: at, accurateTime: at, matchedBookingId: ref.id, visitId: b.lpr?.visitId || null, manual: true, adminUid: actor.uid, adminEmail: actor.email, confirmations, reviewedDocuments: context.duplicates.map(d => d.id) }
+    const audit = { eventType: "exit", plateNumber: plate, normalizedPlate: plate, deviceId: "manual_admin", direction: "manual", eventTime: at, snapTime: at, accurateTime: at, matchedBookingId: ref.id, visitId: b.lpr?.visitId || null, manual: true, adminUid: actor.uid, adminEmail: actor.email, confirmations, reviewedDocuments: context.duplicates.map(d => d.id) }
     tx.set(eventRef, { ...audit, associationStatus: "manual", receivedAt: FieldValue.serverTimestamp(), requestFingerprint: fingerprint, result, raw: { manual: true, bookingId: ref.id, adminUid: actor.uid, adminEmail: actor.email } })
     tx.set(gateRef, { ...audit, lprEventId: eventRef.id, createdAt: FieldValue.serverTimestamp() })
     writeLprVisit(tx, adminDb, { ref, data: b, plate, at, eventType: "exit", eventId: eventRef.id,

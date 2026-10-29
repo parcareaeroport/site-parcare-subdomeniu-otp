@@ -10,6 +10,8 @@ const reasons:Record<string,string> = {
   earlier_event_pending:"Așteaptă procesarea unui eveniment anterior",
   ambiguous_reservations:"Mai multe rezervări eligibile", multiple_open_visits:"Mai multe șederi deschise",
   exit_without_open_visit:"Ieșire fără ședere deschisă",out_of_order_event:"Eveniment mai vechi decât starea cunoscută",
+  later_exit_requires_review:"Există deja o ieșire ulterioară. Intrarea veche nu a redeschis șederea; verifică succesiunea.",
+  plate_corrected_event_requires_review:"Citire întârziată pentru un număr corectat. Nu s-a creat o prezență suplimentară; verifică șederea.",
   stale_event_time:"Eveniment vechi: verifică prezența actuală a mașinii",
   future_event_time:"Ora camerei este în viitor",invalid_event_time:"Ora camerei este invalidă",
   unknown_direction:"Direcție necunoscută",missing_plate:"Număr lipsă sau invalid",

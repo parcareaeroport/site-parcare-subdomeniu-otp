@@ -313,7 +313,7 @@ function BookingsPageContent() {
   const [manualClientEmail, setManualClientEmail] = useState("")
   const [manualNumberOfPersons, setManualNumberOfPersons] = useState("1")
   const [manualPaymentStatusInput, setManualPaymentStatusInput] = useState<"not_paid" | "paid">("not_paid")
-  const [manualIsInside, setManualIsInside] = useState(true)
+  const [manualIsInside, setManualIsInside] = useState<boolean | null>(null)
   const [manualDuplicateError, setManualDuplicateError] = useState<string | null>(null)
   
   // State pentru logul vizual al răspunsului API multipark
@@ -1581,6 +1581,11 @@ function BookingsPageContent() {
 
   const handleCreateManualBooking = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (manualIsInside === null) {
+      toast({ title: "Confirmă prezența", description: "Alege dacă mașina este în parcare sau este doar o rezervare.", variant: "destructive" })
+      return
+    }
+
     const uiProcessId = `UI_MANUAL_${Date.now()}`
     
     console.log(`🖥️ [${uiProcessId}] ===== MANUAL BOOKING UI PROCESS STARTED =====`)
@@ -1778,7 +1783,7 @@ function BookingsPageContent() {
         setManualClientEmail("")
         setManualNumberOfPersons("1")
         setManualPaymentStatusInput("not_paid")
-        setManualIsInside(true)
+        setManualIsInside(null)
         setManualDuplicateError(null)
 
         console.log(`🔄 [${uiProcessId}] Refreshing bookings list...`)
@@ -2264,7 +2269,7 @@ function BookingsPageContent() {
         <div className="flex gap-2">
           {user && isAdmin && (
             <Button 
-              onClick={() => setIsManualDialogOpen(true)}
+              onClick={() => { setManualIsInside(null); setIsManualDialogOpen(true) }}
               variant="default"
               size="sm"
             >
@@ -3975,6 +3980,7 @@ function BookingsPageContent() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Completează rezervare din LPR</DialogTitle>
+              <p className="text-sm text-muted-foreground">Completezi perioada rezervării. Plecarea reală se înregistrează separat prin „Marchează ieșire”.</p>
           </DialogHeader>
           {lprBookingToComplete && (
             <form
@@ -4053,7 +4059,7 @@ function BookingsPageContent() {
               </div>
               <div className="grid grid-cols-1 gap-4 mt-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Data ieșire *</label>
+                  <label className="text-sm font-medium">Data ieșirii programate *</label>
                   <Input
                     type="date"
                     value={lprExitDate ? formatDateFn(lprExitDate, "yyyy-MM-dd") : ""}
@@ -4064,7 +4070,7 @@ function BookingsPageContent() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Ora ieșire *</label>
+                  <label className="text-sm font-medium">Ora ieșirii programate *</label>
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
@@ -4148,7 +4154,7 @@ function BookingsPageContent() {
         if (!open) setApiLogData({ isVisible: false })
         setIsManualDialogOpen(open)
       }}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[90vh] overflow-y-auto max-w-2xl">
           <DialogHeader>
             <DialogTitle>Adaugă Rezervare Manual</DialogTitle>
           </DialogHeader>
@@ -4187,16 +4193,14 @@ function BookingsPageContent() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm font-medium">Mașina se află înăuntru?</label>
-                <label className="flex items-center gap-2 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={manualIsInside}
-                    onChange={(e) => setManualIsInside(e.target.checked)}
-                    className="h-4 w-4"
-                  />
-                  <span>{manualIsInside ? "Da (ocupă un loc)" : "Nu (doar rezervare, nu ocupă loc)"}</span>
-                </label>
+                <label htmlFor="manual-presence" className="text-sm font-medium">Mașina se află acum în parcare? *</label>
+                <select id="manual-presence" required value={manualIsInside === null ? "" : String(manualIsInside)}
+                  onChange={e => setManualIsInside(e.target.value === "" ? null : e.target.value === "true")}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                  <option value="" disabled>Alege prezența mașinii</option>
+                  <option value="false">Nu — creez doar rezervarea</option>
+                  <option value="true">Da — confirm că mașina este în parcare</option>
+                </select>
                 {manualIsInside && <p className="text-sm text-muted-foreground">Se înregistrează sosirea la ora confirmării. Dacă numărul este deja prezent pe altă rezervare, salvarea este blocată.</p>}
               </div>
 
@@ -4426,7 +4430,7 @@ function BookingsPageContent() {
               }}>
                 Anulează
               </Button>
-              <Button type="submit" disabled={isCreatingManual}>
+              <Button type="submit" disabled={isCreatingManual || manualIsInside === null}>
                 {isCreatingManual ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />

@@ -41,7 +41,7 @@ const { prepareManualExit, saveManualExit } = load('lib/manual-lpr-exit.server.t
 const { saveManualEntry } = load('lib/manual-lpr-entry.server.ts')
 async function writeManualLprEvent({bookingId,eventType,eventTimeIsoZ}, context) {
   const ctx = context || await prepareManualExit(bookingId)
-  return (eventType === 'entry' ? saveManualEntry : saveManualExit)({bookingId, version:ctx.version,
+  return (eventType === 'entry' ? saveManualEntry : saveManualExit)({entryMode:ctx.inside?"correct_arrival":"new_visit",confirmReentry:!ctx.inside&&!!(ctx.arrival||ctx.departure),bookingId, version:ctx.version,
     requestId:require('node:crypto').randomUUID(), date:eventTimeIsoZ.slice(0,10), time:eventTimeIsoZ.slice(11,19)}, {uid:'fixture',email:'fixture@example.invalid'})
 }
 function assertOnlyContextConflicts(results) {

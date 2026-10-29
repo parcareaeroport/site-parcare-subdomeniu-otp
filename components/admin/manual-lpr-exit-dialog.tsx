@@ -18,6 +18,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
   const [context, setContext] = useState<ManualExitContext | null>(null)
   const [date, setDate] = useState(""); const [time, setTime] = useState("")
   const [useNow, setUseNow] = useState(false)
+  const [reentry, setReentry] = useState(false)
   const [missing, setMissing] = useState(false); const [duplicates, setDuplicates] = useState(false); const [overwrite, setOverwrite] = useState(false)
   const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null); const [conflict, setConflict] = useState(false)
@@ -30,7 +31,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
     const id = ++epoch.current
     const abort = new AbortController()
     setLoading(true); setError(null); setContext(null); setConflict(false)
-    setMissing(false); setDuplicates(false); setOverwrite(false); setUseNow(false); setDate(""); setTime(""); resetRequest()
+    setReentry(false); setMissing(false); setDuplicates(false); setOverwrite(false); setUseNow(false); setDate(""); setTime(""); resetRequest()
     void (async () => {
       try {
         const response = await adminAuthorizedFetch(endpoint, user, { method: "POST", body: JSON.stringify({ action: "prepare", bookingId }), cache: "no-store", signal: abort.signal })
@@ -51,6 +52,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
       const response = await adminAuthorizedFetch(endpoint, user, { method: "POST", body: JSON.stringify({
         action: "save", bookingId, version: context.version, requestId: requestId.current,
         ...(useNow ? { useServerNow: true } : { date, time }),
+        ...(isEntry ? { entryMode: context.inside ? "correct_arrival" : "new_visit", confirmReentry: reentry } : {}),
         confirmMissingArrival: missing, confirmDuplicates: duplicates, confirmOverwrite: overwrite,
       }), cache: "no-store" })
       const body = await response.json()
@@ -65,7 +67,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
   }
   const confirm = (id: string, checked: boolean, change: (v: boolean) => void, text: string) => <div className="flex items-start gap-2"><Checkbox id={id} checked={checked} disabled={saving || conflict} onCheckedChange={v => { change(v === true); resetRequest() }} /><Label htmlFor={id} className="leading-relaxed">{text}</Label></div>
   return <Dialog open onOpenChange={open => { if (!open && !saving) onClose() }}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[620px]">
-    <DialogHeader><DialogTitle>{isEntry ? "Setează Intrare LPR (manual)" : "Setează Ieșire LPR (manual)"}</DialogTitle><DialogDescription>Confirmă rezervarea și ora {isEntry ? "sosirii" : "plecării"} reale. Toate orele sunt orele României.</DialogDescription></DialogHeader>
+    <DialogHeader><DialogTitle>{isEntry ? context?.inside ? "Corectează ora intrării" : "Înregistrează o intrare nouă" : "Setează Ieșire LPR (manual)"}</DialogTitle><DialogDescription>Confirmă rezervarea și ora {isEntry ? "sosirii" : "plecării"} reale. Toate orele sunt orele României.</DialogDescription></DialogHeader>
     {onEventTypeChange && <div><Label htmlFor="manual-lpr-type">Tip eveniment</Label><Select value={eventType} onValueChange={v => onEventTypeChange(v as "entry" | "exit")} disabled={saving}><SelectTrigger id="manual-lpr-type"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="entry">Intrare</SelectItem><SelectItem value="exit">Ieșire</SelectItem></SelectContent></Select></div>}
     {loading && <p role="status">Se verifică șederea...</p>}
     {error && <p role="alert" className="text-red-700">{error}</p>}
@@ -75,7 +77,13 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
       <p><strong>Perioada rezervării:</strong> {context.booking.startDate || "?"} {context.booking.startTime || "?"} → {context.booking.endDate || "?"} {context.booking.endTime || "?"}</p>
       <p><strong>Ieșire programată:</strong> {context.booking.endDate ? `${context.booking.endDate.split("-").reverse().join(".")} ${context.booking.endTime || "?"}` : "Necunoscută"}</p>
       <p><strong>Intrare înregistrată pentru șederea actuală:</strong> {display(context.arrival)}</p>
-      {!isEntry && context.lastEntry && context.lastEntry !== context.arrival && <p><strong>Ultima detectare de intrare:</strong> {display(context.lastEntry)}</p>}
+      {context.lastEntry && context.lastEntry !== context.arrival && <p><strong>Ultima detectare de intrare:</strong> {display(context.lastEntry)}</p>}
+      {isEntry && context.inside && <p className="rounded border bg-slate-50 p-3">Corectezi doar ora sosirii pentru șederea prezentă. Numărul mașinilor și ultima detectare LPR rămân aceleași.</p>}
+      {isEntry && !context.inside && context.hasPreviousVisit && <div className="space-y-2 rounded border border-amber-400 bg-amber-50 p-3">
+        <p><strong>Ieșire înregistrată anterior:</strong> {display(context.departure)}</p>
+        <p>Înregistrarea este închisă. Salvarea creează o ședere nouă și ocupă un loc. Pentru o simplă corecție a istoricului, nu înregistra o intrare nouă.</p>
+        {confirm("entry-confirm-reentry", reentry, setReentry, "Confirm că mașina a reintrat fizic în parcare.")}
+      </div>}
       {context.duplicates.length > 0 && <div className="space-y-3 rounded border border-amber-400 bg-amber-50 p-3 text-amber-950">
         <strong>Necesită verificare ADMIN</strong><p>Există alte înregistrări prezente pentru acest număr. {isEntry ? "Intrarea este blocată până la clarificarea înregistrărilor existente." : "Se închide numai rezervarea selectată."}</p>
         <ul className="space-y-2">{context.duplicates.map(b => <li key={b.id} className="break-words"><strong>{b.id === bookingId ? "Selectată: " : ""}{b.licensePlate}</strong> — {b.startDate || "?"} {b.startTime || "?"} → {b.endDate || "?"} {b.endTime || "?"}<div className="break-all">ID: {b.id}</div></li>)}</ul>
@@ -93,6 +101,6 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
       {(isEntry ? context.inside : !context.inside && context.departure) && <div className="space-y-2"><p>{isEntry ? "Intrare existentă" : "Ieșire existentă"}: {display(isEntry ? context.arrival : context.departure)}</p>{confirm("exit-confirm-overwrite", overwrite, setOverwrite, "Confirm suprascrierea valorii LPR existente")}</div>}
     </div>}
     {(!context && !loading || conflict) && <Button variant="outline" onClick={() => setReload(v => v + 1)} disabled={saving}>Reîncarcă șederea</Button>}
-    <DialogFooter><Button variant="outline" onClick={onClose} disabled={saving}>Renunță</Button><Button onClick={save} disabled={loading || saving || conflict || !context || (!useNow && (!date || !time)) || (!!context && ((!isEntry && !context.arrival && !missing) || (context.duplicates.length > 0 && (isEntry || !duplicates)) || ((isEntry ? context.inside : !context.inside && !!context.departure) && !overwrite)))}>{saving ? "Se salvează..." : "Salvează"}</Button></DialogFooter>
+    <DialogFooter><Button variant="outline" onClick={onClose} disabled={saving}>Renunță</Button><Button onClick={save} disabled={loading || saving || conflict || !context || (!useNow && (!date || !time)) || (!!context && ((isEntry && !context.inside && context.hasPreviousVisit === true && !reentry) || (!isEntry && !context.arrival && !missing) || (context.duplicates.length > 0 && (isEntry || !duplicates)) || ((isEntry ? context.inside : !context.inside && !!context.departure) && !overwrite)))}>{saving ? "Se salvează..." : "Salvează"}</Button></DialogFooter>
   </DialogContent></Dialog>
 }

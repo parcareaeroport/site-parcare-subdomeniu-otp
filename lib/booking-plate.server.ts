@@ -4,7 +4,7 @@ import { FieldValue } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { getLprPresenceState } from "@/lib/lpr-presence"
-import { ManualExitError } from "@/lib/manual-lpr-exit.server"
+import { ManualExitError, manualExitClock } from "@/lib/manual-lpr-exit.server"
 
 export async function readPlateChange(tx: FirebaseFirestore.Transaction, bookingId: string, newPlate: string) {
   const plate = normalizeLicensePlate(newPlate)
@@ -36,9 +36,22 @@ export function writePlateChange(tx: FirebaseFirestore.Transaction, ctx: Awaited
     tx.update(ctx.ref, { "lpr.visitId": visitId, "lpr.lastSeenPlateNumber": ctx.plate })
     tx.set(ctx.newRef, { bookingId: ctx.ref.id, visitId, isInside: true, lastEventAt: ctx.b.lpr?.lastSeenAt || ctx.b.lpr?.arrivedAt || null,
       lastEventType: ctx.b.lpr?.lastEventType || "entry", lastDeviceId: ctx.b.lpr?.lastSeenDeviceId || null, updatedAt: FieldValue.serverTimestamp() })
+    // Historical stays may have no old pointer. Always retain a boundary on the
+    // old number, otherwise a delayed reading creates a second unmatched visit.
+    // Keep the original event time separate from the admin correction time: the
+    // correction is not a camera departure. Preserve any other pointer's history.
+    tx.set(ctx.oldRef, {
+      ...(!ctx.oldState.exists ? { bookingId: ctx.ref.id, visitId, isInside: false,
+        lastEventAt: ctx.b.lpr?.lastSeenAt || ctx.b.lpr?.arrivedAt || null,
+        lastEventType: ctx.b.lpr?.lastEventType || "entry", lastDeviceId: ctx.b.lpr?.lastSeenDeviceId || null } : {}),
+      ...(ctx.oldState.data()?.bookingId === ctx.ref.id ? { isInside: false } : {}),
+      plateCorrectedTo: ctx.plate,
+      plateCorrection: { bookingId: ctx.ref.id, visitId, correctedTo: ctx.plate, through: manualExitClock() },
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })
   }
   // Retain event ordering on the old number; it is no longer an open pointer.
-  if (ctx.oldState.data()?.bookingId === ctx.ref.id) tx.set(ctx.oldRef, { isInside: false, plateCorrectedTo: ctx.plate, updatedAt: FieldValue.serverTimestamp() }, {merge:true})
+  if (!ctx.inside && ctx.oldState.data()?.bookingId === ctx.ref.id) tx.set(ctx.oldRef, { isInside: false, plateCorrectedTo: ctx.plate, updatedAt: FieldValue.serverTimestamp() }, {merge:true})
   tx.set(ctx.ref.collection("plateCorrections").doc(), { from:ctx.oldPlate, to:ctx.plate, inside:ctx.inside, confirmedPresentCorrection:confirmed, actorUid:actor.uid, actorEmail:actor.email, reason:actor.reason || null, at:FieldValue.serverTimestamp() })
 }
 export async function preparePlateChange(bookingId: string, plate: string) {

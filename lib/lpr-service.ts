@@ -5,6 +5,7 @@ import { manualExitClock } from "@/lib/manual-lpr-exit.server"
 import { isTollgateWhitelistedPlate } from "@/lib/lpr-tollgate-whitelist"
 import { db, serverTimestamp } from "@/lib/server-firestore"
 import { getLprPresenceState, lprTimestampToMillis } from "@/lib/lpr-presence"
+import { isBeforePlateCorrection, isLaterKnownExit } from "@/lib/lpr-entry-evidence"
 import { writeLprVisit } from "@/lib/lpr-visit.server"
 import { LPR_ACTIVE_STATUSES as ACTIVE_STATUSES, LPR_TOLERANCE_MS as TOLERANCE_MS, inLprBookingWindow as inBookingWindow } from "@/lib/lpr-booking-window"
 import { normalizeLicensePlate } from "@/lib/utils"
@@ -149,6 +150,14 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
         tx.update(eventRef, {attempts,associationStatus:attempts >= 10 ? "needs_review" : "pending",associationReason:"booking_modification_in_progress",nextAttemptAt:attempts >= 10 ? FieldValue.delete() : Date.now()+30000})
         return {savedEventId:id,eventType,degraded:true,warning:"booking_modification_in_progress"}
       }
+      // A corrected number must retain its ordering boundary even for legacy stays
+      // with no previous plate pointer. The boundary ends at the correction, so a
+      // genuinely later vehicle with the old number is not excluded indefinitely.
+      // Admin corrections have second precision; do not infer a new vehicle from
+      // camera milliseconds within that same, ambiguous second.
+      if (isBeforePlateCorrection(state, eventMs)) {
+        return review("plate_corrected_event_requires_review", state.plateCorrection?.bookingId ? [state.plateCorrection.bookingId] : [])
+      }
       // A late delivery must not undo a newer camera OR manual decision.
       const timestamps = [lprTimestampToMillis(state.lastEventAt), ...all.flatMap(row => [
         lprTimestampToMillis(row.data.lpr?.lastSeenAt),
@@ -163,6 +172,21 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
           return { savedEventId: saved.id, eventType, ...(state.bookingId ? { matchedBookingId: state.bookingId } : {}) }
         }
         return review("simultaneous_event_requires_review")
+      }
+      if (eventType === "entry") {
+        // An exit delivered first may already be in review without having updated
+        // any booking/pointer. Do not reopen a past visit when its older entry
+        // eventually arrives (or is retried by an admin). Pending exits are NOT
+        // included: they still recover automatically after their earlier entry.
+        // The receipt query is part of this transaction, so concurrent delivery
+        // cannot bypass this check. Keep ambiguous evidence for an admin instead
+        // of inventing a booking association or a physical departure.
+        const nowMs = Date.parse(manualExitClock())
+        const laterExits = plateReceipts.docs.filter(d => d.id !== id && isLaterKnownExit(d.data(), eventMs, nowMs))
+        if (laterExits.length) {
+          tx.update(eventRef, { relatedEventIds: laterExits.slice(0, 20).map(d => d.id), relatedEventCount: laterExits.length })
+          return review("later_exit_requires_review", all.map(row => row.id))
+        }
       }
       const eligible = all.filter(row => ACTIVE_STATUSES.includes(row.data.status) && inBookingWindow(row.data, eventMs))
       const pointer = open.find(row => row.id === state.bookingId && row.data.lpr?.visitId === state.visitId)

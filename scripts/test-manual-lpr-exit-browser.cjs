@@ -25,6 +25,7 @@ for (const page of ['ocupare', 'entries-exits', 'bookings']) write(`app/admin/da
 write('app/api/admin/manual-lpr-entry/route.ts', `export {POST} from '${root}/app/api/admin/manual-lpr-entry/route';export const runtime='nodejs';`)
 write('app/api/admin/manual-lpr-exit/route.ts', `export {POST} from '${root}/app/api/admin/manual-lpr-exit/route';export const runtime='nodejs';`)
 write('app/api/admin/occupancy/route.ts', `export {GET} from '${root}/app/api/admin/occupancy/route';`)
+write('app/NotificationInfo/TollgateInfo/route.ts', `export {POST} from '${root}/app/NotificationInfo/TollgateInfo/route';export const runtime='nodejs';`)
 for (const route of ['bookings/plate','lpr-review']) write(`app/api/admin/${route}/route.ts`, `export {POST} from '${root}/app/api/admin/${route}/route';export const runtime='nodejs';`)
 write('app/layout.tsx', `import './globals.css';export default function Layout({children}){return <html lang="ro"><body>{children}</body></html>}`)
 write('app/globals.css', fs.readFileSync(root + '/app/globals.css', 'utf8'))
@@ -39,7 +40,7 @@ let server, browser, logs = ''
   await db.doc('bookings/ui-exited').set({ ...base, licensePlate: 'UIEXITED', lpr: { ...base.lpr, isInside: false, departedAt: '2026-10-24T10:00:00Z', lastSeenAt: '2026-10-24T10:00:00Z', lastEventType: 'exit' } })
   await db.doc('bookings/ui-inconsistent').set({ ...base, licensePlate: 'UIOUTSIDE', endDate: '2026-10-25', endTime: '01:00', lpr: { isInside:true, lastEventType:'exit', arrivedAt:'2026-10-20T10:00:00Z' } })
   await db.doc('config/parkingLive').set({ occupiedCount: 2 }); await db.doc('config/reservationSettings').set({ maxTotalReservations: 310 })
-  server = spawn(process.execPath, [root+'/node_modules/next/dist/bin/next', 'dev', '-p', '3182'], { cwd: temp, env: { ...process.env, TZ: 'UTC' }, stdio: ['ignore','pipe','pipe'] })
+  server = spawn(process.execPath, [root+'/node_modules/next/dist/bin/next', 'dev', '-p', '3182'], { cwd: temp, env: { ...process.env, TZ: 'UTC', LPR_AUTH_SECRET:'browser-fixture-camera', LPR_DEVICES_JSON:JSON.stringify({intrare_1:{direction:'entry',timestampMode:'romania_wall_clock',maxEventAgeMinutes:525600},iesire_1:{direction:'exit',timestampMode:'romania_wall_clock',maxEventAgeMinutes:525600}}) }, stdio: ['ignore','pipe','pipe'] })
   server.stdout.on('data', x => logs += x); server.stderr.on('data', x => logs += x)
   let ready = false
   for (let i=0;i<90;i++) { try { if ((await fetch('http://localhost:3182/api/admin/occupancy',{headers:{Authorization:'Bearer admin'}})).ok) { ready=true; break } } catch {} await new Promise(r=>setTimeout(r,500)) }
@@ -150,8 +151,10 @@ let server, browser, logs = ''
   await foreignPage.getByRole('menuitem',{name:'Setează LPR manual (intrare/ieșire)',exact:true}).click()
   await expect(foreignPage.getByRole('dialog')).toContainText('sosirii reale')
   await foreignPage.locator('#manual-lpr-date').fill('2026-10-23');await foreignPage.locator('#manual-lpr-time').fill('11:00:00')
+  await expect(foreignPage.getByRole('dialog').getByRole('button',{name:'Salvează',exact:true})).toBeDisabled()
+  await foreignPage.getByRole('dialog').getByLabel('Confirm că mașina a reintrat fizic în parcare.').check()
   await foreignPage.getByRole('dialog').getByRole('button',{name:'Salvează',exact:true}).click()
-  await expect(foreignPage.getByRole('dialog').getByRole('alert')).toContainText('eveniment mai recent')
+  await expect(foreignPage.getByRole('dialog').getByRole('alert')).toContainText('există o ieșire primită')
   await foreignPage.getByRole('dialog').getByRole('button',{name:'Renunță',exact:true}).click()
   // Fresh booking in the same-day entries list, with an already-present duplicate.
   await db.doc('bookings/ui-entry-new').set({...base,licensePlate:'ENTRY01',startDate:'2026-10-25',endDate:'2026-10-29',createdAt:new Date('2026-10-25T10:00:00Z'),occupancyIncremented:false,lpr:{isInside:false}})
@@ -173,6 +176,48 @@ let server, browser, logs = ''
   assert.equal((await db.doc('bookings/ui-entry-new').get()).data().lpr.arrivedAt,'2026-10-25T12:00:00.000Z')
   assert.equal((await db.doc('lpr_plate_state/ENTRY01').get()).data().bookingId,'ui-entry-new')
   console.log('PASS protected manual entry, duplicate blocking, recent-event guard, mobile and foreign timezone')
+
+  // Correcting arrival never becomes another crossing, even on a foreign-timezone browser.
+  await foreignPage.goto('http://localhost:3182/admin/dashboard/bookings')
+  let entryRow=foreignPage.getByRole('row').filter({hasText:'ENTRY01'})
+  await entryRow.getByRole('button').last().click()
+  await foreignPage.getByRole('menuitem',{name:'Setează LPR manual (intrare/ieșire)',exact:true}).click()
+  await foreignPage.locator('#manual-lpr-type').click()
+  await foreignPage.getByRole('option',{name:'Intrare',exact:true}).click()
+  await expect(foreignPage.getByRole('dialog')).toContainText('Corectează ora intrării')
+  await expect(foreignPage.getByRole('dialog')).toContainText('Numărul mașinilor și ultima detectare LPR rămân aceleași.')
+  const beforeEntryCorrection=(await db.doc('bookings/ui-entry-new').get()).data()
+  const countEntryCorrection=(await db.doc('config/parkingLive').get()).data().occupiedCount
+  await foreignPage.locator('#manual-lpr-date').fill('2026-10-25');await foreignPage.locator('#manual-lpr-time').fill('12:05:00')
+  await foreignPage.getByRole('dialog').getByLabel('Confirm suprascrierea valorii LPR existente').check()
+  await foreignPage.getByRole('dialog').getByRole('button',{name:'Salvează',exact:true}).click()
+  await expect(foreignPage.getByRole('dialog')).toHaveCount(0)
+  const afterEntryCorrection=(await db.doc('bookings/ui-entry-new').get()).data()
+  assert.equal(afterEntryCorrection.lpr.visitId,beforeEntryCorrection.lpr.visitId)
+  assert.equal(afterEntryCorrection.lpr.lastSeenAt,beforeEntryCorrection.lpr.lastSeenAt)
+  assert.equal((await db.doc('config/parkingLive').get()).data().occupiedCount,countEntryCorrection)
+  // Manual booking requires a fresh explicit presence decision on every opening.
+  for(const width of [1440,390]) {
+    await foreignPage.setViewportSize({width,height:900})
+    await foreignPage.getByRole('button',{name:'Adaugă Manual',exact:false}).click()
+    const createDialog=foreignPage.getByRole('dialog')
+    await expect(createDialog.locator('#manual-presence')).toHaveValue('')
+    await expect(createDialog.locator('button[type=submit]')).toBeDisabled()
+    await createDialog.locator('#manual-presence').selectOption('false')
+    await expect(createDialog.locator('button[type=submit]')).toBeEnabled()
+    await createDialog.locator('#manual-presence').selectOption('true')
+    await expect(createDialog).toContainText('Se înregistrează sosirea la ora confirmării.')
+    await foreignPage.screenshot({path:'/tmp/parking-explicit-presence-'+width+'.png'})
+    await createDialog.getByRole('button',{name:'Anulează',exact:true}).click()
+  }
+  await foreignPage.goto('http://localhost:3182/admin/dashboard/ocupare')
+  const occupiedEntry=foreignPage.getByRole('row').filter({hasText:'ENTRY01'})
+  await expect(occupiedEntry).toContainText('25.10.2026, 12:05:00')
+  await expect(occupiedEntry).not.toContainText('15:05:00')
+  await foreignPage.emulateMedia({media:'print'})
+  await expect(occupiedEntry).toContainText('25.10.2026, 12:05:00')
+  await foreignPage.emulateMedia({media:'screen'})
+  console.log('PASS arrival correction preserves occupancy, explicit manual presence desktop/mobile, Romania civil times and print in foreign timezone')
   await foreignPage.close()
 
   // Missing arrival requires the explicit confirmation on the actual Occupancy page.
@@ -215,7 +260,8 @@ let server, browser, logs = ''
   for (const width of [1440,390]) {
     const id='plate-ui-'+width, plate='EDIT'+width, target='FIX'+width
     await db.doc('bookings/'+id).set({...base,licensePlate:plate,createdAt:new Date('2026-10-25T10:00:00Z'),lpr:{isInside:true,visitId:id,arrivedAt:'2026-10-20T10:00:00Z',lastSeenAt:'2026-10-20T10:00:00Z',lastEventType:'entry'}})
-    await db.doc('lpr_plate_state/'+plate).set({bookingId:id,visitId:id,isInside:true,lastEventAt:'2026-10-20T10:00:00Z',lastEventType:'entry'})
+    // Mobile fixture is a historical stay with no plate pointer at all.
+    if(width===1440)await db.doc('lpr_plate_state/'+plate).set({bookingId:id,visitId:id,isInside:true,lastEventAt:'2026-10-20T10:00:00Z',lastEventType:'entry'})
     await page.setViewportSize({width:1440,height:1000});await page.goto('http://localhost:3182/admin/dashboard/bookings')
     await page.getByRole('row').filter({hasText:plate}).getByRole('button').last().click()
     await page.getByRole('menuitem',{name:'Modifică nr. înmatriculare',exact:true}).click()
@@ -240,6 +286,7 @@ let server, browser, logs = ''
     const changed=(await db.doc('bookings/'+id).get()).data();assert.equal(changed.licensePlate,target);assert.equal(changed.lpr.isInside,true)
     assert.equal((await db.doc('lpr_plate_state/'+target).get()).data().bookingId,id)
     assert.equal((await db.doc('lpr_plate_state/'+plate).get()).data().isInside,false)
+    assert.equal((await db.doc('lpr_plate_state/'+plate).get()).data().plateCorrection.bookingId,id)
     console.log('PASS plate correction UI: duplicate, explicit confirmation, changed context, atomic pointer, width '+width)
   }
   // Ambiguous receipts visibly warn about uncertainty; confirmation is audited, count unaffected.
@@ -257,6 +304,26 @@ let server, browser, logs = ''
   await expect(attention).toHaveCount(0)
   assert.equal((await db.doc('lpr_events/ui-review').get()).data().review.uid,'admin-fixture')
   console.log('PASS LPR attention visible, requires reconciliation confirmation, audit saved')
+
+  // Actual camera endpoint → guards → real Occupancy warning text, on both widths.
+  const getOccupancy=async()=>(await fetch('http://localhost:3182/api/admin/occupancy',{headers:{Authorization:'Bearer admin'}})).json()
+  const beforeCamera=(await getOccupancy()).occupiedCount
+  async function cameraReceipt(plate,type,at) {
+    const r=await fetch('http://localhost:3182/NotificationInfo/TollgateInfo',{method:'POST',headers:{Authorization:'Bearer browser-fixture-camera','Content-Type':'application/json'},body:JSON.stringify({Picture:{Plate:{PlateNumber:plate},SnapInfo:{DeviceID:type==='entry'?'intrare_1':'iesire_1',AccurateTime:at}}})})
+    assert.equal(r.status,200);return r.json()
+  }
+  await cameraReceipt('UIORDER','exit','2026-10-25T12:00:00Z')
+  assert.equal((await cameraReceipt('UIORDER','entry','2026-10-25T10:00:00Z')).warning,'later_exit_requires_review')
+  assert.equal((await cameraReceipt('EDIT390','entry','2026-10-21T10:00:00Z')).warning,'plate_corrected_event_requires_review')
+  assert.equal((await getOccupancy()).occupiedCount,beforeCamera)
+  for(const width of [1440,390]) {
+    await page.setViewportSize({width,height:width===390?844:1000});await page.goto('http://localhost:3182/admin/dashboard/ocupare')
+    await attention.locator('summary').click()
+    await expect(attention).toContainText('Există deja o ieșire ulterioară. Intrarea veche nu a redeschis șederea')
+    await expect(attention).toContainText('Citire întârziată pentru un număr corectat. Nu s-a creat o prezență suplimentară')
+    await page.screenshot({path:'/tmp/parking-two-fixes-attention-'+width+'.png',fullPage:true})
+  }
+  console.log('PASS reverse delivery and historical plate correction through camera API and Occupancy UI; count preserved, desktop/mobile warnings')
 
   // Operator access through the real route/authorization, on desktop and mobile.
   await page.evaluate(() => localStorage.setItem('fixtureRole', 'entriesOperator'))

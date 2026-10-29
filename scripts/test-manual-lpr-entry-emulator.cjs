@@ -40,7 +40,7 @@ const seed=(id='active',patch={})=>db.doc('bookings/'+id).set({...base,...patch}
 const read=async(id='active')=>(await db.doc('bookings/'+id).get()).data()
 const count=async()=>(await db.doc('config/parkingLive').get()).data().occupiedCount
 const open=async()=> (await db.collection('bookings').get()).docs.filter(d=>getLprPresenceState(d.data()).isEffectivelyInside)
-const input=(ctx,patch={})=>({bookingId:ctx.booking.id,version:ctx.version,requestId:require('node:crypto').randomUUID(),date:'2026-07-16',time:'10:00:00',...patch})
+const input=(ctx,patch={})=>({entryMode:ctx.inside?"correct_arrival":"new_visit",confirmReentry:!ctx.inside&&!!(ctx.arrival||ctx.departure),bookingId:ctx.booking.id,version:ctx.version,requestId:require('node:crypto').randomUUID(),date:'2026-07-16',time:'10:00:00',...patch})
 // Execute the actual server-action function body; external parking transport is a fake.
 // This exercises auth/order of operations without importing unrelated payment integrations.
 const source=ts.createSourceFile('actions.ts',fs.readFileSync(root+'/app/actions/booking-actions.ts','utf8'),ts.ScriptTarget.Latest,true)
@@ -191,6 +191,15 @@ async function rejected(p,code){await assert.rejects(p,e=>e.code===code)}
    assert.equal((await db.collection('lpr_events').get()).size,0);assert.equal((await db.collection('lpr_plate_state').get()).size,0);assert.equal(await count(),0)
   })
  }
+ for (const presence of [undefined,'','yes','TRUE']) await check('server action rejects missing/invalid explicit presence: '+String(presence),async()=>{
+  externalCalls=0;const f=form();if(presence===undefined)f.delete('manualIsInside');else f.set('manualIsInside',presence)
+  const result=await actionModule.createManualBooking(f);assert.equal(result.success,false);assert.match(result.message,/Alege explicit/)
+  assert.equal(externalCalls,0);assert.equal((await db.collection('bookings').get()).size,0);assert.equal(await count(),0)
+ })
+ await check('server action explicit absent creates reservation without presence',async()=>{
+  externalCalls=0;const f=form();f.set('manualIsInside','false');const r=await actionModule.createManualBooking(f)
+  assert.equal(r.success,true);assert.equal((await open()).length,0);assert.equal(await count(),0);assert.equal((await read(r.bookingId)).lpr,undefined)
+ })
  await check('server action rejects unauthenticated manual creation before Firestore/API',async()=>{
   externalCalls=0;const result=await actionModule.createManualBooking(form(''))
   assert.equal(result.success,false);assert.equal(externalCalls,0);assert.equal((await db.collection('bookings').get()).size,0)

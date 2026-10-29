@@ -4,7 +4,8 @@ import { FieldValue } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
 import { getLprPresenceState, lprTimestampToMillis } from "@/lib/lpr-presence"
 import { normalizeLicensePlate } from "@/lib/utils"
-import { writeLprVisit } from "@/lib/lpr-visit.server"
+import { isBeforePlateCorrection, isLaterKnownExit } from "@/lib/lpr-entry-evidence"
+import { writeLprVisit, correctLprArrival } from "@/lib/lpr-visit.server"
 import { inLprBookingWindow, LPR_ACTIVE_STATUSES } from "@/lib/lpr-booking-window"
 import { ManualExitError, manualExitClock, parseManualExitClock, readManualLprContext } from "@/lib/manual-lpr-exit.server"
 import type { ManualExitSaveInput } from "@/lib/manual-lpr-exit-contract"
@@ -19,22 +20,37 @@ function checkEntry(booking: any, at: string, now: string, latest: number | null
     if (booking.status !== "unmatched_lpr" && !inLprBookingWindow(booking, Date.parse(at))) fail("ENTRY_OUTSIDE_PERIOD", "Intrarea nu corespunde perioadei rezervării. Selectează rezervarea corectă sau corectează perioada.")
   }
 }
-async function latestForPlate(tx: FirebaseFirestore.Transaction, plate: string, state: any, booking: any) {
-  const history = await tx.get(adminDb.collection("bookings").where("licensePlate", "==", plate))
-  const times = [lprTimestampToMillis(state?.lastEventAt), ...[booking, ...history.docs.map(d => d.data())].flatMap(b => [b.lpr?.arrivedAt, b.lpr?.departedAt, b.lpr?.lastSeenAt].map(lprTimestampToMillis))].filter((n): n is number => n !== null)
+async function validatePlateEvidence(tx: FirebaseFirestore.Transaction, plate: string, state: any, booking: any, at: string, now: string, newVisit: boolean) {
+  const eventMs = Date.parse(at)
+  if (isBeforePlateCorrection(state, eventMs)) fail("PLATE_CORRECTED", "Necesită verificare ADMIN: numărul a fost corectat pentru această ședere. Selectează numărul și rezervarea corecte.")
+  const [history, receipts] = await Promise.all([
+    tx.get(adminDb.collection("bookings").where("licensePlate", "==", plate)),
+    tx.get(adminDb.collection("lpr_events").where("normalizedPlate", "==", plate)),
+  ])
+  // Unlike automatic queue recovery, an operator must resolve a contradictory
+  // pending exit before declaring an earlier arrival as a new physical presence.
+  if (receipts.docs.some(d => isLaterKnownExit(d.data(), eventMs, Date.parse(now), true))) {
+    fail("LATER_EXIT", "Necesită verificare ADMIN: există o ieșire primită la aceeași oră sau după intrarea indicată. Verifică evenimentele LPR înainte de salvare.")
+  }
+  const bookings = [booking, ...history.docs.map(d => d.data())]
+  const departures = bookings.map(b => lprTimestampToMillis(b.lpr?.departedAt)).filter((n): n is number => n !== null)
+  if (newVisit && departures.some(n => Math.floor(n / 1000) === Math.floor(eventMs / 1000))) {
+    fail("AMBIGUOUS_REENTRY", "Intrarea și ieșirea anterioară sunt în aceeași secundă. Verifică ora reintrării reale.")
+  }
+  const times = [lprTimestampToMillis(state?.lastEventAt), ...bookings.flatMap(b => [b.lpr?.arrivedAt, b.lpr?.departedAt, b.lpr?.lastSeenAt].map(lprTimestampToMillis))].filter((n): n is number => n !== null)
   return times.length ? Math.max(...times) : null
 }
-function auditEntry(tx: FirebaseFirestore.Transaction, ref: FirebaseFirestore.DocumentReference, eventRef: FirebaseFirestore.DocumentReference, plate: string, at: string, visitId: string, actor: Actor, extra: Record<string, unknown> = {}) {
+function auditEntry(tx: FirebaseFirestore.Transaction, ref: FirebaseFirestore.DocumentReference, eventRef: FirebaseFirestore.DocumentReference, plate: string, at: string, visitId: string | null, actor: Actor, extra: Record<string, unknown> = {}) {
   const audit = { matchedBookingId: ref.id, plateNumber: plate, normalizedPlate: plate, eventType: "entry", visitId,
-    deviceId: "manual_admin", direction: "manual", snapTime: at, accurateTime: at, manual: true, adminUid: actor.uid, adminEmail: actor.email }
+    deviceId: "manual_admin", direction: "manual", eventTime: at, snapTime: at, accurateTime: at, manual: true, adminUid: actor.uid, adminEmail: actor.email }
   tx.set(eventRef, { ...audit, associationStatus: "manual", receivedAt: FieldValue.serverTimestamp(), ...extra })
-  tx.set(ref.collection("gateEvents").doc(eventRef.id), { ...audit, lprEventId: eventRef.id, createdAt: FieldValue.serverTimestamp() })
+  tx.set(ref.collection("gateEvents").doc(eventRef.id), { ...audit, ...extra, lprEventId: eventRef.id, createdAt: FieldValue.serverTimestamp() })
 }
 export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) {
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestId || "")) fail("INVALID_REQUEST", "Identificator de salvare invalid.")
   const eventRef = adminDb.collection("lpr_events").doc(`manual_entry_${input.requestId}`)
   const fingerprint = createHash("sha256").update(JSON.stringify({ bookingId: input.bookingId, version: input.version, actor: actor.uid,
-    now: input.useServerNow === true, date: input.useServerNow === true ? null : input.date, time: input.useServerNow === true ? null : input.time, overwrite: input.confirmOverwrite === true })).digest("hex")
+    now: input.useServerNow === true, date: input.useServerNow === true ? null : input.date, time: input.useServerNow === true ? null : input.time, overwrite: input.confirmOverwrite === true, entryMode: input.entryMode, reentry: input.confirmReentry === true })).digest("hex")
   return adminDb.runTransaction(async tx => {
     const receipt = await tx.get(eventRef)
     if (receipt.exists) {
@@ -44,6 +60,11 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
     const { ref, b, plate, context, state } = await readManualLprContext(tx, input.bookingId)
     if (context.version !== input.version) fail("CONTEXT_CHANGED", "Datele s-au schimbat. Reîncarcă și verifică șederea înainte de salvare.")
     if (context.duplicates.length) fail("DUPLICATE_PRESENCE", "Necesită verificare ADMIN: numărul este deja prezent pe altă rezervare. Intrarea nu a fost salvată.")
+    const expectedMode = context.inside ? "correct_arrival" : "new_visit"
+    if (input.entryMode !== expectedMode) fail("ENTRY_MODE_REQUIRED", context.inside
+      ? "Mașina este deja prezentă. Folosește corectarea orei intrării, fără o ședere nouă."
+      : "Pentru o mașină absentă trebuie confirmată o intrare nouă. Corectarea orei nu poate redeschide șederea.")
+    if (!context.inside && context.hasPreviousVisit && input.confirmReentry !== true) fail("CONFIRM_REENTRY", "Confirmă că mașina a reintrat fizic. O intrare nouă va ocupa un loc.")
     if (context.inside && input.confirmOverwrite !== true) fail("CONFIRM_OVERWRITE", "Confirmă modificarea intrării existente.")
     const now = manualExitClock()
     let at = now
@@ -51,13 +72,17 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
       try { at = parseManualExitClock(input.date, input.time) }
       catch { throw new ManualExitError("INVALID_TIME", "Completează o dată și o oră valide pentru sosirea reală.") }
     }
-    const latest = await latestForPlate(tx, plate, state.data(), b)
+    const latest = await validatePlateEvidence(tx, plate, state.data(), b, at, now, !context.inside)
     checkEntry(b, at, now, latest)
-    const visitId = context.inside ? b.lpr?.visitId || eventRef.id : eventRef.id
+    if (context.inside && !getLprPresenceState({ ...b, lpr: { ...b.lpr, arrivedAt: at } }).isEffectivelyInside) {
+      fail("AMBIGUOUS_CORRECTION", "Necesită verificare ADMIN: ora corectată contrazice ieșirea din evidență. Prezența nu a fost modificată.")
+    }
+    const visitId = context.inside ? b.lpr?.visitId || null : eventRef.id
     const result = { lprEventId: eventRef.id, gateEventId: eventRef.id,
-      ...writeLprVisit(tx, adminDb, { ref, data: b, plate, at, eventType: "entry", eventId: eventRef.id, visitId,
-        deviceId: "manual_admin", manual: true, actor, correctArrival: true, lprExtra: { lastEventAccurateTime: at } }) }
-    auditEntry(tx, ref, eventRef, plate, at, visitId, actor, { requestFingerprint: fingerprint, result, confirmations: { overwrite: input.confirmOverwrite === true } })
+      ...(context.inside ? correctLprArrival(tx, ref, b, at, actor) : writeLprVisit(tx, adminDb, { ref, data: b, plate, at, eventType: "entry", eventId: eventRef.id, visitId,
+        deviceId: "manual_admin", manual: true, actor, lprExtra: { lastEventAccurateTime: at } })) }
+    auditEntry(tx, ref, eventRef, plate, at, visitId, actor, { requestFingerprint: fingerprint, result, eventType: context.inside ? "arrival_correction" : "entry", entryMode: input.entryMode,
+      previousLpr: b.lpr || null, confirmations: { overwrite: input.confirmOverwrite === true, reentry: input.confirmReentry === true } })
     return result
   })
 }
@@ -66,6 +91,7 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
  * The shared plate document serializes this with camera and other admin entries.
  */
 export async function createManualBookingRecord(data: Record<string, any>, inside: boolean, actor: Actor) {
+  if (typeof inside !== "boolean") fail("PRESENCE_REQUIRED", "Alege explicit dacă mașina este în parcare sau este doar o rezervare.")
   const plate = normalizeLicensePlate(String(data.licensePlate || ""))
   if (!plate) fail("MISSING_PLATE", "Numărul de înmatriculare este obligatoriu.")
   const ref = adminDb.collection("bookings").doc(), eventRef = adminDb.collection("lpr_events").doc()
@@ -74,7 +100,7 @@ export async function createManualBookingRecord(data: Record<string, any>, insid
     const stateRef = adminDb.collection("lpr_plate_state").doc(plate)
     const [state, open] = await Promise.all([tx.get(stateRef), tx.get(adminDb.collection("bookings").where("lpr.isInside", "==", true))])
     if (open.docs.some(d => normalizeLicensePlate(String(d.data().licensePlate || "")) === plate && getLprPresenceState(d.data()).isEffectivelyInside)) fail("DUPLICATE_PRESENCE", "Necesită verificare ADMIN: acest număr este deja în parcare. Rezervarea nu a fost creată; verifică înregistrarea existentă.")
-    const at = manualExitClock(), latest = await latestForPlate(tx, plate, state.data(), {})
+    const at = manualExitClock(), latest = await validatePlateEvidence(tx, plate, state.data(), {}, at, at, true)
     checkEntry(data, at, at, latest)
     writeLprVisit(tx, adminDb, { ref, data: {}, plate, at, eventType: "entry", eventId: eventRef.id, visitId: eventRef.id,
       deviceId: "manual_admin", manual: true, actor, create: true, patch: { ...data, licensePlate: plate }, lprExtra: { lastEventAccurateTime: at } })

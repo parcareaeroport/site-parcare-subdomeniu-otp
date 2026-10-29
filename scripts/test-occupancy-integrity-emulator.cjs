@@ -51,7 +51,7 @@ const observed=async()=>{const r=await occupancy(new Request('http://localhost/a
 const count=async()=>(await observed()).occupiedCount
 const counter=async()=>(await db.doc('config/parkingLive').get()).data().occupiedCount
 const postCamera=(at,token='fixture-camera-secret',device='intrare_1')=>cameraHTTP(new NextRequest('http://localhost/NotificationInfo/TollgateInfo',{method:'POST',headers:token?{Authorization:'Bearer '+token}:{},body:JSON.stringify({Picture:{Plate:{PlateNumber:'TEST01'},SnapInfo:{DeviceID:device,AccurateTime:at}}})}))
-const input=(ctx,patch={})=>({bookingId:ctx.booking.id,version:ctx.version,requestId:randomUUID(),date:'2026-07-16',time:'11:00:00',...patch})
+const input=(ctx,patch={})=>({entryMode:ctx.inside?"correct_arrival":"new_visit",confirmReentry:!ctx.inside&&!!(ctx.arrival||ctx.departure),bookingId:ctx.booking.id,version:ctx.version,requestId:randomUUID(),date:'2026-07-16',time:'11:00:00',...patch})
 const correction=async(plate='TEST02')=>({bookingId:'active',plate,...await preparePlateChange('active',plate),confirmPresent:true})
 // Only the commercial modification eligibility clock is fixed; LPR timestamps remain independently validated.
 const realNow=Date.now

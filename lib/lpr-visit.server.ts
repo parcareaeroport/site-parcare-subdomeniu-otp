@@ -11,7 +11,7 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
   eventType: "entry" | "exit"; eventId: string; visitId?: string | null
   deviceId: string | null; manual?: boolean; actor?: { uid: string; email: string | null }
   lprExtra?: Record<string, unknown>; patch?: Record<string, unknown>
-  create?: boolean; updatePointer?: boolean; correctArrival?: boolean; unmatched?: boolean
+  create?: boolean; updatePointer?: boolean; unmatched?: boolean
 }) {
   const { ref, data, plate, at, eventType } = input
   const wasInside = getLprPresenceState(data).isEffectivelyInside
@@ -26,7 +26,6 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
     lastSeenPlateNumber: plate, manualOverride: input.manual === true,
     ...(input.actor ? { manualOverrideAt: FieldValue.serverTimestamp(), manualOverrideByUid: input.actor.uid, manualOverrideByEmail: input.actor.email } : {}),
     ...(eventType === "entry" && !wasInside ? { arrivedAt: at, departedAt: null } : {}),
-    ...(eventType === "entry" && input.correctArrival ? { arrivedAt: at } : {}),
     ...(eventType === "exit" ? { departedAt: at } : {}),
   }
   const patch = { ...input.patch, lpr, lastUpdated: FieldValue.serverTimestamp(),
@@ -47,4 +46,18 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
     },
   }, { merge: true })
   return { visitId, occupancyChanged: delta === 1 ? "incremented" : delta === -1 ? "decremented" : "none" }
+}
+
+/** An arrival-time correction is not a gate crossing: preserve the exact presence,
+ * visit, departure, latest observation and plate pointer, including legacy millis.
+ * The caller validates/version-checks the context and writes the correction audit.
+ */
+export function correctLprArrival(tx: FirebaseFirestore.Transaction, ref: FirebaseFirestore.DocumentReference,
+  data: any, at: string, actor: { uid: string; email: string | null }) {
+  tx.update(ref, {
+    "lpr.arrivedAt": at, "lpr.arrivalCorrectedAt": FieldValue.serverTimestamp(),
+    "lpr.arrivalCorrectedByUid": actor.uid, "lpr.arrivalCorrectedByEmail": actor.email,
+    lastUpdated: FieldValue.serverTimestamp(),
+  })
+  return { visitId: data.lpr?.visitId ?? null, occupancyChanged: "none" }
 }
