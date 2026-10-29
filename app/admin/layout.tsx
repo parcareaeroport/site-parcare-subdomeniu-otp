@@ -4,6 +4,7 @@ import Link from "next/link"
 import Image from "next/image"
 import { useRouter, usePathname } from "next/navigation"
 import { AuthProvider, useAuth } from "@/context/auth-context"
+import ParkingFullBanner from "@/components/parking-full-banner"
 import { Button } from "@/components/ui/button"
 import {
   LayoutDashboard,
@@ -180,6 +181,7 @@ function AdminLayoutContent({ children }: { children: ReactNode }) {
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col overflow-hidden">
+          <ParkingFullBanner />
           {/* Mobile Header */}
           <div className="md:hidden bg-white shadow-sm border-b px-4 py-3 flex items-center justify-between">
             <Button
