@@ -27,9 +27,27 @@ for(const [name,rows,limit] of [
  const full=forecast(rows,limit,snapshot.now,{from:result.from,to:result.to,simulator:{startDate:result.from,startTime:'00:00',endDate:result.to,endTime:'00:00'}})
  assert.equal(full.days.length,30)
  assert.deepEqual(result.fullDays,full.days.filter(d=>!d.available).map(d=>d.interval.startDate))
- assert.deepEqual(Object.keys(result).sort(),['calculatedAt','from','fullDays','to'])
+ assert.deepEqual(result.warningDays,full.days.filter(d=>d.totalSpots-d.conflictingBookings<=5).map(d=>d.interval.startDate))
+ assert.deepEqual(Object.keys(result).sort(),['calculatedAt','from','fullDays','to','warningDays'])
  if(name==='late'||name==='unmatched')assert.equal(result.fullDays.length,30)
  if(name==='empty'||name==='excluded')assert.equal(result.fullDays.length,0)
+})
+for(const remaining of [6,5,4,0,-1])test('warning boundary: '+remaining+' places remaining',()=>{
+ const rows=Array.from({length:290-remaining},(_,i)=>booking('b'+i))
+ const result=summary(rows,290,snapshot.now)
+ assert.deepEqual(result.warningDays,remaining<=5?['2030-03-29']:[])
+ assert.deepEqual(result.fullDays,remaining<=0?['2030-03-29']:[])
+})
+for(const kind of ['late','unmatched','mixed'])test('warning uses reduced capacity: '+kind,()=>{
+ const reductions=Array.from({length:5},(_,i)=>booking('reduction'+i,
+  kind==='late'||(kind==='mixed'&&i<3)
+   ?{endDate:'2030-03-27',lpr:{isInside:true}}
+   :{status:'unmatched_lpr',lpr:{isInside:true}}))
+ for(const count of [279,280]){
+  const result=summary([...reductions,...Array.from({length:count},(_,i)=>booking('b'+i))],290,snapshot.now)
+  assert.deepEqual(result.warningDays,count===280?['2030-03-29']:[])
+  assert.deepEqual(result.fullDays,[])
+ }
 })
 for(const [now,from,to] of [
  ['2030-12-31T22:30:00Z','2031-01-02','2031-01-31'],

@@ -41,6 +41,8 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
   const [insideSnap, state] = await Promise.all([
     tx.get(adminDb.collection("bookings").where("lpr.isInside", "==", true)), tx.get(stateRef),
   ])
+  const linkedId = state.data()?.bookingId
+  const linked = typeof linkedId === "string" && linkedId !== bookingId && !linkedId.includes("/") ? await tx.get(adminDb.collection("bookings").doc(linkedId)) : null
   const open = insideSnap.docs.filter(d => normalizeLicensePlate(String(d.data().licensePlate || "")) === plate && getLprPresenceState(d.data()).isEffectivelyInside).sort((a, b) => a.id.localeCompare(b.id))
   const lpr = b.lpr || {}, inside = getLprPresenceState(b).isEffectivelyInside
   const arrived = validMillis(lpr.arrivedAt), departed = validMillis(lpr.departedAt)
@@ -50,15 +52,15 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
   const version = createHash("sha256").update(JSON.stringify({
     id: snap.id, version: snap.updateTime?.toDate().toISOString(), nanos: snap.updateTime?.nanoseconds,
     open: open.map(d => [d.id, d.updateTime?.seconds, d.updateTime?.nanoseconds]),
-    pointer: [state.updateTime?.seconds, state.updateTime?.nanoseconds],
+    pointer: [state.updateTime?.seconds, state.updateTime?.nanoseconds], linked:[linked?.id,linked?.updateTime?.seconds,linked?.updateTime?.nanoseconds],
   })).digest("hex")
   const context: ManualExitContext = {
     booking: row(snap.id, b), version, serverNow: manualExitClock(),
     arrival: arrivalMs === null ? null : new Date(arrivalMs).toISOString(),
-    departure: iso(lpr.departedAt), inside,
+    departure: iso(lpr.departedAt), inside, lastEntry:lastEntry === null ? null : new Date(lastEntry).toISOString(),
     duplicates: open.length > 1 ? open.map(d => row(d.id, d.data())) : open.filter(d => d.id !== snap.id).map(d => row(d.id, d.data())),
   }
-  return { ref, b, plate, context, state, stateRef }
+  return { ref, b, plate, context, state, stateRef, linked }
 }
 export async function prepareManualExit(bookingId: string) {
   return adminDb.runTransaction(async tx => (await readManualLprContext(tx, bookingId)).context)
@@ -80,13 +82,21 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       if (receipt.data()?.requestFingerprint !== fingerprint) throw new ManualExitError("REQUEST_REUSED", "Identificatorul salvării a fost deja folosit.", 409)
       return receipt.data()!.result
     }
-    const { ref, b, plate, context, state, stateRef } = await readManualLprContext(tx, input.bookingId)
+    const { ref, b, plate, context, state, linked } = await readManualLprContext(tx, input.bookingId)
     if (context.version !== input.version) throw changed()
     const now = manualExitClock()
     const at = input.useServerNow === true ? now : parseManualExitClock(input.date, input.time)
     if (at > now) throw new ManualExitError("FUTURE_EXIT", "Ieșirea nu poate fi în viitor. Introdu ora plecării reale.")
     // Inputs have second precision; camera receipts may additionally contain milliseconds.
     if (context.arrival && Math.floor(Date.parse(at) / 1000) < Math.floor(Date.parse(context.arrival) / 1000)) throw new ManualExitError("EXIT_BEFORE_ENTRY", "Ieșirea nu poate fi înaintea intrării pentru această ședere.")
+    const lastEntry = String(b.lpr?.lastEventType || "").includes("entry") ? validMillis(b.lpr?.lastSeenAt) : null
+    if (lastEntry !== null && Math.floor(Date.parse(at) / 1000) < Math.floor(lastEntry / 1000)) throw new ManualExitError("EXIT_BEFORE_LAST_ENTRY", "Ieșirea nu poate fi înaintea ultimei detectări de intrare. Verifică ora plecării reale.")
+    // A correction to a closed visit cannot move its departure into a later visit.
+    const pointer = state.data()
+    const pointerTime = validMillis(pointer?.lastEventAt)
+    const otherVisit = pointer && (pointer.bookingId !== ref.id || pointer.visitId !== b.lpr?.visitId)
+    const nextVisitStart = validMillis(linked?.data()?.lpr?.arrivedAt) ?? pointerTime
+    if (!context.inside && otherVisit && nextVisitStart !== null && Date.parse(at) >= nextVisitStart) throw new ManualExitError("EXIT_OVERLAPS_NEW_VISIT", "Ieșirea corectată se suprapune unei șederi mai noi. Necesită verificare ADMIN.", 409)
     if (!context.arrival && input.confirmMissingArrival !== true) throw new ManualExitError("CONFIRM_MISSING_ARRIVAL", "Confirmă plecarea: ora intrării nu poate fi verificată.")
     if (context.duplicates.length && input.confirmDuplicates !== true) throw new ManualExitError("CONFIRM_DUPLICATES", "Necesită verificare ADMIN. Confirmă înregistrarea care trebuie marcată ca ieșită.")
     if (!context.inside && context.departure && input.confirmOverwrite !== true) throw new ManualExitError("CONFIRM_OVERWRITE", "Confirmă suprascrierea ieșirii existente.")
@@ -101,7 +111,7 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       deviceId: "manual_admin", manual: true, actor,
       lprExtra: { lastEventAccurateTime: at },
       // A historical correction must never close a different visit's pointer.
-      updatePointer: state.exists && state.data()?.bookingId === ref.id && state.data()?.visitId === b.lpr?.visitId,
+      updatePointer: state.exists && !otherVisit && (pointerTime === null || Date.parse(at) >= pointerTime),
     })
     return result
   })

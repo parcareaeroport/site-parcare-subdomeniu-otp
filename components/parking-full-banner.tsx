@@ -41,14 +41,14 @@ export default function ParkingFullBanner() {
 
   if (!owner || state?.owner !== owner) return null
   if (state.error) return <div role="alert" className="shrink-0 bg-amber-100 px-4 py-2 text-center text-sm text-amber-950">Avertizarea de ocupare nu poate fi actualizată</div>
-  const days = state.summary?.fullDays ?? []
+  const days = state.summary?.warningDays ?? []
   if (!days.length) return null
   const shown = days.slice(0, 5).map(date => date.split("-").reverse().join("."))
   const remaining = days.length - shown.length
   return (
     <div role="status" className="sticky top-0 z-40 w-full shrink-0 bg-red-600 text-white">
       <div className="mx-auto max-w-7xl px-4 py-2 text-center text-sm font-semibold">
-        Atenție: în următoarele 30 de zile, parcare completă în {shown.join(", ")}{remaining > 0 ? ` (+${remaining} zile)` : ""}.{" "}
+        Atenție: conform estimării, în următoarele 30 de zile rămân cel mult 5 locuri disponibile în {shown.join(", ")}{remaining > 0 ? ` (+${remaining} zile)` : ""}.{" "}
         {(role === "admin" || role === "employee") && (
           <Link href="/admin/dashboard/ocupare?tab=forecast" className="underline underline-offset-2">Vezi mai multe aici</Link>
         )}

@@ -6,6 +6,7 @@ export type ParkingFullSummary = {
   to: string
   calculatedAt: string
   fullDays: string[]
+  warningDays: string[]
 }
 
 export function calculateParkingFullSummary(rows: ReservationCheckRow[], limit: number, now: number): ParkingFullSummary {
@@ -24,5 +25,6 @@ export function calculateParkingFullSummary(rows: ReservationCheckRow[], limit: 
     from, to, simulator: { startDate: from, startTime: "00:00", endDate: offset(2), endTime: "00:00" },
   })
   return { from, to, calculatedAt: forecast.calculatedAt,
-    fullDays: forecast.days.filter(day => !day.available).map(day => day.interval.startDate) }
+    fullDays: forecast.days.filter(day => !day.available).map(day => day.interval.startDate),
+    warningDays: forecast.days.filter(day => day.totalSpots - day.conflictingBookings <= 5).map(day => day.interval.startDate) }
 }

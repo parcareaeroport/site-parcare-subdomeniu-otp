@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Loader2, Printer, RefreshCw, Info } from "lucide-react"
+import { LprEventReview, type LprAttention } from "@/components/admin/lpr-event-review"
 import { OccupancyCounter } from "@/components/admin/occupancy-counter"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { OccupancyForecast } from "@/components/admin/occupancy-forecast"
@@ -45,6 +46,7 @@ type PlateItem = {
 }
 
 type ApiResponse = {
+  lprAttention?: LprAttention
   occupiedCount: number
   maxLimit: number
   plates: PlateItem[]
@@ -461,6 +463,8 @@ export default function OccupancyPage() {
           {/* IMPORTANT: on /ocupare we want strict LPR reality: count must match table length */}
           {data ? <OccupancyCounter title="Ocupare Curentă" countOverride={lprCount} /> : <p role="status">Se încarcă ocuparea...</p>}
           <p className="text-sm text-gray-500" aria-live="polite">Actualizare automată la 15 secunde.{lastUpdated ? ` Ultima actualizare: ${new Date(lastUpdated).toLocaleTimeString("ro-RO", { timeZone: "Europe/Bucharest" })}.` : ""}</p>
+
+          {data?.lprAttention && <LprEventReview attention={data.lprAttention} onSaved={fetchData} />}
 
           <Card id="plates-table-section">
             <CardHeader>

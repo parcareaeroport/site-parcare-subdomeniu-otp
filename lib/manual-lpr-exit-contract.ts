@@ -4,6 +4,7 @@ export type ManualExitRow = {
 }
 export type ManualExitContext = {
   booking: ManualExitRow; version: string; serverNow: string
+  lastEntry?: string | null
   arrival: string | null; departure: string | null; inside: boolean
   duplicates: ManualExitRow[]
 }

@@ -154,7 +154,7 @@ async function rejected(p,code){await assert.rejects(p,e=>e.code===code)}
   assert.equal((await db.collection('bookings').get()).size,1);assert.equal(await count(),1)
  })
  await check('manual creation racing camera entry never creates two presences',async()=>{
-  const at=new Date(Date.parse(clock())+10000).toISOString()
+  const at=clock()
   const results=await Promise.allSettled([create(current(),true,actor),camera('entry',at)])
   for(const r of results) if(r.status==='rejected')assert.equal(r.reason.code,'DUPLICATE_PRESENCE')
   assert.equal((await open()).length,1);assert.equal(await count(),1)
@@ -210,7 +210,7 @@ async function rejected(p,code){await assert.rejects(p,e=>e.code===code)}
   externalStatus=503;externalCalls=0
   try{const result=await actionModule.createManualBooking(form());assert.equal(result.success,true);assert.equal(externalCalls,1)
    const b=await read(result.bookingId);assert.equal(b.status,'api_error');assert.equal(b.lpr.isInside,true);assert.equal(await count(),1)
-   const at=new Date(Date.parse(b.lpr.arrivedAt)+1000).toISOString();assert.equal((await camera('exit',at)).matchedBookingId,result.bookingId);assert.equal(await count(),0)
+   await new Promise(resolve=>setTimeout(resolve,1100));const at=clock();assert.equal((await camera('exit',at)).matchedBookingId,result.bookingId);assert.equal(await count(),0)
   }finally{externalStatus=200}
  })
  console.log(`${n} protected manual-entry scenarios passed`)

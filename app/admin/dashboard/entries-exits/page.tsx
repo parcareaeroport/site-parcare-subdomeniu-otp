@@ -11,7 +11,7 @@ import { RefreshCw, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { getDailyEntries, getDailyExits, type DailyEntryExit } from "@/lib/admin-stats"
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, serverTimestamp, updateDoc, where, limit } from "firebase/firestore"
+import { collection, doc, getDoc, getDocs, orderBy, query, updateDoc, where, limit } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -38,7 +38,6 @@ const ONLINE_GRACE_MINUTES = 60 // 1h bonus la ultima zi (online)
 
 const DEBUG_ROW_DETAILS = process.env.NEXT_PUBLIC_ADMIN_ROW_DEBUG === "true"
 const DEBUG_EXIT_SIM = process.env.NEXT_PUBLIC_ADMIN_EXIT_SIM === "true" || DEBUG_ROW_DETAILS
-const DEBUG_EXIT_SIM_WRITE = process.env.NEXT_PUBLIC_ADMIN_EXIT_SIM_WRITE === "true"
 
 // Toggle behavior for "Intrări întârziate":
 // - true: keep listed only until booking end date/time (new behavior)
@@ -296,7 +295,6 @@ export default function EntriesExitsPage() {
   const [simPlate, setSimPlate] = useState("SIM123")
   const [simPhone, setSimPhone] = useState("07")
   const [simPersons, setSimPersons] = useState("1")
-  const [simWriting, setSimWriting] = useState(false)
 
   const simPreview = useMemo(() => {
     try {
@@ -1081,114 +1079,6 @@ export default function EntriesExitsPage() {
     return Math.max(1, roundedUpDays) * 24 * 60
   }
 
-  const writeSimulatedExitToFirestore = async () => {
-    if (!DEBUG_EXIT_SIM_WRITE) return
-    if (!isAdmin) return
-    if (!user) return
-
-    const startDt = parseDateTime(simStartDate, simStartTime)
-    const endDt = parseDateTime(simEndDate, simEndTime)
-    if (!startDt || !endDt || endDt.getTime() <= startDt.getTime()) {
-      toast({
-        title: "Date invalide",
-        description: "Data/ora de ieșire trebuie să fie după data/ora de intrare.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const plateNormalized = normalizeLicensePlate(String(simPlate || "SIM"))
-
-    const endDate = simEndDate || simStartDate
-    const durationMinutes = computeDurationMinutesForBooking(simStartDate, simStartTime, endDate, simEndTime)
-    if (!durationMinutes) {
-      toast({
-        title: "Durată invalidă",
-        description: "Nu pot calcula durata rezervării (minute).",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const days = Math.max(1, Math.ceil(durationMinutes / (24 * 60)))
-    const amountFromTable = getExactPriceForDays(priceTable, days)
-
-    // Firestore document with the same shape as CompleteBookingData (createBookingWithFirestore)
-    // NOTE: This does NOT call Multipark; it is for testing UI behavior.
-    const bookingDoc: any = Object.fromEntries(
-      Object.entries({
-        // Core
-        licensePlate: plateNormalized,
-        startDate: simStartDate,
-        startTime: normalizeHHmm(simStartTime) ?? simStartTime,
-        endDate,
-        endTime: normalizeHHmm(simEndTime) ?? simEndTime,
-        clientName: "",
-        clientTitle: "",
-        clientEmail: undefined,
-        clientPhone: simPhone || undefined,
-        numberOfPersons: parseInt(String(simPersons || "1"), 10) || 1,
-
-        // LPR flags (so the booking is eligible for "Ieșiri" / carry-over late exits)
-        // NOTE: wp-card-booking docs typically don't have LPR yet; we add this only for exit-simulation visibility.
-        lpr: {
-          isInside: true,
-          arrivedAt: serverTimestamp(),
-        },
-
-        // Calculated
-        durationMinutes,
-        multiparkDurationMinutes: simType === "pay_on_site" ? undefined : computeMultiparkDurationMinutes(durationMinutes),
-        days,
-        amount: typeof amountFromTable === "number" ? amountFromTable : undefined,
-
-        // Payment
-        paymentIntentId: undefined,
-        paymentStatus: simType === "online" ? "paid" : "pending",
-
-        // Terms
-        termsAccepted: true,
-        termsAcceptedAt: serverTimestamp(),
-
-        // API (not called here)
-        apiBookingNumber: undefined,
-        apiSuccess: false,
-        apiErrorCode: undefined,
-        apiMessage: "ADMIN_SIM_TEST (no Multipark call)",
-        apiRequestPayload: "ADMIN_SIM_TEST",
-        apiResponseRaw: "ADMIN_SIM_TEST",
-        apiRequestTimestamp: serverTimestamp(),
-
-        // Status/source
-        status: simType === "pay_on_site" ? "confirmed_pay_on_site" : "confirmed_paid",
-        source: simType === "pay_on_site" ? "pay_on_site" : "webhook",
-
-        // Metadata
-        createdAt: serverTimestamp(),
-        lastUpdated: serverTimestamp(),
-      }).filter(([_, v]) => v !== undefined),
-    )
-
-    try {
-      setSimWriting(true)
-      const ref = await addDoc(collection(db, "bookings"), bookingDoc)
-      toast({
-        title: "Salvat în Firestore",
-        description: `Creat bookings/${ref.id}. Dă refresh ca să apară din baza de date.`,
-      })
-      setSimDialogOpen(false)
-      await loadData()
-    } catch (e: any) {
-      toast({
-        title: "Eroare la salvare",
-        description: e?.message ? String(e.message) : "Nu am putut salva rezervarea în Firestore.",
-        variant: "destructive",
-      })
-    } finally {
-      setSimWriting(false)
-    }
-  }
-
   const addSimulatedExit = () => {
     const startDt = parseDateTime(simStartDate, simStartTime)
     const endDt = parseDateTime(simEndDate, simEndTime)
@@ -1209,43 +1099,6 @@ export default function EntriesExitsPage() {
     setDebugDialog({ open: false, kind: "entry", row: null, loading: false, docData: null, computed: null, deleting: false, deleteConfirm: "" })
   }
 
-  const deleteDebugBooking = async () => {
-    if (!DEBUG_ROW_DETAILS) return
-    if (!isAdmin) return
-    const id = debugDialog.row?.id
-    if (!id) return
-
-    const docData = debugDialog.docData || {}
-    const plate = String(docData?.licensePlate || (debugDialog.row as any)?.licensePlate || "").trim().toUpperCase()
-    const confirmRaw = String(debugDialog.deleteConfirm || "").trim().toUpperCase()
-    const ok = confirmRaw === id.toUpperCase() || (plate && confirmRaw === plate)
-    if (!ok) {
-      toast({
-        title: "Confirmare invalidă",
-        description: `Tastează exact ID-ul rezervării sau numărul (${plate || "N/A"}) ca să permiți ștergerea.`,
-        variant: "destructive",
-      })
-      return
-    }
-
-    try {
-      setDebugDialog((s) => ({ ...s, deleting: true }))
-      await deleteDoc(doc(db, "bookings", id))
-      toast({
-        title: "Șters",
-        description: `Documentul bookings/${id} a fost șters din Firestore.`,
-      })
-      closeDebugDialog()
-      await loadData()
-    } catch (e: any) {
-      toast({
-        title: "Eroare la ștergere",
-        description: e?.message ? String(e.message) : "Nu am putut șterge documentul.",
-        variant: "destructive",
-      })
-      setDebugDialog((s) => ({ ...s, deleting: false }))
-    }
-  }
 
   const enrichedEntries = useMemo(() => entries.map((e) => enrichRow(e, "entry")), [entries])
   const enrichedExits = useMemo(() => [...exits, ...simulatedExits].map((e) => enrichRow(e, "exit")), [exits, simulatedExits])
@@ -1788,8 +1641,7 @@ export default function EntriesExitsPage() {
               <div className="rounded-md border bg-amber-50 border-amber-200 p-3 text-sm text-amber-900">
                 <div className="font-semibold">Notă</div>
                 <div>
-                  Acest dialog este pentru debugging. Ștergerea elimină doar documentul din `bookings/`.
-                  Nu șterge automat date din alte colecții (ex: `lpr_events`, `gateEvents`).
+                  Acest dialog afișează date pentru verificare. Nu modifică evidența parcării.
                 </div>
               </div>
 
@@ -1870,33 +1722,6 @@ export default function EntriesExitsPage() {
           )}
 
           <DialogFooter>
-            {DEBUG_ROW_DETAILS && isAdmin && debugDialog.row?.id && !debugDialog.loading && (
-              <div className="flex flex-col sm:flex-row gap-2 w-full sm:justify-between sm:items-center">
-                <div className="flex-1">
-                  <Input
-                    placeholder="Scrie ID-ul sau nr. înmatriculare pentru confirmare ștergere"
-                    value={debugDialog.deleteConfirm || ""}
-                    onChange={(e) => setDebugDialog((s) => ({ ...s, deleteConfirm: e.target.value }))}
-                    disabled={debugDialog.deleting}
-                  />
-                  <div className="text-[11px] text-gray-600 mt-1">
-                    Pentru a șterge: tastează ID-ul sau numărul{" "}
-                    <span className="font-semibold">
-                      {String(debugDialog.docData?.licensePlate || debugDialog.row?.licensePlate || "")}
-                    </span>
-                    .
-                  </div>
-                </div>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  onClick={deleteDebugBooking}
-                  disabled={debugDialog.deleting || !String(debugDialog.deleteConfirm || "").trim()}
-                >
-                  {debugDialog.deleting ? "Se șterge..." : "Șterge din Firestore"}
-                </Button>
-              </div>
-            )}
             <Button type="button" variant="outline" onClick={closeDebugDialog}>
               Închide
             </Button>
@@ -1911,7 +1736,6 @@ export default function EntriesExitsPage() {
             <DialogTitle>Simulare ieșire întârziată (front-end only)</DialogTitle>
             <DialogDescription>
               Nu se salvează în Firebase. Apare doar în tabelul „Ieșiri întârziate”.
-              {DEBUG_EXIT_SIM_WRITE && isAdmin ? " (Ai și opțiune de salvare test în Firebase.)" : ""}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 text-sm">
@@ -2045,23 +1869,6 @@ export default function EntriesExitsPage() {
             <Button type="button" variant="outline" onClick={() => setSimDialogOpen(false)}>
               Renunță
             </Button>
-            {DEBUG_EXIT_SIM_WRITE && isAdmin && user && (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={writeSimulatedExitToFirestore}
-                disabled={simWriting}
-              >
-                {simWriting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Se salvează...
-                  </>
-                ) : (
-                  "Salvează în Firebase (test)"
-                )}
-              </Button>
-            )}
             <Button type="button" onClick={addSimulatedExit}>
               Adaugă simulare
             </Button>

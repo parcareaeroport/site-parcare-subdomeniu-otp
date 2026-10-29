@@ -1,11 +1,12 @@
 import { normalizeLicensePlate } from "@/lib/utils"
 
 /**
- * Tollgate whitelist (NO Firebase):
+ * Static Tollgate whitelist:
  * - Set `LPR_TOLLGATE_WHITELIST` as comma/space separated plates.
  * - Example: `LPR_TOLLGATE_WHITELIST="B808CMD, DB04TEST"`
  *
- * This is used to short-circuit the Tollgate API before any Firestore read/write.
+ * The processor checks this alongside Firestore whitelist entries. Already-open
+ * counted stays still receive their exit; skipping is allowed only with no open stay.
  */
 function parseEnvList(envValue?: string): Set<string> {
   const raw = (envValue || "").trim()

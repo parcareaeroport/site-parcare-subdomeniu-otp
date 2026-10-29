@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { adminDb } from "@/lib/firebase-admin"
 import { cancelBooking } from "@/app/actions/booking-actions"
 import { isCancelledBooking } from "@/lib/booking-loyalty-reversal"
+import { getLprPresenceState } from "@/lib/lpr-presence"
 
 export const UNCERTAIN_CANCELLATION_MESSAGE = "Rezultatul anulării în Multipark este incert. Verificați rezervarea în Multipark înainte de a continua. Anularea nu va fi retrimisă automat."
 
@@ -26,13 +27,20 @@ export function cancellationBlock(data: FirebaseFirestore.DocumentData): Booking
 }
 
 /** Persist intent BEFORE the external request. An interrupted request must not be replayed blindly. */
-export async function prepareAdminCancellation(bookingId: string) {
+export function assertBookingCanBeDeleted(data: FirebaseFirestore.DocumentData) {
+  if (getLprPresenceState(data).isEffectivelyInside || data.lpr?.isInside === true) {
+    throw new BookingCancellationError("Mașina apare prezentă. Înregistrează și verifică ieșirea înainte de ștergerea rezervării.", 409, "VEHICLE_PRESENT")
+  }
+}
+
+export async function prepareAdminCancellation(bookingId: string, options: { deleting?: boolean } = {}) {
   const ref = adminDb.collection("bookings").doc(bookingId)
   const token = randomUUID()
   const initial = await adminDb.runTransaction(async tx => {
     const snap = await tx.get(ref)
     if (!snap.exists) throw new BookingCancellationError("Rezervarea nu a fost găsită.", 404)
     const data = snap.data()!
+    if (options.deleting) assertBookingCanBeDeleted(data)
     const blocked = cancellationBlock(data)
     if (blocked) throw blocked
     const attempted = requiresMultiparkCancellation(data)

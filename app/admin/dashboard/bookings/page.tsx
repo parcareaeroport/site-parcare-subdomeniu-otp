@@ -280,8 +280,12 @@ function BookingsPageContent() {
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null)
 
   const [isEditPlateDialogOpen, setIsEditPlateDialogOpen] = useState(false)
+  const [plateContext, setPlateContext] = useState<{version:string;inside:boolean;oldPlate:string;newPlate:string} | null>(null)
+  const [confirmPlateCorrection, setConfirmPlateCorrection] = useState(false)
+  const [plateError,setPlateError] = useState("")
   const [bookingToEditPlate, setBookingToEditPlate] = useState<Booking | null>(null)
   const [newPlateInput, setNewPlateInput] = useState("")
+  useEffect(() => { setPlateContext(null); setConfirmPlateCorrection(false); setPlateError("") }, [bookingToEditPlate?.id, newPlateInput, isEditPlateDialogOpen])
   const [savingPlate, setSavingPlate] = useState(false)
 
   // Manual LPR event (admin fallback): write as if it came from LPR API (lpr_events + gateEvents + booking lpr.*)
@@ -1462,73 +1466,24 @@ function BookingsPageContent() {
   }
 
   const handleSaveNewLicensePlate = async () => {
-    if (!bookingToEditPlate?.id) return
-    if (!user) return
-    const normalized = normalizeLicensePlate(newPlateInput || "").toUpperCase().trim()
-    if (!normalized) {
-      toast({
-        title: "Număr invalid",
-        description: "Completează un număr de înmatriculare valid.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const current = String(bookingToEditPlate.licensePlate || "").trim()
-    if (normalizeLicensePlate(current).toUpperCase().trim() === normalized) {
-      toast({
-        title: "Nicio schimbare",
-        description: "Numărul nou este identic cu cel curent.",
-      })
-      return
-    }
-
-    setSavingPlate(true)
+    if (!bookingToEditPlate?.id || !user || savingPlate) return
+    setSavingPlate(true); setPlateError("")
     try {
-      const updates: Record<string, any> = {
-        licensePlate: normalized,
-        licensePlateUpdatedAt: serverTimestamp(),
-        licensePlateUpdatedByEmail: user.email || null,
-        lastUpdated: serverTimestamp(),
-      }
-      if (!bookingToEditPlate.originalLicensePlate) {
-        updates.originalLicensePlate = bookingToEditPlate.licensePlate || ""
-      }
-      // Firebase-only update
-      await updateDoc(doc(db, "bookings", bookingToEditPlate.id), updates)
-
-      toast({
-        title: "Salvat",
-        description: `Nr. înmatriculare a fost schimbat în ${normalized}.`,
-      })
-
-      // Update local UI state
-      if (selectedBooking?.id === bookingToEditPlate.id) {
-        setSelectedBooking((prev) =>
-          prev
-            ? ({
-                ...prev,
-                licensePlate: normalized,
-                originalLicensePlate: prev.originalLicensePlate || bookingToEditPlate.licensePlate,
-              } as any)
-            : prev,
-        )
-      }
-
+      const res = await adminAuthorizedFetch("/api/admin/bookings/plate", user, { method:"POST", body:JSON.stringify({
+        action: plateContext ? "save" : "prepare", bookingId:bookingToEditPlate.id,
+        plate:newPlateInput, version:plateContext?.version, confirmPresent:confirmPlateCorrection,
+      }) })
+      const result = await res.json()
+      if (!res.ok) { if (result.code === "CONTEXT_CHANGED") { setPlateContext(null); setConfirmPlateCorrection(false) }; throw new Error(result.error) }
+      if (!plateContext) { setPlateContext(result); return }
+      toast({title:"Salvat",description:`Nr. înmatriculare a fost schimbat în ${plateContext.newPlate}.`})
+      setIsEditPlateDialogOpen(false); setBookingToEditPlate(null); setPlateContext(null)
+      if (selectedBooking?.id === bookingToEditPlate.id) setSelectedBooking(prev => prev ? {...prev,licensePlate:plateContext.newPlate,originalLicensePlate:prev.originalLicensePlate || bookingToEditPlate.licensePlate} : prev)
       await fetchBookings()
-      setIsEditPlateDialogOpen(false)
-      setBookingToEditPlate(null)
-      setNewPlateInput("")
-    } catch (e) {
-      console.error("License plate update failed", e)
-      toast({
-        title: "Eroare",
-        description: "Nu am putut salva numărul de înmatriculare.",
-        variant: "destructive",
-      })
-    } finally {
-      setSavingPlate(false)
-    }
+    } catch(e) {
+      setPlateError(e instanceof Error ? e.message : "Reîncearcă verificarea.")
+      toast({title:"Nu am putut salva",description:e instanceof Error ? e.message : "Reîncearcă verificarea.",variant:"destructive"})
+    } finally { setSavingPlate(false) }
   }
 
   const handleRecoverBooking = async (booking: Booking) => {
@@ -3272,6 +3227,14 @@ function BookingsPageContent() {
               />
             </div>
           </div>
+          {plateError && <p role="alert" className="text-sm text-red-700">{plateError}</p>}
+          {plateContext && <div className="space-y-2 text-sm" role="status">
+            <p>{plateContext.oldPlate} → {plateContext.newPlate}. Verificarea duplicatelor este finalizată.</p>
+            {plateContext.inside && <label className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 p-3">
+              <input type="checkbox" checked={confirmPlateCorrection} onChange={e => setConfirmPlateCorrection(e.target.checked)} />
+              Confirm că este aceeași mașină prezentă și corectez numărul ei real. Șederea rămâne deschisă pe numărul nou.
+            </label>}
+          </div>}
           <DialogFooter className="gap-2 sm:gap-0">
             <Button
               type="button"
@@ -3281,9 +3244,9 @@ function BookingsPageContent() {
             >
               Renunță
             </Button>
-            <Button type="button" onClick={handleSaveNewLicensePlate} disabled={savingPlate || !bookingToEditPlate?.id}>
+            <Button type="button" onClick={handleSaveNewLicensePlate} disabled={savingPlate || !bookingToEditPlate?.id || (!!plateContext?.inside && !confirmPlateCorrection)}>
               {savingPlate ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Salvează
+              {plateContext ? "Salvează" : "Verifică numărul"}
             </Button>
           </DialogFooter>
         </DialogContent>

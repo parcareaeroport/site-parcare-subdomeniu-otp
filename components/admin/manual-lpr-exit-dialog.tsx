@@ -75,6 +75,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
       <p><strong>Perioada rezervării:</strong> {context.booking.startDate || "?"} {context.booking.startTime || "?"} → {context.booking.endDate || "?"} {context.booking.endTime || "?"}</p>
       <p><strong>Ieșire programată:</strong> {context.booking.endDate ? `${context.booking.endDate.split("-").reverse().join(".")} ${context.booking.endTime || "?"}` : "Necunoscută"}</p>
       <p><strong>Intrare înregistrată pentru șederea actuală:</strong> {display(context.arrival)}</p>
+      {!isEntry && context.lastEntry && context.lastEntry !== context.arrival && <p><strong>Ultima detectare de intrare:</strong> {display(context.lastEntry)}</p>}
       {context.duplicates.length > 0 && <div className="space-y-3 rounded border border-amber-400 bg-amber-50 p-3 text-amber-950">
         <strong>Necesită verificare ADMIN</strong><p>Există alte înregistrări prezente pentru acest număr. {isEntry ? "Intrarea este blocată până la clarificarea înregistrărilor existente." : "Se închide numai rezervarea selectată."}</p>
         <ul className="space-y-2">{context.duplicates.map(b => <li key={b.id} className="break-words"><strong>{b.id === bookingId ? "Selectată: " : ""}{b.licensePlate}</strong> — {b.startDate || "?"} {b.startTime || "?"} → {b.endDate || "?"} {b.endTime || "?"}<div className="break-all">ID: {b.id}</div></li>)}</ul>

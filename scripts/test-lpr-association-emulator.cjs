@@ -5,6 +5,8 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), ts = require('typescript')
 assert.match(process.env.FIRESTORE_EMULATOR_HOST || '', /^(127\.0\.0\.1|localhost):\d+$/, 'Local emulator required')
+process.env.LPR_AUTH_SECRET = 'fixture-camera-secret'
+process.env.LPR_DEVICES_JSON = JSON.stringify({intrare_1:{direction:'entry',timestampMode:'romania_wall_clock',maxEventAgeMinutes:525600},iesire_1:{direction:'exit',timestampMode:'romania_wall_clock',maxEventAgeMinutes:525600}})
 process.env.TZ = 'UTC' // Current deployment/camera convention, not a timezone migration.
 const projectId = 'demo-parking-lpr'
 const { initializeApp: adminInit, deleteApp: adminDelete } = require('firebase-admin/app')
@@ -72,7 +74,7 @@ async function main() {
     await seed('may', { licensePlate: 'B804CTN', startDate: '2026-05-22', endDate: '2026-05-28', lpr: { isInside: false, arrivedAt: '2026-05-22T10:00:00Z', departedAt: '2026-05-28T10:00:00Z' } })
     await seed('july', { licensePlate: 'B804CTN' })
     const old = await read('may')
-    const response = await cameraPost(new NextRequest('http://localhost/NotificationInfo/TollgateInfo', { method: 'POST', body: JSON.stringify({ Picture: { Plate: { PlateNumber: 'B804CTN' }, SnapInfo: { DeviceID: 'intrare_1', AccurateTime: '2026-07-16T11:00:00Z' } } }) }))
+    const response = await cameraPost(new NextRequest('http://localhost/NotificationInfo/TollgateInfo', { method: 'POST', headers:{Authorization:'Bearer fixture-camera-secret'}, body: JSON.stringify({ Picture: { Plate: { PlateNumber: 'B804CTN' }, SnapInfo: { DeviceID: 'intrare_1', AccurateTime: '2026-07-16T11:00:00Z' } } }) }))
     assert.equal(response.status, 200); const result = await response.json(); assert.equal(result.matchedBookingId, 'july')
     assert.equal(await count(), 1); assert.equal((await occupied()).occupiedCount, 1)
     assert.equal((await adminDb.doc('lpr_plate_state/B804CTN').get()).data().bookingId, 'july')
@@ -151,7 +153,7 @@ async function main() {
     const unknown = await handleLprEvent({ plateNumber: 'TEST01', deviceId: 'camera', direction: null, snapTime: '2026-07-17T10:00:00Z', accurateTime: null, laneNo: null }); assert.equal(unknown.warning, 'unknown_direction'); assert.equal(await count(), 1)
   })
   await check('whitelist creates neither visit nor occupancy', async () => {
-    await adminDb.doc('lpr_whitelist/TEST01').set({}); const r = await event('entry', '2026-07-16T10:00:00Z'); assert.equal(r.savedEventId, 'whitelist_skip'); assert.equal(await count(), 0)
+    await adminDb.doc('lpr_whitelist/TEST01').set({}); const r = await event('entry', '2026-07-16T10:00:00Z'); assert.equal((await audit(r)).associationStatus, 'whitelist_skip'); assert.equal(await count(), 0)
   })
   await check('two-hour tolerance includes previous calendar day and rejects beyond boundary', async () => {
     await seed('midnight', { startDate: '2026-07-17', startTime: '00:30', endDate: '2026-07-17', endTime: '01:00' })
@@ -167,7 +169,9 @@ async function main() {
     try { r = await event('entry', '2026-07-16T10:00:00Z') } finally { adminDb.runTransaction = original }
     assert.equal(r.degraded, true); assert.equal((await read('active')).lpr, undefined); assert.equal(await count(), 0)
     assert.equal((await adminDb.collection('bookings/active/gateEvents').get()).size, 0)
-    assert.equal((await audit(r)).associationReason, 'association_failed')
+    assert.equal((await audit(r)).associationStatus, 'pending') // A total outage can also prevent the failure annotation.
+    assert.equal((await event('entry', '2026-07-16T10:00:00Z')).matchedBookingId, 'active')
+    assert.equal(await count(), 1)
   })
   await check('manual and camera exits racing decrement once', async () => {
     await seed('active'); await event('entry', '2026-07-16T10:00:00Z')

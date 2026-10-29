@@ -1,3 +1,4 @@
+import { readPlateChange, assertPlateChange, writePlateChange } from "@/lib/booking-plate.server"
 import { FieldValue } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
 import { checkAvailability, checkExistingReservationByLicensePlate } from "@/lib/booking-utils"
@@ -513,8 +514,15 @@ export async function applyBookingModificationRequest(
     const bookingSnap = await tx.get(bookingRef)
     if (!bookingSnap.exists) throw new Error("Rezervarea nu există.")
     const booking = bookingSnap.data() || {}
+    if (booking.modificationRecoveryRequired === true) throw new Error("Modificarea anterioară necesită verificare ADMIN înainte de o nouă încercare.")
     if (booking.modificationApplying === true && booking.activeModificationRequestId !== requestId) {
       throw new Error("Există deja o modificare în aplicare pentru această rezervare.")
+    }
+
+    const intendedPlate = normalizeLicensePlate(String(request.finalValues?.licensePlate || booking.licensePlate || ""))
+    if (intendedPlate !== normalizeLicensePlate(String(booking.licensePlate || ""))) {
+      const identity = await readPlateChange(tx, id, intendedPlate)
+      assertPlateChange(identity, false)
     }
 
     const amountToPay = roundMoney(Number(request.amountToPay || 0))
@@ -616,7 +624,13 @@ export async function applyBookingModificationRequest(
     message: "Aplicarea automată a modificării a început.",
   })
 
-  await revalidateModification(requestId, bookingId, booking, finalValues)
+  try { await revalidateModification(requestId, bookingId, booking, finalValues) }
+  catch (error) {
+    const message = error instanceof Error ? error.message : "Revalidarea modificării a eșuat."
+    await setRequestFailure(requestId,"failed",message,{bookingId})
+    await updateBookingAfterMultiparkFailure({bookingId,requestId,status:"failed",amountToPay,difference,message,refundRequiredAmount})
+    throw error
+  }
 
   let cancelResult: MultiparkBookingResult | null = null
   let createResult: MultiparkBookingResult | null = null
@@ -785,6 +799,10 @@ export async function applyBookingModificationRequest(
 
   const newAmount = roundMoney(Number(request.newAmount || booking.amount || 0))
   await adminDb.runTransaction(async (tx) => {
+    const identity = await readPlateChange(tx, bookingId, finalValues.licensePlate)
+    if (identity.b.activeModificationRequestId !== requestId || identity.b.modificationApplying !== true) throw new Error("Contextul modificării s-a schimbat. Necesită verificare ADMIN.")
+    assertPlateChange(identity, false)
+    writePlateChange(tx, identity, {uid:null,email:options.actorEmail || null,reason:options.reason})
     tx.set(
       bookingRef,
       {
@@ -799,8 +817,8 @@ export async function applyBookingModificationRequest(
         multiparkDurationMinutes: shouldUseMultipark ? newDurations.multiparkDurationMinutes : booking.multiparkDurationMinutes || null,
         apiBookingNumber: newApiBookingNumber || null,
         previousApiBookingNumber: oldApiBookingNumber || null,
-        apiSuccess: shouldUseMultipark ? true : booking.apiSuccess,
-        apiMessage: shouldUseMultipark ? createResult?.message || "Rezervarea a fost recreată în Multipark." : booking.apiMessage,
+        apiSuccess: shouldUseMultipark ? true : booking.apiSuccess ?? false,
+        apiMessage: shouldUseMultipark ? createResult?.message || "Rezervarea a fost recreată în Multipark." : booking.apiMessage || "",
         apiErrorCode: null,
         apiRequestPayload: shouldUseMultipark ? createResult?.apiPayload || "" : booking.apiRequestPayload || "",
         apiResponseRaw: shouldUseMultipark ? createResult?.apiResponse || "" : booking.apiResponseRaw || "",
@@ -878,6 +896,11 @@ export async function applyBookingModificationRequest(
       },
       { merge: true }
     )
+  }).catch(async error => {
+    const message = error instanceof Error ? error.message : "Contextul șederii s-a schimbat."
+    await setRequestFailure(requestId, "failed", message, {bookingId, oldApiBookingNumber, newApiBookingNumber:newApiBookingNumber || null, recoveryRequired:true})
+    await updateBookingAfterMultiparkFailure({bookingId, requestId, status:"failed", amountToPay, difference, message, refundRequiredAmount, recoveryRequired:true})
+    throw error
   })
 
   await recordBookingModificationAuditEvent(requestId, "firestore_booking_updated", "success", {

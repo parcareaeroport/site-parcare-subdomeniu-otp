@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleLprEvent } from "@/lib/lpr-service";
-import { isTollgateWhitelistedPlate } from "@/lib/lpr-tollgate-whitelist";
-import { db, doc, getDoc } from "@/lib/server-firestore";
-import { normalizeLicensePlate } from "@/lib/utils";
+import { cameraConfiguration, validSecret } from "@/lib/lpr-camera-config.server";
 
 type Nullable<T> = T | null;
 
@@ -72,6 +70,8 @@ function extractLprEvent(payload: LprPayload): LprEvent {
 }
 
 export async function POST(req: NextRequest) {
+  if (!process.env.LPR_AUTH_SECRET || !process.env.LPR_DEVICES_JSON) return NextResponse.json({error:"Camera ingestion is not configured"},{status:503});
+  if (!validSecret(req.headers.get("authorization"),process.env.LPR_AUTH_SECRET)) return NextResponse.json({error:"Unauthorized"},{status:401});
   let body: LprPayload;
 
   try {
@@ -85,66 +85,18 @@ export async function POST(req: NextRequest) {
 
   const event = extractLprEvent(body);
 
-  console.log("LPR EVENT >>>", {
-    ...event,
-    raw: body,
-  });
-
-  // IMPORTANT: Hard short-circuit (NO Firebase) for whitelisted plates.
-  // This bypasses handleLprEvent entirely, so we do not touch Firestore at all for these numbers.
-  if (isTollgateWhitelistedPlate(event.plateNumber)) {
-    try {
-      console.log("[LPR API] Plate is in Tollgate whitelist - skipping ALL processing", {
-        plateNumber: event.plateNumber,
-        deviceId: event.deviceId,
-        direction: event.direction,
-      })
-    } catch {}
-    return NextResponse.json({ status: "ok", skipped: "tollgate_whitelist" })
-  }
-
-  // IMPORTANT: Admin whitelist (Firestore `lpr_whitelist`) short-circuit:
-  // If the plate exists in `/admin/dashboard/whitelist`, we skip ALL processing and do NOT write anything.
-  // (We still do a single read to check the whitelist entry.)
-  const normalized = normalizeLicensePlate(event.plateNumber || "")
-  if (normalized) {
-    try {
-      const whitelistDoc = await getDoc(doc(db, "lpr_whitelist", normalized))
-      if (whitelistDoc.exists()) {
-        try {
-          console.log("[LPR API] Plate is in Firestore whitelist - skipping ALL processing", {
-            plateNumber: event.plateNumber,
-            normalizedPlate: normalized,
-            deviceId: event.deviceId,
-            direction: event.direction,
-          })
-        } catch {}
-        return NextResponse.json({ status: "ok", skipped: "firestore_whitelist" })
-      }
-    } catch (e) {
-      console.error("[LPR API] Failed to check Firestore whitelist, continuing processing", e)
-    }
-  }
-
+  const camera = cameraConfiguration(event.deviceId);
+  if (!camera) return NextResponse.json({error:"Unknown device"},{status:403});
   try {
-    console.log('[LPR API] Delegating to handleLprEvent...')
-    const result = await handleLprEvent({
-      ...event,
-      raw: body
+    const result = await handleLprEvent({ ...event, direction:camera.direction, timestampMode:camera.timestampMode,maxEventAgeMinutes:camera.maxEventAgeMinutes ?? 1440,
+      // Preserve diagnostic metadata, not camera images/base64 or credentials.
+      raw:{Plate:body.Picture?.Plate || null,SnapInfo:body.Picture?.SnapInfo || null},
     });
-    console.log('[LPR API] handleLprEvent result', result)
-    return NextResponse.json({ status: "ok", ...result });
-  } catch (e) {
-    // Fail-open in production-intensive flow: avoid hard 500 loops from camera retries.
-    console.error("[LPR API] Failed to handle LPR event, returning degraded response:", e);
-    return NextResponse.json({
-      status: "ok",
-      degraded: true,
-      warning: "lpr_processing_failed",
-    });
+    return NextResponse.json({status:result.degraded ? "pending" : "ok",...result}, {status:result.savedEventId === "degraded_no_persist" ? 503 : 200});
+  } catch(error) {
+    console.error("LPR ingestion failed",error);
+    return NextResponse.json({error:"Processing unavailable; retry the same event"},{status:503});
   }
-
-  return NextResponse.json({ status: "ok" });
 }
 
 export function GET() {

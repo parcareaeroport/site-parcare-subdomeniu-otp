@@ -1401,7 +1401,6 @@ export async function cancelBooking(bookingNumber: string): Promise<{ success: b
 export async function cleanupExpiredBookings(): Promise<{ cleanedCount: number, errors: string[] }> {
   const errors: string[] = []
   let cleanedCount = 0
-  let autoExitedPayOnSite = 0
   
   try {
     const now = new Date()
@@ -1472,79 +1471,12 @@ export async function cleanupExpiredBookings(): Promise<{ cleanedCount: number, 
       }
     }
     
-    // Pay-on-site auto-exit după 3h fără LPR
-    try {
-      const PAY_ON_SITE_TIMEOUT_MIN = 180
-      // IMPORTANT: auto-exit applies ONLY to true pay-on-site bookings (source=pay_on_site),
-      // not to LPR-origin bookings that may also carry status=confirmed_pay_on_site.
-      const posQuery = query(
-        bookingsRef,
-        where('source', '==', 'pay_on_site'),
-        where('status', '==', 'confirmed_pay_on_site'),
-      )
-      const posSnap = await getDocs(posQuery)
-      for (const docSnap of posSnap.docs) {
-        const b = docSnap.data() as any
-        if (b?.source === 'lpr') continue
-        const startDate = b.startDate
-        const startTime = b.startTime
-        if (!startDate || !startTime) continue
-        const startDt = new Date(`${startDate}T${startTime}:00`)
-        if (isNaN(startDt.getTime())) continue
-        const lpr = b?.lpr || {}
-        // Auto-cancel applies only for true no-show bookings.
-        // If we have any LPR evidence of presence (arrived/departed/inside), skip.
-        const hasLprPresence = Boolean(lpr.arrivedAt) || Boolean(lpr.departedAt) || lpr.isInside === true
-        if (hasLprPresence) continue
-        const diffMin = Math.round((now.getTime() - startDt.getTime()) / (1000 * 60))
-        if (diffMin <= PAY_ON_SITE_TIMEOUT_MIN) continue
+    // No-show cancellation is owned exclusively by the transactional scheduled function.
+    // A commercial expiry must never modify LPR presence or its counter.
 
-        const updates: Record<string, any> = {
-          status: 'cancelled_pay_on_site_timeout',
-          cancelReason: 'Auto-exit: peste 3h fără LPR (pay on site)',
-          autoExitedAt: serverTimestamp(),
-          lastUpdated: serverTimestamp(),
-          "lpr.isInside": false,
-        }
-
-        // Decrementăm occupancy o singură dată dacă a fost incrementat la creare
-        const shouldDecrementOcc = b.occupancyIncremented === true && b.occupancyDecremented !== true
-        if (shouldDecrementOcc) {
-          updates["occupancyDecremented"] = true
-          updates["occupancyDecrementedAt"] = serverTimestamp()
-          try {
-            const occupancyDocRef = doc(db, "config", "parkingLive")
-            // IMPORTANT: don't reset occupiedCount to 0 here; just ensure doc exists
-            await setDoc(occupancyDocRef, { lastUpdated: serverTimestamp() }, { merge: true })
-            await updateDoc(occupancyDocRef, {
-              occupiedCount: increment(-1),
-              lastUpdated: serverTimestamp(),
-              lastChange: {
-                type: "exit_pay_on_site_timeout",
-                bookingId: docSnap.id,
-                plateNumber: b.licensePlate,
-                at: new Date().toISOString(),
-              },
-            })
-          } catch (occErr) {
-            errors.push(`Occupancy decrement failed for ${docSnap.id}: ${occErr instanceof Error ? occErr.message : String(occErr)}`)
-            console.error('❌ Occupancy decrement failed for pay_on_site timeout', occErr)
-          }
-        }
-
-        await updateDoc(docSnap.ref, updates)
-        autoExitedPayOnSite++
-        console.log('⏱️ Auto-exit pay_on_site after 3h without LPR', { bookingId: docSnap.id, diffMin })
-      }
-    } catch (posError) {
-      const errMsg = `Pay-on-site auto-exit failed: ${posError instanceof Error ? posError.message : String(posError)}`
-      errors.push(errMsg)
-      console.error(errMsg)
-    }
+    console.log(`🧹 Cleanup completed: ${cleanedCount} bookings marked as expired, ${errors.length} errors`)
     
-    console.log(`🧹 Cleanup completed: ${cleanedCount} bookings marked as expired, ${autoExitedPayOnSite} pay_on_site auto-exited, ${errors.length} errors`)
-    
-    return { cleanedCount: cleanedCount + autoExitedPayOnSite, errors }
+    return { cleanedCount, errors }
     
   } catch (error) {
     const errorMessage = `Cleanup failed: ${error instanceof Error ? error.message : String(error)}`
