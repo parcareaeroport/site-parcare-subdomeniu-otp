@@ -1,3 +1,4 @@
+import { lprTransaction, lprLog } from "@/lib/lpr-log.server"
 import "server-only"
 import { createHash } from "node:crypto"
 import { FieldValue } from "firebase-admin/firestore"
@@ -54,10 +55,11 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
   const eventRef = adminDb.collection("lpr_events").doc(`manual_entry_${input.requestId}`)
   const fingerprint = createHash("sha256").update(JSON.stringify({ bookingId: input.bookingId, version: input.version, actor: actor.uid,
     now: input.useServerNow === true, date: input.useServerNow === true ? null : input.date, time: input.useServerNow === true ? null : input.time, overwrite: input.confirmOverwrite === true, entryMode: input.entryMode, reentry: input.confirmReentry === true })).digest("hex")
-  return adminDb.runTransaction(async tx => {
+  return lprTransaction(adminDb, async tx => {
     const receipt = await tx.get(eventRef)
     if (receipt.exists) {
       if (receipt.data()?.requestFingerprint !== fingerprint) fail("REQUEST_REUSED", "Identificatorul salvării a fost deja folosit.")
+      lprLog("manual_replay",{eventId:eventRef.id,bookingId:input.bookingId,replayed:true,occupancyDelta:0,outcome:"duplicate"})
       return receipt.data()!.result
     }
     const { ref, b, plate, context, state } = await readManualLprContext(tx, input.bookingId)
@@ -99,7 +101,7 @@ export async function createManualBookingRecord(data: Record<string, any>, insid
   const plate = normalizeLicensePlate(String(data.licensePlate || ""))
   if (!plate) fail("MISSING_PLATE", "Numărul de înmatriculare este obligatoriu.")
   const ref = adminDb.collection("bookings").doc(), eventRef = adminDb.collection("lpr_events").doc()
-  return adminDb.runTransaction(async tx => {
+  return lprTransaction(adminDb, async tx => {
     if (!inside) { tx.create(ref, { ...data, licensePlate: plate }); return ref }
     const stateRef = adminDb.collection("lpr_plate_state").doc(plate)
     const [state, open] = await Promise.all([tx.get(stateRef), tx.get(adminDb.collection("bookings").where("lpr.isInside", "==", true))])

@@ -1,3 +1,4 @@
+import { lprLog } from "@/lib/lpr-log.server"
 import "server-only"
 import { FieldValue } from "firebase-admin/firestore"
 import { getLprPresenceState } from "@/lib/lpr-presence"
@@ -47,6 +48,8 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
       ...(input.actor ? { adminUid: input.actor.uid, adminEmail: input.actor.email } : {}),
     },
   }, { merge: true })
+  lprLog("visit_committed",{outcome:"committed",plate,bookingId:ref.id,eventId:input.eventId,visitId,deviceId:input.deviceId,
+    actorUid:input.actor?.uid,direction:eventType,eventTime:at,eventInstant:instant,insideBefore:wasInside,insideAfter:eventType === "entry",occupancyDelta:delta})
   return { visitId, occupancyChanged: delta === 1 ? "incremented" : delta === -1 ? "decremented" : "none" }
 }
 
@@ -61,5 +64,7 @@ export function correctLprArrival(tx: FirebaseFirestore.Transaction, ref: Fireba
     "lpr.arrivalCorrectedByUid": actor.uid, "lpr.arrivalCorrectedByEmail": actor.email,
     lastUpdated: FieldValue.serverTimestamp(),
   })
+  lprLog("arrival_corrected",{outcome:"committed",bookingId:ref.id,visitId:data.lpr?.visitId,actorUid:actor.uid,eventTime:at,
+    insideBefore:getLprPresenceState(data).isEffectivelyInside,insideAfter:getLprPresenceState(data).isEffectivelyInside,occupancyDelta:0})
   return { visitId: data.lpr?.visitId ?? null, occupancyChanged: "none" }
 }

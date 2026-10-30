@@ -1,3 +1,4 @@
+import { lprTransaction, lprLog } from "@/lib/lpr-log.server"
 import "server-only"
 import { writeLprVisit } from "@/lib/lpr-visit.server"
 import { createHash } from "node:crypto"
@@ -78,7 +79,7 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
   return { ref, b, plate, context, state, stateRef, linked, receipts, history }
 }
 export async function prepareManualExit(bookingId: string) {
-  return adminDb.runTransaction(async tx => (await readManualLprContext(tx, bookingId)).context)
+  return lprTransaction(adminDb, async tx => (await readManualLprContext(tx, bookingId)).context)
 }
 export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: string; email: string | null }) {
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestId || "")) throw new ManualExitError("INVALID_REQUEST", "Identificator de salvare invalid.")
@@ -91,10 +92,11 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
     missing: input.confirmMissingArrival === true, duplicates: input.confirmDuplicates === true,
     overwrite: input.confirmOverwrite === true,
   })).digest("hex")
-  return adminDb.runTransaction(async tx => {
+  return lprTransaction(adminDb, async tx => {
     const receipt = await tx.get(eventRef)
     if (receipt.exists) {
       if (receipt.data()?.requestFingerprint !== fingerprint) throw new ManualExitError("REQUEST_REUSED", "Identificatorul salvării a fost deja folosit.", 409)
+      lprLog("manual_replay",{eventId:eventRef.id,bookingId:input.bookingId,replayed:true,occupancyDelta:0,outcome:"duplicate"})
       return receipt.data()!.result
     }
     const { ref, b, plate, context, state, linked, receipts, history } = await readManualLprContext(tx, input.bookingId)

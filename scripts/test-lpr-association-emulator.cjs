@@ -70,6 +70,40 @@ const inside = b => getLprPresenceState(b).isEffectivelyInside
 const occupied = async () => (await (await occupancy(new Request('http://localhost/api/admin/occupancy'))).json())
 const audit = async r => (await adminDb.doc('lpr_events/' + r.savedEventId).get()).data()
 async function main() {
+  await check('per-camera corrected entry/exit: association, duplicate, occupancy and original audit', async () => {
+    process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON = JSON.stringify({intrare_1:3149,iesire_1:3206})
+    try {
+      await seed('corrected')
+      const entry = await event('entry','2026-07-16T10:52:29Z')
+      assert.equal(entry.matchedBookingId,'corrected')
+      assert.equal((await read('corrected')).lpr.arrivedAt,'2026-07-16T10:00:00.000Z')
+      assert.equal((await audit(entry)).accurateTime,'2026-07-16T10:52:29Z')
+      assert.equal((await audit(entry)).clockOffsetSeconds,3149)
+      assert.equal(await count(),1)
+      // A config change cannot reapply a receipt or silently rewrite its corrected time.
+      process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON = JSON.stringify({intrare_1:3100,iesire_1:3206})
+      assert.equal((await event('entry','2026-07-16T10:52:29Z')).savedEventId,entry.savedEventId)
+      assert.equal((await audit(entry)).clockOffsetSeconds,3149)
+      assert.equal(await count(),1)
+      const exit = await event('exit','2026-07-21T20:53:26Z')
+      assert.equal(exit.matchedBookingId,'corrected')
+      assert.equal((await read('corrected')).lpr.departedAt,'2026-07-21T20:00:00.000Z')
+      assert.equal(await count(),0);assert.equal((await occupied()).occupiedCount,0)
+      await event('exit','2026-07-21T20:53:26Z');assert.equal(await count(),0)
+    } finally { delete process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON }
+  })
+  await check('future time remains blocked after correction and invalid offset cannot mutate occupancy', async () => {
+    await seed('blocked')
+    try {
+      process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON = '{invalid'
+      const bad = await event('entry','2026-07-16T10:00:00Z')
+      assert.equal((await audit(bad)).associationReason,'invalid_clock_offset_config')
+      process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON = JSON.stringify({intrare_1:3149})
+      const future = await event('entry','2099-07-16T10:00:00Z')
+      assert.equal((await audit(future)).associationReason,'future_event_time')
+      assert.equal(await count(),0);assert.equal((await read('blocked')).lpr,undefined)
+    } finally { delete process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON }
+  })
   await check('camera HTTP → July booking → occupancy → overdue exit; old May booking unchanged', async () => {
     await seed('may', { licensePlate: 'B804CTN', startDate: '2026-05-22', endDate: '2026-05-28', lpr: { isInside: false, arrivedAt: '2026-05-22T10:00:00Z', departedAt: '2026-05-28T10:00:00Z' } })
     await seed('july', { licensePlate: 'B804CTN' })

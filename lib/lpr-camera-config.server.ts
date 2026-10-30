@@ -41,3 +41,33 @@ export function cameraEventInstant(value: unknown, mode: CameraTimeMode = "roman
   if (!wall) return null
   return mode === "instant" ? new Date(String(value).trim().replace(" ", "T")).toISOString() : uniqueLprInstant(wall)
 }
+
+/** Positive offset means the camera is ahead. Never infer an offset from receipt
+ * time: queued messages must keep their original chronology. Absent config = 0.
+ * Invalid configuration fails closed, rather than silently using an incorrect clock. */
+export function cameraClockOffsetSeconds(deviceId: unknown): number | null {
+  const json = process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON
+  if (!json) return 0
+  try {
+    const offsets = JSON.parse(json)
+    if (!offsets || typeof offsets !== "object" || Array.isArray(offsets)) return null
+    if (typeof deviceId !== "string" || !Object.prototype.hasOwnProperty.call(offsets, deviceId)) return 0
+    const offset = offsets[deviceId]
+    return typeof offset === "number" && Number.isInteger(offset) && Math.abs(offset) <= 86400 ? offset : null
+  } catch { return null }
+}
+
+export function correctedCameraTime(value: unknown, mode: CameraTimeMode = "romania_wall_clock", offsetSeconds: number | null = 0) {
+  const originalWall = parseCameraTime(value, mode)
+  const originalInstant = cameraEventInstant(value, mode)
+  if (!originalWall || offsetSeconds === null || !Number.isInteger(offsetSeconds) || Math.abs(offsetSeconds) > 86400)
+    return { wall: null, instant: null, originalWall, originalInstant }
+  // Civil camera clocks must be corrected BEFORE resolving Romania's DST offset.
+  // Instant cameras instead shift the actual instant before deriving the civil clock.
+  if (mode === "instant" && originalInstant) {
+    const instant = new Date(Date.parse(originalInstant) - offsetSeconds * 1000).toISOString()
+    return { wall: romaniaCivilClock(new Date(instant)), instant, originalWall, originalInstant }
+  }
+  const wall = new Date(Date.parse(originalWall) - offsetSeconds * 1000).toISOString()
+  return { wall, instant: uniqueLprInstant(wall), originalWall, originalInstant }
+}

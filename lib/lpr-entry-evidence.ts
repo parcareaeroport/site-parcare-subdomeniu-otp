@@ -5,7 +5,7 @@ import { compareLprTimes, lprTime, receiptLprTime, type LprTime } from "./lpr-ti
 // A rejected clock must not become trustworthy merely because time has passed.
 const INVALID_REASONS = new Set([
   "missing_plate", "invalid_event_time", "unknown_direction", "future_event_time",
-  "stale_event_time", "invalid_pending_event",
+  "stale_event_time", "invalid_pending_event", "invalid_clock_offset_config",
 ])
 const TERMINAL_STATUSES = new Set([
   "needs_review", "reviewed", "matched", "unmatched_visit", "duplicate", "whitelist_skip", "manual",

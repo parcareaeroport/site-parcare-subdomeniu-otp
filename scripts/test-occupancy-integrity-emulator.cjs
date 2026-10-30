@@ -86,7 +86,15 @@ async function modification(){await db.doc('bookingModificationRequests/request'
     const r=await postCamera('2020-01-01T10:00:00Z');assert.equal(r.status,200);assert.equal((await r.json()).warning,'stale_event_time');assert.equal(await count(),0);assert.equal((await observed()).lprAttention.count,1)
   } finally {process.env.LPR_DEVICES_JSON=config}
  })
- await check('source secret and device allowlist reject without writes',async()=>{assert.equal((await postCamera('2026-07-16T10:00:00Z',null)).status,401);assert.equal((await postCamera('2026-07-16T10:00:00Z','wrong')).status,401);assert.equal((await postCamera('2026-07-16T10:00:00Z','fixture-camera-secret','unknown')).status,403);assert.equal((await db.collection('lpr_events').get()).size,0);assert.equal(await count(),0)})
+ await check('legacy cameras need no secret; unknown direction is retained for review',async()=>{
+  await seed()
+  assert.equal((await postCamera('2026-07-16T10:00:00Z',null)).status,200)
+  assert.equal((await postCamera('2026-07-16T10:00:00Z','wrong')).status,200)
+  assert.equal(await count(),1);assert.equal(await counter(),1)
+  const unknown=await postCamera('2026-07-16T10:00:00Z',null,'unknown')
+  assert.equal(unknown.status,200);assert.equal((await unknown.json()).warning,'unknown_direction')
+  assert.equal((await db.collection('lpr_events').get()).size,2);assert.equal(await count(),1)
+ })
  await check('receipt failure responds 503; retry creates exactly one visit',async()=>{await seed();failReceipt=true;assert.equal((await postCamera('2026-07-16T10:00:00Z')).status,503);assert.equal((await db.collection('lpr_events').get()).size,0);failReceipt=false;assert.equal((await postCamera('2026-07-16T10:00:00Z')).status,200);assert.equal((await postCamera('2026-07-16T10:00:00Z')).status,200);assert.equal(await count(),1);assert.equal((await db.collection('lpr_events').get()).size,1)})
  await check('processing failure durable and visible; concurrent workers apply once',async()=>{await seed();failAssociation=1;const r=await event('entry');assert.equal(r.degraded,true);assert.equal((await observed()).lprAttention.count,1);await db.doc('lpr_events/'+r.savedEventId).update({nextAttemptAt:0});await Promise.all([retry(),retry()]);assert.equal(await count(),1);assert.equal(await counter(),1);assert.equal((await observed()).lprAttention.count,0);assert.equal((await db.collection('bookings/active/gateEvents').get()).size,1)})
  await check('failed entry followed by exit preserves receipt order and returns to zero',async()=>{

@@ -49,7 +49,7 @@ async function main() {
   assert.equal((await (await post('intrare_1')).json()).status,'pending')
   fail=true
   assert.equal((await post('intrare_1')).status,503)
-  assert.equal(GET().status,405)
+  assert.equal((await GET()).status,405)
   console.log('PASS: 11 camera route compatibility and error-handling scenarios')
 }
 main().catch(e=>{console.error(e);process.exitCode=1})

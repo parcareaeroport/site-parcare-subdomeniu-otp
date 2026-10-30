@@ -1,3 +1,4 @@
+import { lprTransaction, lprLog } from "@/lib/lpr-log.server"
 import "server-only"
 import { createHash } from "node:crypto"
 import { FieldValue } from "firebase-admin/firestore"
@@ -18,8 +19,9 @@ async function readContext(tx: FirebaseFirestore.Transaction, eventId:string) {
   return {ref,event,version}
 }
 export async function reviewLprEvent(input:{eventId:string;action:string;version?:string;note?:string;confirmed?:boolean}, actor:{uid:string;email:string|null}) {
-  return adminDb.runTransaction(async tx => {
+  return lprTransaction(adminDb, async tx => {
     const ctx = await readContext(tx,input.eventId)
+    lprLog("admin_review",{action:input.action,eventId:input.eventId,plate:ctx.event.normalizedPlate,actorUid:actor.uid,confirmed:input.confirmed,occupancyDelta:0})
     if (input.action === "prepare") return {version:ctx.version}
     if (ctx.version !== input.version) throw new ManualExitError("CONTEXT_CHANGED","Evenimentul sau prezența s-au schimbat. Reîncarcă verificarea.",409)
     if (!["pending","needs_review"].includes(ctx.event.associationStatus)) throw new ManualExitError("ALREADY_HANDLED","Evenimentul este deja procesat.",409)
