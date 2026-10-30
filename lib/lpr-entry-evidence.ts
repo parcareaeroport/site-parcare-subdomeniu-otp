@@ -1,5 +1,6 @@
 import { parseCameraTime } from "./lpr-camera-config.server"
 import { lprTimestampToMillis } from "./lpr-presence"
+import { compareLprTimes, lprTime, receiptLprTime, type LprTime } from "./lpr-time"
 
 // A rejected clock must not become trustworthy merely because time has passed.
 const INVALID_REASONS = new Set([
@@ -10,19 +11,27 @@ const TERMINAL_STATUSES = new Set([
   "needs_review", "reviewed", "matched", "unmatched_visit", "duplicate", "whitelist_skip", "manual",
 ])
 
-export function isLaterKnownExit(receipt: any, entryMs: number, nowMs: number, includePending = false): boolean {
-  if (receipt.eventType !== "exit" ||
-      !(TERMINAL_STATUSES.has(receipt.associationStatus) || includePending && receipt.associationStatus === "pending") ||
-      INVALID_REASONS.has(receipt.associationReason) || INVALID_REASONS.has(receipt.review?.reason)) return false
+export function isTrustedLprReceipt(receipt: any, includePending = true): boolean {
+  return !receipt.supersededBy &&
+    (TERMINAL_STATUSES.has(receipt.associationStatus) || includePending && receipt.associationStatus === "pending") &&
+    !INVALID_REASONS.has(receipt.associationReason) && !INVALID_REASONS.has(receipt.review?.reason)
+}
+
+export function isLaterKnownExit(receipt: any, entryMs: number, nowMs: number, includePending = false, entryPoint?: LprTime, nowPoint?: LprTime): boolean {
+  if (receipt.eventType !== "exit" || !isTrustedLprReceipt(receipt, includePending)) return false
   // Older manual receipts use the same Romania civil-clock convention, but did
   // not have eventTime. Never apply that fallback to an unknown camera clock.
   const rawTime = receipt.eventTime ?? (receipt.manual === true ? receipt.accurateTime ?? receipt.snapTime : null)
   const at = parseCameraTime(rawTime, "romania_wall_clock")
-  return at !== null && Date.parse(at) >= entryMs && Math.floor(Date.parse(at) / 1000) <= Math.floor(nowMs / 1000)
+  if (!at) return false
+  const point = receiptLprTime(receipt)
+  const after = compareLprTimes(point, entryPoint || lprTime(entryMs))
+  const future = compareLprTimes(point, nowPoint || lprTime(nowMs), 1000)
+  return after !== -1 && future !== 1
 }
 
-export function isBeforePlateCorrection(state: any, entryMs: number): boolean {
+export function isBeforePlateCorrection(state: any, entryMs: number, point?: LprTime): boolean {
   const through = lprTimestampToMillis(state?.plateCorrection?.through)
   // Manual corrections have second precision, so that whole second is ambiguous.
-  return through !== null && Math.floor(entryMs / 1000) <= Math.floor(through / 1000)
+  return through !== null && compareLprTimes(point || lprTime(entryMs), lprTime(through, state.plateCorrection?.throughInstant), 1000) !== 1
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleLprEvent } from "@/lib/lpr-service";
-import { cameraConfiguration, validSecret } from "@/lib/lpr-camera-config.server";
+import { cameraConfiguration } from "@/lib/lpr-camera-config.server";
 
 type Nullable<T> = T | null;
 
@@ -70,8 +70,6 @@ function extractLprEvent(payload: LprPayload): LprEvent {
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.LPR_AUTH_SECRET || !process.env.LPR_DEVICES_JSON) return NextResponse.json({error:"Camera ingestion is not configured"},{status:503});
-  if (!validSecret(req.headers.get("authorization"),process.env.LPR_AUTH_SECRET)) return NextResponse.json({error:"Unauthorized"},{status:401});
   let body: LprPayload;
 
   try {
@@ -86,9 +84,11 @@ export async function POST(req: NextRequest) {
   const event = extractLprEvent(body);
 
   const camera = cameraConfiguration(event.deviceId);
-  if (!camera) return NextResponse.json({error:"Unknown device"},{status:403});
+  // Legacy cameras send no Authorization header. Configuration is optional:
+  // without an override, the service resolves Direction/DeviceID from the payload
+  // and uses the existing Romania civil-clock convention.
   try {
-    const result = await handleLprEvent({ ...event, direction:camera.direction, timestampMode:camera.timestampMode,maxEventAgeMinutes:camera.maxEventAgeMinutes ?? 1440,
+    const result = await handleLprEvent({ ...event, direction:camera?.direction ?? event.direction, timestampMode:camera?.timestampMode ?? "romania_wall_clock",maxEventAgeMinutes:camera?.maxEventAgeMinutes ?? 1440,
       // Preserve diagnostic metadata, not camera images/base64 or credentials.
       raw:{Plate:body.Picture?.Plate || null,SnapInfo:body.Picture?.SnapInfo || null},
     });

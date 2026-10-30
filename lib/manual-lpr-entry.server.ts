@@ -7,38 +7,41 @@ import { normalizeLicensePlate } from "@/lib/utils"
 import { isBeforePlateCorrection, isLaterKnownExit } from "@/lib/lpr-entry-evidence"
 import { writeLprVisit, correctLprArrival } from "@/lib/lpr-visit.server"
 import { inLprBookingWindow, LPR_ACTIVE_STATUSES } from "@/lib/lpr-booking-window"
-import { ManualExitError, manualExitClock, parseManualExitClock, readManualLprContext } from "@/lib/manual-lpr-exit.server"
+import { ManualExitError, manualExitClock, manualLprInstant, parseManualExitClock, readManualLprContext } from "@/lib/manual-lpr-exit.server"
+import { bookingLprTimes, compareLprTimes, lprTime, type LprTime } from "./lpr-time"
 import type { ManualExitSaveInput } from "@/lib/manual-lpr-exit-contract"
 
 type Actor = { uid: string; email: string | null }
 const fail = (code: string, message: string) => { throw new ManualExitError(code, message, 409) }
-function checkEntry(booking: any, at: string, now: string, latest: number | null) {
-  if (at > now) fail("FUTURE_ENTRY", "Intrarea nu poate fi în viitor. Introdu ora sosirii reale.")
-  if (latest !== null && Math.floor(Date.parse(at) / 1000) < Math.floor(latest / 1000)) fail("ENTRY_BEFORE_EVENT", "Există un eveniment mai recent. Reîncarcă și verifică șederea înainte de a modifica intrarea.")
+function checkEntry(booking: any, at: string, now: string, history: LprTime[], instant: string, nowInstant: string) {
+  const point = lprTime(at, instant)
+  if (compareLprTimes(point, lprTime(now, nowInstant), 1000) === 1) fail("FUTURE_ENTRY", "Intrarea nu poate fi în viitor. Introdu ora sosirii reale.")
+  const orders = history.map(p => compareLprTimes(point, p, 1000))
+  if (orders.includes(null)) fail("AMBIGUOUS_TIME", "Ordinea evenimentelor nu poate fi verificată la schimbarea orei. Necesită verificare ADMIN.")
+  if (orders.includes(-1)) fail("ENTRY_BEFORE_EVENT", "Există un eveniment mai recent. Reîncarcă și verifică șederea înainte de a modifica intrarea.")
   if (!getLprPresenceState(booking).isEffectivelyInside) {
     if (booking.status !== "unmatched_lpr" && !LPR_ACTIVE_STATUSES.includes(booking.status)) fail("INACTIVE_BOOKING", "Rezervarea nu este activă. Verifică rezervarea corectă pentru această intrare.")
     if (booking.status !== "unmatched_lpr" && !inLprBookingWindow(booking, Date.parse(at))) fail("ENTRY_OUTSIDE_PERIOD", "Intrarea nu corespunde perioadei rezervării. Selectează rezervarea corectă sau corectează perioada.")
   }
 }
-async function validatePlateEvidence(tx: FirebaseFirestore.Transaction, plate: string, state: any, booking: any, at: string, now: string, newVisit: boolean) {
+async function validatePlateEvidence(tx: FirebaseFirestore.Transaction, plate: string, state: any, booking: any, at: string, now: string, newVisit: boolean, instant: string, nowInstant: string) {
   const eventMs = Date.parse(at)
-  if (isBeforePlateCorrection(state, eventMs)) fail("PLATE_CORRECTED", "Necesită verificare ADMIN: numărul a fost corectat pentru această ședere. Selectează numărul și rezervarea corecte.")
+  if (isBeforePlateCorrection(state, eventMs, lprTime(at, instant))) fail("PLATE_CORRECTED", "Necesită verificare ADMIN: numărul a fost corectat pentru această ședere. Selectează numărul și rezervarea corecte.")
   const [history, receipts] = await Promise.all([
     tx.get(adminDb.collection("bookings").where("licensePlate", "==", plate)),
     tx.get(adminDb.collection("lpr_events").where("normalizedPlate", "==", plate)),
   ])
   // Unlike automatic queue recovery, an operator must resolve a contradictory
   // pending exit before declaring an earlier arrival as a new physical presence.
-  if (receipts.docs.some(d => isLaterKnownExit(d.data(), eventMs, Date.parse(now), true))) {
+  if (receipts.docs.some(d => isLaterKnownExit(d.data(), eventMs, Date.parse(now), true, lprTime(at, instant), lprTime(now, nowInstant)))) {
     fail("LATER_EXIT", "Necesită verificare ADMIN: există o ieșire primită la aceeași oră sau după intrarea indicată. Verifică evenimentele LPR înainte de salvare.")
   }
   const bookings = [booking, ...history.docs.map(d => d.data())]
-  const departures = bookings.map(b => lprTimestampToMillis(b.lpr?.departedAt)).filter((n): n is number => n !== null)
-  if (newVisit && departures.some(n => Math.floor(n / 1000) === Math.floor(eventMs / 1000))) {
+  const departures = bookings.filter(b => lprTimestampToMillis(b.lpr?.departedAt) !== null).map(b => lprTime(b.lpr.departedAt, b.lpr.departedAtInstant))
+  if (newVisit && departures.some(p => compareLprTimes(lprTime(at, instant), p, 1000) === 0)) {
     fail("AMBIGUOUS_REENTRY", "Intrarea și ieșirea anterioară sunt în aceeași secundă. Verifică ora reintrării reale.")
   }
-  const times = [lprTimestampToMillis(state?.lastEventAt), ...bookings.flatMap(b => [b.lpr?.arrivedAt, b.lpr?.departedAt, b.lpr?.lastSeenAt].map(lprTimestampToMillis))].filter((n): n is number => n !== null)
-  return times.length ? Math.max(...times) : null
+  return [...(lprTimestampToMillis(state?.lastEventAt) !== null ? [lprTime(state.lastEventAt, state.lastEventAtInstant)] : []), ...bookings.flatMap(bookingLprTimes)]
 }
 function auditEntry(tx: FirebaseFirestore.Transaction, ref: FirebaseFirestore.DocumentReference, eventRef: FirebaseFirestore.DocumentReference, plate: string, at: string, visitId: string | null, actor: Actor, extra: Record<string, unknown> = {}) {
   const audit = { matchedBookingId: ref.id, plateNumber: plate, normalizedPlate: plate, eventType: "entry", visitId,
@@ -66,22 +69,23 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
       : "Pentru o mașină absentă trebuie confirmată o intrare nouă. Corectarea orei nu poate redeschide șederea.")
     if (!context.inside && context.hasPreviousVisit && input.confirmReentry !== true) fail("CONFIRM_REENTRY", "Confirmă că mașina a reintrat fizic. O intrare nouă va ocupa un loc.")
     if (context.inside && input.confirmOverwrite !== true) fail("CONFIRM_OVERWRITE", "Confirmă modificarea intrării existente.")
-    const now = manualExitClock()
+    const realNow = new Date(), now = manualExitClock(realNow), nowInstant = manualLprInstant(now, true, realNow)
     let at = now
     if (input.useServerNow !== true) {
       try { at = parseManualExitClock(input.date, input.time) }
       catch { throw new ManualExitError("INVALID_TIME", "Completează o dată și o oră valide pentru sosirea reală.") }
     }
-    const latest = await validatePlateEvidence(tx, plate, state.data(), b, at, now, !context.inside)
-    checkEntry(b, at, now, latest)
+    const instant = manualLprInstant(at, input.useServerNow === true, realNow)
+    const latest = await validatePlateEvidence(tx, plate, state.data(), b, at, now, !context.inside, instant, nowInstant)
+    checkEntry(b, at, now, latest, instant, nowInstant)
     if (context.inside && !getLprPresenceState({ ...b, lpr: { ...b.lpr, arrivedAt: at } }).isEffectivelyInside) {
       fail("AMBIGUOUS_CORRECTION", "Necesită verificare ADMIN: ora corectată contrazice ieșirea din evidență. Prezența nu a fost modificată.")
     }
     const visitId = context.inside ? b.lpr?.visitId || null : eventRef.id
     const result = { lprEventId: eventRef.id, gateEventId: eventRef.id,
-      ...(context.inside ? correctLprArrival(tx, ref, b, at, actor) : writeLprVisit(tx, adminDb, { ref, data: b, plate, at, eventType: "entry", eventId: eventRef.id, visitId,
+      ...(context.inside ? correctLprArrival(tx, ref, b, at, actor, instant) : writeLprVisit(tx, adminDb, { ref, data: b, plate, at, instant, eventType: "entry", eventId: eventRef.id, visitId,
         deviceId: "manual_admin", manual: true, actor, lprExtra: { lastEventAccurateTime: at } })) }
-    auditEntry(tx, ref, eventRef, plate, at, visitId, actor, { requestFingerprint: fingerprint, result, eventType: context.inside ? "arrival_correction" : "entry", entryMode: input.entryMode,
+    auditEntry(tx, ref, eventRef, plate, at, visitId, actor, { eventInstant: instant, requestFingerprint: fingerprint, result, eventType: context.inside ? "arrival_correction" : "entry", entryMode: input.entryMode,
       previousLpr: b.lpr || null, confirmations: { overwrite: input.confirmOverwrite === true, reentry: input.confirmReentry === true } })
     return result
   })
@@ -100,11 +104,11 @@ export async function createManualBookingRecord(data: Record<string, any>, insid
     const stateRef = adminDb.collection("lpr_plate_state").doc(plate)
     const [state, open] = await Promise.all([tx.get(stateRef), tx.get(adminDb.collection("bookings").where("lpr.isInside", "==", true))])
     if (open.docs.some(d => normalizeLicensePlate(String(d.data().licensePlate || "")) === plate && getLprPresenceState(d.data()).isEffectivelyInside)) fail("DUPLICATE_PRESENCE", "Necesită verificare ADMIN: acest număr este deja în parcare. Rezervarea nu a fost creată; verifică înregistrarea existentă.")
-    const at = manualExitClock(), latest = await validatePlateEvidence(tx, plate, state.data(), {}, at, at, true)
-    checkEntry(data, at, at, latest)
-    writeLprVisit(tx, adminDb, { ref, data: {}, plate, at, eventType: "entry", eventId: eventRef.id, visitId: eventRef.id,
+    const realNow = new Date(), at = manualExitClock(realNow), instant = manualLprInstant(at, true, realNow), latest = await validatePlateEvidence(tx, plate, state.data(), {}, at, at, true, instant, instant)
+    checkEntry(data, at, at, latest, instant, instant)
+    writeLprVisit(tx, adminDb, { ref, data: {}, plate, at, instant, eventType: "entry", eventId: eventRef.id, visitId: eventRef.id,
       deviceId: "manual_admin", manual: true, actor, create: true, patch: { ...data, licensePlate: plate }, lprExtra: { lastEventAccurateTime: at } })
-    auditEntry(tx, ref, eventRef, plate, at, eventRef.id, actor)
+    auditEntry(tx, ref, eventRef, plate, at, eventRef.id, actor, { eventInstant: instant })
     return ref
   })
 }

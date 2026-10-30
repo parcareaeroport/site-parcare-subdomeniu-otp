@@ -352,6 +352,48 @@ let server, browser, logs = ''
     console.log('PASS entriesOperator manual exit, audit and occupancy at width '+width)
   }
 
+  // Newly received but unassociated entry invalidates the open dialog; a fresh
+  // context still refuses an earlier exit, without clearing the user's values.
+  await page.evaluate(()=>localStorage.setItem('fixtureRole','admin'))
+  for(const width of [1440,390]) {
+    const id='late-entry-ui-'+width,plate='LATE'+width
+    await db.doc('bookings/'+id).set({...base,licensePlate:plate,lpr:{isInside:true,arrivedAt:'2026-10-25T10:00:00Z',lastSeenAt:'2026-10-25T10:00:00Z',lastEventType:'entry'}})
+    await page.setViewportSize({width,height:width===390?844:1000});await page.goto('http://localhost:3182/admin/dashboard/ocupare')
+    await page.getByRole('row').filter({hasText:plate}).getByRole('button',{name:'Scoate din parcare',exact:true}).click()
+    const guardDialog=page.getByRole('dialog');await expect(guardDialog).toContainText('Intrare înregistrată')
+    await page.locator('#manual-lpr-date').fill('2026-10-25');await page.locator('#manual-lpr-time').fill('12:00:00')
+    await db.doc('lpr_events/'+id).set({normalizedPlate:plate,eventType:'entry',eventTime:'2026-10-25T13:00:00Z',associationStatus:'needs_review',associationReason:'open_visit_conflicts_with_reservation'})
+    await guardDialog.getByRole('button',{name:'Salvează',exact:true}).click()
+    await expect(guardDialog.getByRole('alert')).toContainText('Datele s-au schimbat')
+    await expect(page.locator('#manual-lpr-time')).toHaveValue('12:00:00')
+    await guardDialog.getByRole('button',{name:'Reîncarcă șederea',exact:true}).click()
+    await expect(page.locator('#manual-lpr-date')).toHaveValue('')
+    await page.locator('#manual-lpr-date').fill('2026-10-25');await page.locator('#manual-lpr-time').fill('12:00:00')
+    await guardDialog.getByRole('button',{name:'Salvează',exact:true}).click()
+    await expect(guardDialog.getByRole('alert')).toContainText('Necesită verificare ADMIN')
+    await expect(page.locator('#manual-lpr-time')).toHaveValue('12:00:00')
+    assert.equal((await db.doc('bookings/'+id).get()).data().lpr.isInside,true)
+    await page.screenshot({path:'/tmp/parking-exit-guard-'+width+'.png'})
+    await guardDialog.getByRole('button',{name:'Renunță',exact:true}).click()
+    assert.equal((await cameraReceipt(plate,'exit','2026-10-25T12:00:00Z')).warning,'later_entry_requires_review')
+    await page.reload();await attention.locator('summary').click()
+    await expect(attention).toContainText('Ieșirea veche nu a scos mașina din evidență')
+  }
+  // A typed time in the repeated hour requires review, preserving presence.
+  await db.doc('bookings/dst-ui').set({...base,licensePlate:'DSTUI',lpr:{isInside:true,arrivedAt:'2026-10-25T02:00:00Z',lastSeenAt:'2026-10-25T02:00:00Z',lastEventType:'entry'}})
+  await page.reload();await page.getByRole('row').filter({hasText:'DSTUI'}).getByRole('button',{name:'Scoate din parcare',exact:true}).click()
+  const dstDialog=page.getByRole('dialog');await expect(dstDialog).toContainText('Intrare înregistrată')
+  await page.locator('#manual-lpr-date').fill('2026-10-25');await page.locator('#manual-lpr-time').fill('03:30:00')
+  await dstDialog.getByRole('button',{name:'Salvează',exact:true}).click()
+  await expect(dstDialog.getByRole('alert')).toContainText('se repetă la schimbarea orei')
+  await expect(page.locator('#manual-lpr-time')).toHaveValue('03:30:00')
+  assert.equal((await db.doc('bookings/dst-ui').get()).data().lpr.isInside,true)
+  await dstDialog.getByRole('button',{name:'Renunță',exact:true}).click()
+  assert.equal((await cameraReceipt('DSTUI','exit','2026-10-25T03:30:00Z')).warning,'ambiguous_event_time')
+  await page.reload();await attention.locator('summary').click()
+  await expect(attention).toContainText('Ora camerei se repetă la schimbarea orei')
+  console.log('PASS new exit guards: receipt conflict/reload, review with values preserved, repeated-hour rejection and camera warning; desktop/mobile')
+
   assert.equal(errors.length,0,errors.join('\n'))
   console.log('PASS protected manual exit from ALL THREE PAGES, duplicate/date/conflict/missing-arrival guards, foreign browser timezone; actual late-exits page (carry-over + same-day), desktop/mobile, manual exit UI → Firestore → occupancy page; no runtime errors or production Firebase requests')
 })().catch(e=>{console.error(e);console.error(logs.slice(-5000));process.exitCode=1}).finally(async()=>{await browser?.close();server?.kill('SIGTERM');await deleteApp(adminApp)})

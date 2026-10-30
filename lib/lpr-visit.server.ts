@@ -1,19 +1,21 @@
 import "server-only"
 import { FieldValue } from "firebase-admin/firestore"
 import { getLprPresenceState } from "@/lib/lpr-presence"
+import { uniqueLprInstant } from "./lpr-time"
 
 /** Shared state transition for camera and admin events. The caller must finish all
  * transaction reads (including the per-plate lock) before calling this function.
  * Existing occupancy flags are preserved for compatibility with reservation writers.
  */
 export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFirestore.Firestore, input: {
-  ref: FirebaseFirestore.DocumentReference; data: any; plate: string; at: string
+  ref: FirebaseFirestore.DocumentReference; data: any; plate: string; at: string; instant?: string | null
   eventType: "entry" | "exit"; eventId: string; visitId?: string | null
   deviceId: string | null; manual?: boolean; actor?: { uid: string; email: string | null }
   lprExtra?: Record<string, unknown>; patch?: Record<string, unknown>
   create?: boolean; updatePointer?: boolean; unmatched?: boolean
 }) {
   const { ref, data, plate, at, eventType } = input
+  const instant = input.instant ?? uniqueLprInstant(at)
   const wasInside = getLprPresenceState(data).isEffectivelyInside
   const visitId = input.visitId ?? data.lpr?.visitId ?? (eventType === "entry" ? input.eventId : null)
   const delta = eventType === "entry"
@@ -22,11 +24,11 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
   const lpr = {
     ...(data.lpr || {}), ...input.lprExtra,
     isInside: eventType === "entry", visitId,
-    lastSeenAt: at, lastEventType: eventType, lastSeenDeviceId: input.deviceId ?? null,
+    lastSeenAt: at, lastSeenAtInstant: instant, lastEventId: input.eventId, lastEventType: eventType, lastSeenDeviceId: input.deviceId ?? null,
     lastSeenPlateNumber: plate, manualOverride: input.manual === true,
     ...(input.actor ? { manualOverrideAt: FieldValue.serverTimestamp(), manualOverrideByUid: input.actor.uid, manualOverrideByEmail: input.actor.email } : {}),
-    ...(eventType === "entry" && !wasInside ? { arrivedAt: at, departedAt: null } : {}),
-    ...(eventType === "exit" ? { departedAt: at } : {}),
+    ...(eventType === "entry" && !wasInside ? { arrivedAt: at, arrivedAtInstant: instant, departedAt: null, departedAtInstant: null } : {}),
+    ...(eventType === "exit" ? { departedAt: at, departedAtInstant: instant } : {}),
   }
   const patch = { ...input.patch, lpr, lastUpdated: FieldValue.serverTimestamp(),
     ...(delta === 1 ? { occupancyIncremented: true, occupancyDecremented: false, occupancyIncrementedAt: FieldValue.serverTimestamp() } : {}),
@@ -35,7 +37,7 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
   if (input.create) tx.create(ref, patch)
   else tx.update(ref, patch)
   if (input.updatePointer !== false) tx.set(db.collection("lpr_plate_state").doc(plate), {
-    bookingId: ref.id, visitId, isInside: eventType === "entry", lastEventAt: at,
+    bookingId: ref.id, visitId, isInside: eventType === "entry", lastEventAt: at, lastEventAtInstant: instant, lastEventId: input.eventId,
     lastEventType: eventType, lastDeviceId: input.deviceId, updatedAt: FieldValue.serverTimestamp(),
   })
   if (delta) tx.set(db.collection("config").doc("parkingLive"), {
@@ -53,9 +55,9 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
  * The caller validates/version-checks the context and writes the correction audit.
  */
 export function correctLprArrival(tx: FirebaseFirestore.Transaction, ref: FirebaseFirestore.DocumentReference,
-  data: any, at: string, actor: { uid: string; email: string | null }) {
+  data: any, at: string, actor: { uid: string; email: string | null }, instant = uniqueLprInstant(at)) {
   tx.update(ref, {
-    "lpr.arrivedAt": at, "lpr.arrivalCorrectedAt": FieldValue.serverTimestamp(),
+    "lpr.arrivedAt": at, "lpr.arrivedAtInstant": instant, "lpr.arrivalCorrectedAt": FieldValue.serverTimestamp(),
     "lpr.arrivalCorrectedByUid": actor.uid, "lpr.arrivalCorrectedByEmail": actor.email,
     lastUpdated: FieldValue.serverTimestamp(),
   })

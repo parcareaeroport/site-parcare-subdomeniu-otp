@@ -4,7 +4,7 @@ import { FieldValue } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { getLprPresenceState } from "@/lib/lpr-presence"
-import { ManualExitError, manualExitClock } from "@/lib/manual-lpr-exit.server"
+import { ManualExitError, manualExitClock, manualLprInstant } from "@/lib/manual-lpr-exit.server"
 
 export async function readPlateChange(tx: FirebaseFirestore.Transaction, bookingId: string, newPlate: string) {
   const plate = normalizeLicensePlate(newPlate)
@@ -32,9 +32,11 @@ export function writePlateChange(tx: FirebaseFirestore.Transaction, ctx: Awaited
     licensePlateUpdatedAt: FieldValue.serverTimestamp(), licensePlateUpdatedByEmail: actor.email, lastUpdated: FieldValue.serverTimestamp() })
   // Both plate documents were read: simultaneous cameras/corrections conflict and retry.
   if (ctx.inside) {
+    const realNow = new Date(), through = manualExitClock(realNow)
     const visitId = ctx.b.lpr?.visitId || `plate_correction_${ctx.ref.id}`
     tx.update(ctx.ref, { "lpr.visitId": visitId, "lpr.lastSeenPlateNumber": ctx.plate })
     tx.set(ctx.newRef, { bookingId: ctx.ref.id, visitId, isInside: true, lastEventAt: ctx.b.lpr?.lastSeenAt || ctx.b.lpr?.arrivedAt || null,
+      lastEventAtInstant: ctx.b.lpr?.lastSeenAt ? ctx.b.lpr?.lastSeenAtInstant ?? null : ctx.b.lpr?.arrivedAtInstant ?? null,
       lastEventType: ctx.b.lpr?.lastEventType || "entry", lastDeviceId: ctx.b.lpr?.lastSeenDeviceId || null, updatedAt: FieldValue.serverTimestamp() })
     // Historical stays may have no old pointer. Always retain a boundary on the
     // old number, otherwise a delayed reading creates a second unmatched visit.
@@ -43,10 +45,11 @@ export function writePlateChange(tx: FirebaseFirestore.Transaction, ctx: Awaited
     tx.set(ctx.oldRef, {
       ...(!ctx.oldState.exists ? { bookingId: ctx.ref.id, visitId, isInside: false,
         lastEventAt: ctx.b.lpr?.lastSeenAt || ctx.b.lpr?.arrivedAt || null,
+        lastEventAtInstant: ctx.b.lpr?.lastSeenAt ? ctx.b.lpr?.lastSeenAtInstant ?? null : ctx.b.lpr?.arrivedAtInstant ?? null,
         lastEventType: ctx.b.lpr?.lastEventType || "entry", lastDeviceId: ctx.b.lpr?.lastSeenDeviceId || null } : {}),
       ...(ctx.oldState.data()?.bookingId === ctx.ref.id ? { isInside: false } : {}),
       plateCorrectedTo: ctx.plate,
-      plateCorrection: { bookingId: ctx.ref.id, visitId, correctedTo: ctx.plate, through: manualExitClock() },
+      plateCorrection: { bookingId: ctx.ref.id, visitId, correctedTo: ctx.plate, through, throughInstant: manualLprInstant(through, true, realNow) },
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true })
   }

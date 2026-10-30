@@ -63,7 +63,7 @@ const rejects = (promise, code) => assert.rejects(promise,e=>e.code===code)
  })
  await check('receipt arriving after dialog preparation is rechecked at save',async()=>{
   await seed();const payload=input(await manual.prepareManualExit('active'));await event('exit','2026-07-16T12:00:00Z')
-  await rejects(enter(payload,actor),'LATER_EXIT');await totals(0)
+  await rejects(enter(payload,actor),'CONTEXT_CHANGED');await rejects(enterAt('active','10:00:00'),'LATER_EXIT');await totals(0)
  })
  for (const reason of ['future_event_time','stale_event_time','invalid_event_time']) await check('rejected '+reason+' receipt is not trusted as physical exit',async()=>{
   await seed();await db.doc('lpr_events/invalid').set({normalizedPlate:'TEST01',eventType:'exit',eventTime:'2026-07-16T12:00:00Z',associationStatus:'needs_review',associationReason:reason})

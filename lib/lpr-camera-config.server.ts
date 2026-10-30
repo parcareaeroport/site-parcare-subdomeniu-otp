@@ -1,6 +1,6 @@
 import "server-only"
 import { timingSafeEqual } from "node:crypto"
-import { manualExitClock } from "@/lib/manual-lpr-exit.server"
+import { romaniaCivilClock, uniqueLprInstant } from "./lpr-time"
 export type CameraTimeMode = "romania_wall_clock" | "instant"
 export type CameraConfig = { direction:"entry"|"exit"; timestampMode:CameraTimeMode; maxEventAgeMinutes?:number }
 export function validSecret(header: string | null, secret: string | undefined) {
@@ -33,5 +33,11 @@ export function parseCameraTime(value: unknown, mode: CameraTimeMode = "romania_
   if (!match[3]) return null // Never guess the source offset.
   const instant = new Date(s)
   if (!Number.isFinite(instant.getTime())) return null
-  return manualExitClock(instant).replace(".000Z", civil.slice(-5))
+  return romaniaCivilClock(instant)
+}
+
+export function cameraEventInstant(value: unknown, mode: CameraTimeMode = "romania_wall_clock"): string | null {
+  const wall = parseCameraTime(value, mode)
+  if (!wall) return null
+  return mode === "instant" ? new Date(String(value).trim().replace(" ", "T")).toISOString() : uniqueLprInstant(wall)
 }

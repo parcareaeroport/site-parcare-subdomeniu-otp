@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { FieldValue } from "firebase-admin/firestore"
-import { parseCameraTime, type CameraTimeMode } from "@/lib/lpr-camera-config.server"
-import { manualExitClock } from "@/lib/manual-lpr-exit.server"
+import { parseCameraTime, cameraEventInstant, type CameraTimeMode } from "@/lib/lpr-camera-config.server"
+import { manualExitClock, manualLprInstant } from "@/lib/manual-lpr-exit.server"
 import { isTollgateWhitelistedPlate } from "@/lib/lpr-tollgate-whitelist"
 import { db, serverTimestamp } from "@/lib/server-firestore"
 import { getLprPresenceState, lprTimestampToMillis } from "@/lib/lpr-presence"
@@ -9,6 +9,8 @@ import { isBeforePlateCorrection, isLaterKnownExit } from "@/lib/lpr-entry-evide
 import { writeLprVisit } from "@/lib/lpr-visit.server"
 import { LPR_ACTIVE_STATUSES as ACTIVE_STATUSES, LPR_TOLERANCE_MS as TOLERANCE_MS, inLprBookingWindow as inBookingWindow } from "@/lib/lpr-booking-window"
 import { normalizeLicensePlate } from "@/lib/utils"
+import { bookingLprTimes, compareLprTimes, lprTime, lprTimeCandidates, receiptLprTime } from "./lpr-time"
+import { lprExitConflict } from "./lpr-exit-evidence"
 
 type Nullable<T> = T | null
 export interface LprEventInput {
@@ -48,21 +50,23 @@ export async function handleLprEvent(input: LprEventInput): Promise<LprResult> {
   const normalizedPlate = normalizeLicensePlate(typeof input.plateNumber === "string" ? input.plateNumber : "")
   const eventType = inferEventType(input.deviceId, input.direction)
   const at = parseCameraTime(input.accurateTime || input.snapTime, input.timestampMode)
+  const instant = cameraEventInstant(input.accurateTime || input.snapTime, input.timestampMode)
   const id = `camera_${createHash("sha256").update(JSON.stringify([normalizedPlate, input.deviceId, eventType, input.accurateTime || input.snapTime])).digest("hex")}`
   const ref = db.collection("lpr_events").doc(id)
   let invalid: string | null = null
-  const clockNow = Date.parse(manualExitClock())
+  const realNow = new Date(), nowWall = manualExitClock(realNow), clockNow = Date.parse(manualLprInstant(nowWall, true, realNow))
   if (!normalizedPlate || normalizedPlate.length > 20) invalid = "missing_plate"
   else if (!at) invalid = "invalid_event_time"
   else if (eventType === "unknown") invalid = "unknown_direction"
-  else if (Math.floor(Date.parse(at) / 1000) > Math.floor(clockNow / 1000)) invalid = "future_event_time"
-  else if (input.maxEventAgeMinutes !== undefined && clockNow - Date.parse(at) > input.maxEventAgeMinutes * 60000) invalid = "stale_event_time"
+  else if (!instant) invalid = lprTimeCandidates(lprTime(at)).length ? "ambiguous_event_time" : "invalid_event_time"
+  else if (Math.floor(Date.parse(instant) / 1000) > Math.floor(clockNow / 1000)) invalid = "future_event_time"
+  else if (input.maxEventAgeMinutes !== undefined && clockNow - Date.parse(instant) > input.maxEventAgeMinutes * 60000) invalid = "stale_event_time"
 
   try {
     await ref.create({
       plateNumber:input.plateNumber || null, normalizedPlate:normalizedPlate || null,
       laneNo:input.laneNo ?? null, deviceId:input.deviceId ?? null, direction:input.direction ?? null,
-      accurateTime:input.accurateTime ?? null, snapTime:input.snapTime ?? null, eventTime:at,
+      accurateTime:input.accurateTime ?? null, snapTime:input.snapTime ?? null, eventTime:at, eventInstant:instant,
       timestampMode:input.timestampMode || "romania_wall_clock", eventType,
       receivedAt:serverTimestamp(), raw:input.raw ?? null,
       associationStatus:invalid ? "needs_review" : "pending", associationReason:invalid,
@@ -84,11 +88,12 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
   const input = receipt.data()! as any
   const saved = {id}, normalizedPlate = input.normalizedPlate as string, eventType = input.eventType as LprEventType
   const at = input.eventTime as string, eventMs = Date.parse(at)
+  const point = receiptLprTime(input), instants = lprTimeCandidates(point)
   const finished = (data: any): LprResult => ({savedEventId:id,eventType,
     ...(data.matchedBookingId ? {matchedBookingId:data.matchedBookingId} : {}),
     ...(data.associationReason ? {warning:data.associationReason} : {})})
   if (input.associationStatus !== "pending") return finished(input)
-  if (!at || !Number.isFinite(eventMs) || !normalizedPlate || (eventType !== "entry" && eventType !== "exit")) {
+  if (!at || !Number.isFinite(eventMs) || instants.length !== 1 || !normalizedPlate || (eventType !== "entry" && eventType !== "exit")) {
     // Old pending receipts predate the explicit camera clock convention. Do not guess it.
     await db.runTransaction(async tx => {
       const current = await tx.get(eventRef)
@@ -127,8 +132,8 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
       }
       // Do not apply a later exit while its earlier entry is waiting for a retry.
       // Including the receipts in this transaction also detects a concurrently arriving earlier event.
-      const earlierPending = plateReceipts.docs.some(d => d.id !== id && d.data().associationStatus === "pending" &&
-        typeof d.data().eventTime === "string" && Date.parse(d.data().eventTime) < eventMs)
+      const earlierPending = plateReceipts.docs.some(d => d.id !== id && d.data().associationStatus === "pending" && !d.data().supersededBy &&
+        compareLprTimes(receiptLprTime(d.data()), point) === -1)
       if (earlierPending) {
         tx.update(eventRef, {associationReason:"earlier_event_pending",nextAttemptAt:Date.now()+30000})
         return {savedEventId:id,eventType,degraded:true,warning:"earlier_event_pending"}
@@ -155,19 +160,16 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
       // genuinely later vehicle with the old number is not excluded indefinitely.
       // Admin corrections have second precision; do not infer a new vehicle from
       // camera milliseconds within that same, ambiguous second.
-      if (isBeforePlateCorrection(state, eventMs)) {
+      if (isBeforePlateCorrection(state, eventMs, point)) {
         return review("plate_corrected_event_requires_review", state.plateCorrection?.bookingId ? [state.plateCorrection.bookingId] : [])
       }
       // A late delivery must not undo a newer camera OR manual decision.
-      const timestamps = [lprTimestampToMillis(state.lastEventAt), ...all.flatMap(row => [
-        lprTimestampToMillis(row.data.lpr?.lastSeenAt),
-        lprTimestampToMillis(row.data.lpr?.arrivedAt),
-        lprTimestampToMillis(row.data.lpr?.departedAt),
-      ])].filter((v): v is number => v !== null)
-      const latest = timestamps.length ? Math.max(...timestamps) : null
-      if (latest !== null && eventMs < latest) return review("out_of_order_event")
-      if (latest === eventMs) {
-        if (state.lastEventAt === at && state.lastEventType === eventType && state.lastDeviceId === input.deviceId) {
+      const timestamps = [...(lprTimestampToMillis(state.lastEventAt) !== null ? [lprTime(state.lastEventAt, state.lastEventAtInstant)] : []), ...all.flatMap(row => bookingLprTimes(row.data))]
+      const orders = timestamps.map(p => compareLprTimes(point, p))
+      if (orders.some(n => n === null)) return review("ambiguous_event_order")
+      if (orders.includes(-1)) return review("out_of_order_event")
+      if (orders.includes(0)) {
+        if (compareLprTimes(lprTime(state.lastEventAt, state.lastEventAtInstant), point) === 0 && state.lastEventType === eventType && state.lastDeviceId === input.deviceId) {
           tx.update(eventRef, { associationStatus: "duplicate", nextAttemptAt:FieldValue.delete(), matchedBookingId: state.bookingId || null })
           return { savedEventId: saved.id, eventType, ...(state.bookingId ? { matchedBookingId: state.bookingId } : {}) }
         }
@@ -181,8 +183,8 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
         // The receipt query is part of this transaction, so concurrent delivery
         // cannot bypass this check. Keep ambiguous evidence for an admin instead
         // of inventing a booking association or a physical departure.
-        const nowMs = Date.parse(manualExitClock())
-        const laterExits = plateReceipts.docs.filter(d => d.id !== id && isLaterKnownExit(d.data(), eventMs, nowMs))
+        const realNow = new Date(), nowWall = manualExitClock(realNow), nowMs = Date.parse(nowWall)
+        const laterExits = plateReceipts.docs.filter(d => d.id !== id && isLaterKnownExit(d.data(), eventMs, nowMs, false, point, lprTime(nowWall, manualLprInstant(nowWall, true, realNow))))
         if (laterExits.length) {
           tx.update(eventRef, { relatedEventIds: laterExits.slice(0, 20).map(d => d.id), relatedEventCount: laterExits.length })
           return review("later_exit_requires_review", all.map(row => row.id))
@@ -196,6 +198,8 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
         // Never select a different reservation by the exit date. Overdue exits close the open visit.
         selected = pointer || open[0]
         if (!selected) return review("exit_without_open_visit")
+        const conflict = lprExitConflict({ bookingId: selected.id, booking: selected.data, state, receipts: plateReceipts.docs.filter(d => d.id !== id).map(d => d.data()), at: point })
+        if (conflict) return review(conflict, [selected.id])
       } else if (open.length === 1) {
         selected = pointer || open[0]
         if (eligible.some(row => row.id !== selected!.id)) {
@@ -223,14 +227,15 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
         })
       } else {
         if (eventType === "exit" && data.status === "unmatched_lpr") {
-          const arrived = lprTimestampToMillis(data.lpr?.arrivedAt)
+          const arrived = lprTimeCandidates(lprTime(data.lpr?.arrivedAt, data.lpr?.arrivedAtInstant))
           Object.assign(patch, {
             endDate: at.slice(0, 10), endTime: at.slice(11, 16),
-            durationMinutes: arrived === null ? (data.durationMinutes || 0) : Math.max(0, Math.round((eventMs - arrived) / 60_000)),
+            durationMinutes: arrived.length !== 1 ? (data.durationMinutes || 0) : Math.max(0, Math.round((instants[0] - arrived[0]) / 60_000)),
           })
         }
       }
-      writeLprVisit(tx, db, { ref: bookingRef, data, plate: normalizedPlate, at,
+      const instant = new Date(instants[0]).toISOString()
+      writeLprVisit(tx, db, { ref: bookingRef, data, plate: normalizedPlate, at, instant,
         eventType, eventId: saved.id, visitId, deviceId: input.deviceId, create: isNew, patch,
         unmatched: isNew || data.status === "unmatched_lpr",
         lprExtra: { lastSeenLaneNo: input.laneNo ?? null, lastEventAccurateTime: input.accurateTime ?? null },
@@ -239,7 +244,7 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
         eventType, plateNumber: normalizedPlate, laneNo: input.laneNo ?? null,
         deviceId: input.deviceId ?? null, direction: input.direction ?? null,
         snapTime: input.snapTime ?? null, accurateTime: input.accurateTime ?? null,
-        lprEventId: saved.id, visitId, createdAt: serverTimestamp(),
+        lprEventId: saved.id, visitId, eventTime: at, eventInstant: instant, createdAt: serverTimestamp(),
       })
       tx.update(eventRef, {
         matchedBookingId: bookingRef.id, visitId, nextAttemptAt:FieldValue.delete(), associationReason:null,
