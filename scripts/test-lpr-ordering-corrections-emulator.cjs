@@ -51,7 +51,7 @@ async function check(name,fn) {
   await check('exit delivered first prevents stale entry reopening; both receipts remain reviewable',async()=>{
     await seed();const x=await event('exit','2026-07-16T12:00:00Z');assert.equal(x.warning,'exit_without_open_visit')
     const e=await event('entry');await totals(0);assert.equal(e.warning,'later_exit_requires_review')
-    assert.deepEqual((await receipt(e)).relatedEventIds,[x.savedEventId]);assert.equal((await observed()).lprAttention.count,2)
+    assert.deepEqual((await receipt(e)).relatedEventIds,[x.savedEventId]);const attention=(await observed()).lprAttention;assert.equal(attention.count,1);assert.equal(attention.eventCount,2)
     assert.equal((await read('active')).lpr,undefined);assert.equal((await db.collection('bookings/active/gateEvents').get()).size,0)
     await event('entry');await event('exit','2026-07-16T12:00:00Z');await retry();await totals(0)
   })
