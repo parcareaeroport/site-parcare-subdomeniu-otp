@@ -57,6 +57,34 @@ const laterBooking=()=>seed('new-booking',{startTime:'12:00',endTime:'23:00',end
 const instantEvent=(type,at)=>camera({plateNumber:'TEST01',deviceId:type==='entry'?'intrare_1':'iesire_1',direction:type,snapTime:at,accurateTime:at,laneNo:1,timestampMode:'instant'})
 const snapshot=async()=>({b:await read('active'),p:(await db.doc('lpr_plate_state/TEST01').get()).data(),count:(await observed()).occupiedCount})
 ;(async()=>{
+ await check('legacy linked camera entry and duplicate receipts do not block a valid manual exit',async()=>{
+  await legacy({visitId:'legacy-entry'})
+  await db.doc('lpr_plate_state/TEST01').set({bookingId:'active',visitId:'legacy-entry',isInside:true,lastEventAt:'2026-07-16T10:00:00Z',lastEventType:'entry'})
+  for(const [id,status] of [['legacy-entry','matched'],['legacy-duplicate','duplicate']]) await db.doc('lpr_events/'+id).set({normalizedPlate:'TEST01',eventType:'entry',deviceId:'intrare_1',accurateTime:'2026-07-16 10:00:00.000',associationStatus:status,matchedBookingId:'active'})
+  await exitAt();await totals(0)
+  assert.equal((await read('active')).lpr.departedAt,'2026-07-16T12:00:00.000Z')
+  assert.equal((await db.doc('lpr_events/legacy-entry').get()).data().eventTime,undefined)
+ })
+ for(const channel of ['camera','manual']) await check('legacy linked later entry still blocks earlier '+channel+' exit',async()=>{
+  await seed();await event('entry')
+  await db.doc('lpr_events/later-legacy').set({normalizedPlate:'TEST01',eventType:'entry',accurateTime:'2026-07-16 13:00:00.000',associationStatus:'matched',matchedBookingId:'other-booking'})
+  if(channel==='manual') await reject(exitAt(),'EXIT_REQUIRES_REVIEW')
+  else assert.equal((await event('exit','2026-07-16T12:00:00Z')).warning,'later_entry_requires_review')
+  await totals(1)
+ })
+ for(const patch of [
+  {accurateTime:'invalid'}, {accurateTime:'2026-02-30 10:00:00'},
+  {accurateTime:'2026-07-16 10:00:00',associationStatus:'pending'},
+  {accurateTime:'2026-07-16 10:00:00',matchedBookingId:null},
+  {accurateTime:'2026-07-16 10:00:00',eventTime:'invalid'},
+  {accurateTime:'2026-07-16 10:00:00',clockOffsetSeconds:3149},
+  {accurateTime:'2026-07-16T10:00:00Z',timestampMode:'instant'},
+  {accurateTime:'2026-10-25 03:30:00'},
+ ]) await check('unproven legacy clock remains blocked: '+JSON.stringify(patch),async()=>{
+  await seed();await event('entry')
+  await db.doc('lpr_events/unproven-legacy').set({normalizedPlate:'TEST01',eventType:'entry',associationStatus:'matched',matchedBookingId:'active',...patch})
+  await reject(exitAt(),'EXIT_REQUIRES_REVIEW');await totals(1)
+ })
  await check('old camera exit cannot close newer unassociated reentry',async()=>{
   await seed();await event('entry');await laterBooking()
   assert.equal((await event('entry','2026-07-16T13:00:00Z')).warning,'open_visit_conflicts_with_reservation')

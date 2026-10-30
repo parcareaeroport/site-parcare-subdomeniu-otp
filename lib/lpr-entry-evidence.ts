@@ -19,12 +19,10 @@ export function isTrustedLprReceipt(receipt: any, includePending = true): boolea
 
 export function isLaterKnownExit(receipt: any, entryMs: number, nowMs: number, includePending = false, entryPoint?: LprTime, nowPoint?: LprTime): boolean {
   if (receipt.eventType !== "exit" || !isTrustedLprReceipt(receipt, includePending)) return false
-  // Older manual receipts use the same Romania civil-clock convention, but did
-  // not have eventTime. Never apply that fallback to an unknown camera clock.
-  const rawTime = receipt.eventTime ?? (receipt.manual === true ? receipt.accurateTime ?? receipt.snapTime : null)
-  const at = parseCameraTime(rawTime, "romania_wall_clock")
-  if (!at) return false
   const point = receiptLprTime(receipt)
+  // Includes proven legacy linked camera receipts, never an unknown raw clock.
+  const at = parseCameraTime(point.wall, "romania_wall_clock")
+  if (!at) return false
   const after = compareLprTimes(point, entryPoint || lprTime(entryMs))
   const future = compareLprTimes(point, nowPoint || lprTime(nowMs), 1000)
   return after !== -1 && future !== 1

@@ -44,8 +44,26 @@ export function bookingLprTimes(b: any): LprTime[] {
   return ["arrivedAt", "departedAt", "lastSeenAt"].filter(k => lprTimestampToMillis(lpr[k]) !== null)
     .map(k => lprTime(lpr[k], lpr[`${k}Instant`]))
 }
+/** Old successfully associated camera receipts predate eventTime/eventInstant.
+ * Their raw timestamp used Romania civil time, just like the booking *At fields.
+ * Only recover that documented legacy format for receipts already linked to a
+ * booking. Never reinterpret rejected/unassociated clocks or apply today's offset
+ * to history. An explicitly stored eventTime always takes precedence, even invalid.
+ */
+function legacyLinkedCameraClock(r: any): string | null {
+  if (!["matched", "duplicate", "unmatched_visit"].includes(r.associationStatus) ||
+    typeof r.matchedBookingId !== "string" || !r.matchedBookingId ||
+    r.clockOffsetSeconds != null || r.timestampMode && r.timestampMode !== "romania_wall_clock") return null
+  const raw = r.accurateTime ?? r.snapTime
+  if (typeof raw !== "string") return null
+  const match = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(\.\d{1,3})?Z?$/.exec(raw.trim())
+  if (!match) return null
+  const wall = `${match[1]}T${match[2]}${(match[3] || ".").padEnd(4, "0")}Z`
+  const ms = Date.parse(wall)
+  return Number.isFinite(ms) && new Date(ms).toISOString() === wall ? wall : null
+}
 export function receiptLprTime(r: any): LprTime {
-  return lprTime(r.eventTime ?? (r.manual === true ? r.accurateTime ?? r.snapTime : null), r.eventInstant)
+  return lprTime(r.eventTime ?? (r.manual === true ? r.accurateTime ?? r.snapTime : legacyLinkedCameraClock(r)), r.eventInstant)
 }
 export function normalizeLprEventType(value: unknown): "entry" | "exit" | null {
   const type = String(value || "").trim().toLowerCase()

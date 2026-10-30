@@ -114,7 +114,14 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       if (order === -1) throw new ManualExitError("EXIT_BEFORE_ENTRY", "Ieșirea nu poate fi înaintea intrării pentru această ședere.")
     }
     const conflict = lprExitConflict({ bookingId: ref.id, booking: b, state: state.data(), receipts: receipts.docs.map(d => d.data()), at: point, manual: true })
-    if (conflict) throw new ManualExitError(conflict === "exit_before_last_entry" ? "EXIT_BEFORE_LAST_ENTRY" : "EXIT_REQUIRES_REVIEW", "Necesită verificare ADMIN: există o intrare mai nouă sau date contradictorii despre ședere. Ieșirea nu a fost salvată.", 409)
+    if (conflict) {
+      const detail = conflict === "ambiguous_exit_order"
+        ? "ordinea evenimentelor LPR nu poate fi stabilită din orele disponibile"
+        : conflict === "later_entry_requires_review" || conflict === "exit_before_last_entry"
+          ? "există o intrare înregistrată după ora plecării indicate"
+          : "evidențele șederii sunt contradictorii"
+      throw new ManualExitError(conflict === "exit_before_last_entry" ? "EXIT_BEFORE_LAST_ENTRY" : "EXIT_REQUIRES_REVIEW", `Necesită verificare ADMIN: ${detail}. Ieșirea nu a fost salvată.`, 409)
+    }
     // A correction to a closed visit cannot move its departure into a later visit.
     const pointer = state.data()
     const pointerTime = validMillis(pointer?.lastEventAt)
