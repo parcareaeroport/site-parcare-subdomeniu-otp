@@ -4,7 +4,10 @@ import { useAuth } from "@/context/auth-context"
 import { adminAuthorizedFetch } from "@/lib/admin-authorized-fetch"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-export type LprAttention = {count:number; events:{id:string;plate:string;at:string|null;type:string;reason:string;pending:boolean;bookingIds:string[]}[]}
+import type { LprAttention } from "@/lib/lpr-attention"
+export type { LprAttention } from "@/lib/lpr-attention"
+const receivedFormat = new Intl.DateTimeFormat("ro-RO",{timeZone:"Europe/Bucharest",day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit",hourCycle:"h23"})
+const receivedLabel = (value:string|null) => value ? receivedFormat.format(new Date(value)) : "Necunoscut"
 const reasons:Record<string,string> = {
   invalid_pending_event:"Eveniment vechi/incomplet: ora trebuie verificată",
   earlier_event_pending:"Așteaptă procesarea unui eveniment anterior",
@@ -19,6 +22,7 @@ const reasons:Record<string,string> = {
   ambiguous_exit_order:"Ordinea intrării și ieșirii nu poate fi stabilită sigur. Prezența nu a fost schimbată.",
   plate_corrected_event_requires_review:"Citire întârziată pentru un număr corectat. Nu s-a creat o prezență suplimentară; verifică șederea.",
   stale_event_time:"Eveniment vechi: verifică prezența actuală a mașinii",
+  invalid_clock_offset_config:"Corecția orei camerei este configurată invalid",
   future_event_time:"Ora camerei este în viitor",invalid_event_time:"Ora camerei este invalidă",
   unknown_direction:"Direcție necunoscută",missing_plate:"Număr lipsă sau invalid",
   association_failed:"Eroare temporară la procesare",simultaneous_event_requires_review:"Evenimente simultane contradictorii",
@@ -30,6 +34,8 @@ export function LprEventReview({attention,onSaved}:{attention:LprAttention;onSav
   const {user,isAdmin} = useAuth()
   const [selected,setSelected] = useState<LprAttention["events"][number]|null>(null)
   const [version,setVersion] = useState(""); const [note,setNote] = useState(""); const [confirmed,setConfirmed] = useState(false)
+  const [showHistory,setShowHistory] = useState(false)
+  const [page,setPage] = useState(0)
   const [busy,setBusy] = useState(false); const [error,setError] = useState("")
   async function request(eventId:string,action:string) {
     const response = await adminAuthorizedFetch("/api/admin/lpr-review",user,{method:"POST",body:JSON.stringify({eventId,action,version,note,confirmed})})
@@ -46,16 +52,29 @@ export function LprEventReview({attention,onSaved}:{attention:LprAttention;onSav
     setBusy(true);setError("")
     try {await request(selected.id,action);setSelected(null);await onSaved()} catch(e) {setError(e instanceof Error ? e.message : "Salvarea a eșuat.")} finally {setBusy(false)}
   }
-  if (!attention.count && !selected) return null
+  const groups = showHistory ? attention.history : attention.groups
+  const currentPage = Math.min(page,Math.max(0,Math.ceil(groups.length/20)-1))
+  const visibleGroups = groups.slice(currentPage*20,currentPage*20+20)
+  if (!attention.totalCount && !selected) return null
   return <section className="my-4 rounded-lg border border-amber-400 bg-amber-50 p-4 text-sm" aria-label="Evenimente LPR de verificat">
-    <details><summary className="cursor-pointer font-semibold">Necesită verificare ADMIN: {attention.count} evenimente LPR</summary>
-      <p className="my-2">Aceste evenimente nu au actualizat automat prezența. Numărul afișat poate diferi de parcarea fizică până la verificare. Erorile temporare se reiau automat.</p>
-      {attention.events.map(event => <div key={event.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-amber-200 py-3">
-        <div><strong>{event.plate}</strong> · {event.type === "entry" ? "Intrare" : event.type === "exit" ? "Ieșire" : "Direcție necunoscută"} · {event.at ? event.at.slice(0,19).replace("T"," ") : "Oră necunoscută"} (România)<br/>{reasons[event.reason] || "Procesare în așteptare"}
-          {event.bookingIds.length > 0 && <p className="break-all text-xs">Rezervări: {event.bookingIds.join(", ")}</p>}</div>
-        {isAdmin && <Button variant="outline" onClick={() => void prepare(event)}>Verifică {event.plate}</Button>}
-      </div>)}
-      {attention.count > attention.events.length && <p>Sunt afișate primele {attention.events.length}. După soluționare și reîncărcare apar următoarele.</p>}
+    <details><summary className="cursor-pointer font-semibold">Necesită verificare ADMIN: {attention.count} {attention.count === 1 ? "număr auto" : "numere auto"} · ultimele {attention.windowHours} de ore</summary>
+      <p className="my-2">{attention.count ? `${attention.eventCount} mesaje recente nu au fost aplicate automat și pot necesita verificarea prezenței. Verifică fiecare caz înainte de a corecta evidența.` : "Nu sunt cazuri recente nerezolvate în această listă."} Numărul de cazuri nu reprezintă mașini prezente sau locuri ocupate.</p>
+      <div className="my-3 flex flex-wrap gap-2">
+        <Button className="h-auto max-w-full whitespace-normal text-left" variant={!showHistory ? "default" : "outline"} onClick={()=>{setShowHistory(false);setPage(0)}}>Cazuri recente ({attention.count})</Button>
+        <Button className="h-auto max-w-full whitespace-normal text-left" variant={showHistory ? "default" : "outline"} onClick={()=>{setShowHistory(true);setPage(0)}}>Istoric ({attention.totalCount-attention.eventCount} {attention.totalCount-attention.eventCount===1 ? "mesaj" : "mesaje"})</Button>
+      </div>
+      {showHistory && <p className="my-2">Mesaje mai vechi de {attention.windowHours} de ore, cu moment de primire necunoscut sau acoperite de o actualizare ulterioară a șederii. Sunt păstrate pentru diagnostic; această clasificare nu confirmă prezența fizică și nu modifică ocuparea.</p>}
+      {visibleGroups.map(group => <details key={group.plate} className="border-t border-amber-200 py-3">
+        <summary className="cursor-pointer break-words"><strong>{group.plate}</strong> · {group.events.length} {group.events.length===1 ? "mesaj" : "mesaje"} · Ultima primire: {receivedLabel(group.lastReceivedAt)} (România)<span className="mt-1 block">{reasons[group.events[0].reason] || "Necesită verificare"}</span></summary>
+        {group.events.map(event => <div key={event.id} className="ml-2 flex flex-wrap items-center justify-between gap-2 border-t border-amber-200 py-3">
+          <div className="min-w-0 flex-1">{event.type === "entry" ? "Intrare" : event.type === "exit" ? "Ieșire" : "Direcție necunoscută"} · Primit: {receivedLabel(event.receivedAt)} (România)<br/>
+            Ora evenimentului: {event.at ? event.at.slice(0,19).replace("T"," ") : "Necunoscută"} (România)<br/>{reasons[event.reason] || "Necesită verificare"}
+            {event.pending && <p className="text-xs">În așteptare pentru reîncercare.</p>}
+            {event.bookingIds.length>0 && <p className="break-all text-xs">Rezervări: {event.bookingIds.join(", ")}</p>}</div>
+          {isAdmin && <Button variant="outline" onClick={()=>void prepare(event)}>Verifică evenimentul</Button>}
+        </div>)}
+      </details>)}
+      {groups.length>20 && <div className="mt-3 flex flex-wrap items-center gap-3"><Button variant="outline" disabled={currentPage===0} onClick={()=>setPage(currentPage-1)}>Înapoi</Button><span>Pagina {currentPage+1} din {Math.ceil(groups.length/20)}</span><Button variant="outline" disabled={(currentPage+1)*20>=groups.length} onClick={()=>setPage(currentPage+1)}>Înainte</Button></div>}
     </details>
     <Dialog open={!!selected} onOpenChange={open=>{if(!open&&!busy)setSelected(null)}}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Verificare {selected?.plate}</DialogTitle><DialogDescription>Verifică fizic mașina și rezervarea în Bookings. Dacă este necesar, corectează intrarea sau ieșirea prin dialogurile dedicate, apoi reîncarcă verificarea aici. Această confirmare păstrează istoricul și nu schimbă ocuparea.</DialogDescription></DialogHeader>
       {error && <p role="alert" className="text-red-700">{error}</p>}

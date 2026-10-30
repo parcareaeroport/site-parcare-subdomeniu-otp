@@ -1,3 +1,5 @@
+import { buildLprAttention, LPR_ATTENTION_HOURS } from "@/lib/lpr-attention"
+import { normalizeLicensePlate } from "@/lib/utils"
 import { recalculateLiveOccupancy } from "@/lib/occupancy-recalculation.server"
 import { NextResponse } from "next/server"
 import { adminDb } from "@/lib/firebase-admin"
@@ -51,11 +53,19 @@ export async function GET(request: Request) {
     })
 
     const issues = await adminDb.collection("lpr_events").where("associationStatus", "in", ["pending", "needs_review"]).get()
-    const lprAttention = {count:issues.size, events:issues.docs.slice(0,50).map(d => {
-      const e = d.data()
-      return {id:d.id, plate:String(e.normalizedPlate || e.plateNumber || "Necunoscut"), at:typeof e.eventTime === "string" ? e.eventTime : null,
-        type:e.eventType || "unknown",reason:e.associationReason || "pending",pending:e.associationStatus === "pending",bookingIds:e.candidateBookingIds || []}
-    })}
+    const now = Date.now()
+    const records = issues.docs.map(d => ({id:d.id,data:d.data()}))
+    // Batch reads for recent plates only; no query per event or historical row.
+    const recentPlates = [...new Set(records.filter(r => {
+      const at = r.data.receivedAt?.toMillis?.()
+      return typeof at === "number" && at >= now - LPR_ATTENTION_HOURS * 3600000 && at <= now
+    }).map(r => normalizeLicensePlate(String(r.data.normalizedPlate || r.data.plateNumber || "")))).values()].filter(p => p && !p.includes("/"))
+    const states = new Map<string,any>()
+    for(let i=0;i<recentPlates.length;i+=100) {
+      const snapshots = await adminDb.getAll(...recentPlates.slice(i,i+100).map(p => adminDb.collection("lpr_plate_state").doc(p)))
+      for(const snapshot of snapshots) if(snapshot.exists) states.set(snapshot.id,snapshot.data())
+    }
+    const lprAttention = buildLprAttention(records,states,now)
 
     return NextResponse.json({ occupiedCount, maxLimit, plates, lprAttention }, { headers: { "Cache-Control": "no-store" } })
   } catch (e) {

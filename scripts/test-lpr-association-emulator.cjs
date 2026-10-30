@@ -70,6 +70,19 @@ const inside = b => getLprPresenceState(b).isEffectivelyInside
 const occupied = async () => (await (await occupancy(new Request('http://localhost/api/admin/occupancy'))).json())
 const audit = async r => (await adminDb.doc('lpr_events/' + r.savedEventId).get()).data()
 async function main() {
+ const {Timestamp}=require('firebase-admin/firestore')
+ await check('occupancy API groups recent plates, separates history and leaves occupancy unchanged',async()=>{
+  const now=Date.now()
+  for(const [id,age]of [['recent-a',1000],['recent-b',2000],['old',25*3600000]])await adminDb.doc('lpr_events/'+id).set({normalizedPlate:'TEST01',receivedAt:Timestamp.fromMillis(now-age),eventType:'exit',eventTime:'2026-10-30T11:00:00Z',associationStatus:'needs_review',associationReason:'exit_without_open_visit'})
+  const r=await occupied();assert.equal(r.occupiedCount,0);assert.equal(r.lprAttention.count,1);assert.equal(r.lprAttention.eventCount,2);assert.equal(r.lprAttention.groups[0].events.length,2);assert.equal(r.lprAttention.history[0].events.length,1);assert.equal(await count(),0)
+  assert.equal((await adminDb.doc('lpr_events/recent-a').get()).data().associationStatus,'needs_review')
+ })
+ await check('occupancy API batches plate state and places covered event in history',async()=>{
+  await adminDb.doc('lpr_events/covered').set({normalizedPlate:'TEST01',receivedAt:Timestamp.fromMillis(Date.now()-1000),eventType:'exit',eventTime:'2026-07-16T10:00:00Z',associationStatus:'needs_review',associationReason:'exit_without_open_visit'})
+  await adminDb.doc('lpr_plate_state/TEST01').set({lastEventType:'exit',isInside:false,lastEventAt:'2026-07-16T11:00:00Z'})
+  const r=await occupied();assert.equal(r.lprAttention.count,0);assert.equal(r.lprAttention.history[0].events[0].id,'covered');assert.equal(r.occupiedCount,0)
+ })
+
   await check('per-camera corrected entry/exit: association, duplicate, occupancy and original audit', async () => {
     process.env.LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON = JSON.stringify({intrare_1:3149,iesire_1:3206})
     try {
