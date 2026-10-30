@@ -18,7 +18,9 @@ export function isTrustedLprReceipt(receipt: any, includePending = true): boolea
 }
 
 export function isLaterKnownExit(receipt: any, entryMs: number, nowMs: number, includePending = false, entryPoint?: LprTime, nowPoint?: LprTime): boolean {
-  if (receipt.eventType !== "exit" || !isTrustedLprReceipt(receipt, includePending)) return false
+  const knownAbsent = receipt.eventType === "exit" ||
+    receipt.eventType === "presence_correction" && receipt.presenceAfter === false
+  if (!knownAbsent || !isTrustedLprReceipt(receipt, includePending)) return false
   const point = receiptLprTime(receipt)
   // Includes proven legacy linked camera receipts, never an unknown raw clock.
   const at = parseCameraTime(point.wall, "romania_wall_clock")

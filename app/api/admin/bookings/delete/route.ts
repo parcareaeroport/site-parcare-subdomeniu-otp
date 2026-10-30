@@ -19,6 +19,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing bookingId" }, { status: 400 })
     }
 
+    if (body.action !== undefined) {
+      if (body.action !== "prepare" && body.action !== "save") {
+        return NextResponse.json({ error: "Acțiune invalidă." }, { status: 400 })
+      }
+      const { prepareBookingDeletion, saveBookingDeletion } = await import("@/lib/booking-deletion.server")
+      const result = body.action === "prepare" ? await prepareBookingDeletion(bookingId) : await saveBookingDeletion({
+        bookingId, version: body.version, requestId: body.requestId, confirmNotPresent: body.confirmNotPresent === true,
+      }, authResult.user)
+      return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } })
+    }
+
     const bookingRef = adminDb.collection("bookings").doc(bookingId)
     const archiveRef = adminDb.collection("deleted_bookings").doc(bookingId)
 

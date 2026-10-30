@@ -2,6 +2,7 @@ import { lprLog } from "@/lib/lpr-log.server"
 import "server-only"
 import { FieldValue } from "firebase-admin/firestore"
 import { getLprPresenceState } from "@/lib/lpr-presence"
+import { lprOccupancyDelta } from "./lpr-occupancy-transition"
 import { uniqueLprInstant } from "./lpr-time"
 
 /** Shared state transition for camera and admin events. The caller must finish all
@@ -19,9 +20,7 @@ export function writeLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFir
   const instant = input.instant ?? uniqueLprInstant(at)
   const wasInside = getLprPresenceState(data).isEffectivelyInside
   const visitId = input.visitId ?? data.lpr?.visitId ?? (eventType === "entry" ? input.eventId : null)
-  const delta = eventType === "entry"
-    ? (!wasInside && (!data.occupancyIncremented || data.occupancyDecremented) ? 1 : 0)
-    : (wasInside && data.occupancyIncremented && !data.occupancyDecremented ? -1 : 0)
+  const delta = lprOccupancyDelta(data, eventType)
   const lpr = {
     ...(data.lpr || {}), ...input.lprExtra,
     isInside: eventType === "entry", visitId,

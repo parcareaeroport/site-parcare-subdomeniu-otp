@@ -2,7 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net'),{spawn}=require('node:child_process'),{createHash}=require('node:crypto')
 const root=path.resolve(__dirname,'..')
 const suites=[
- 'test-occupancy-http-ledger-emulator.cjs','test-lpr-association-emulator.cjs',
+ 'test-occupancy-http-ledger-emulator.cjs','test-booking-deletion-emulator.cjs','test-booking-delete-feedback.cjs','test-lpr-association-emulator.cjs',
  'test-lpr-entry-protections-emulator.cjs','test-lpr-exit-protections-emulator.cjs',
  'test-lpr-ordering-corrections-emulator.cjs','test-manual-lpr-entry-emulator.cjs',
  'test-manual-lpr-exit-emulator.cjs','test-occupancy-integrity-emulator.cjs','test-unified-occupancy-emulator.cjs',

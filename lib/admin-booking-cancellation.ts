@@ -33,7 +33,7 @@ export function assertBookingCanBeDeleted(data: FirebaseFirestore.DocumentData) 
   }
 }
 
-export async function prepareAdminCancellation(bookingId: string, options: { deleting?: boolean } = {}) {
+export async function prepareAdminCancellation(bookingId: string, options: { deleting?: boolean; validate?: (tx: FirebaseFirestore.Transaction, snap: FirebaseFirestore.DocumentSnapshot) => Promise<void> } = {}) {
   const ref = adminDb.collection("bookings").doc(bookingId)
   const token = randomUUID()
   const initial = await adminDb.runTransaction(async tx => {
@@ -41,6 +41,7 @@ export async function prepareAdminCancellation(bookingId: string, options: { del
     if (!snap.exists) throw new BookingCancellationError("Rezervarea nu a fost găsită.", 404)
     const data = snap.data()!
     if (options.deleting) assertBookingCanBeDeleted(data)
+    if (options.validate) await options.validate(tx, snap)
     const blocked = cancellationBlock(data)
     if (blocked) throw blocked
     const attempted = requiresMultiparkCancellation(data)

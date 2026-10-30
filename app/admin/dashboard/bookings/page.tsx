@@ -1,5 +1,6 @@
 "use client"
 
+import { BookingDeletionDialog } from "@/components/admin/booking-deletion-dialog"
 import { BookingCancellationDialog } from "@/components/admin/booking-cancellation-dialog"
 import { formatCancellationLoyaltyResult, type CancellationResult } from "@/lib/booking-cancellation-types"
 
@@ -273,8 +274,6 @@ function BookingsPageContent() {
   const [priceTable, setPriceTable] = useState<PriceEntry[]>([])
   const [pricesLoading, setPricesLoading] = useState(false)
   const [showCalcExplanation, setShowCalcExplanation] = useState(false)
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
   const [bookingToDelete, setBookingToDelete] = useState<Booking | null>(null)
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false)
   const [bookingToCancel, setBookingToCancel] = useState<Booking | null>(null)
@@ -1374,59 +1373,6 @@ function BookingsPageContent() {
       })
     } finally {
       setRecalculatingOcc(false)
-    }
-  }
-
-  const handleDeleteBooking = async () => {
-    if (!bookingToDelete) return
-    if (!isAdmin) {
-      toast({
-        title: "Acces restricționat",
-        description: "Doar administratorii pot șterge rezervări.",
-        variant: "destructive",
-      })
-      return
-    }
-    setIsDeleting(true)
-    try {
-      const res = await adminAuthorizedFetch("/api/admin/bookings/delete", user, {
-        method: "POST",
-        body: JSON.stringify({ bookingId: bookingToDelete.id }),
-      })
-      const json = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`)
-
-      toast({
-        title: "Rezervare ștearsă",
-        description: [
-          json?.multiparkCancelled
-            ? "Rezervarea a fost anulată în Multipark și ștearsă local."
-            : "Rezervarea a fost ștearsă.",
-          json?.loyaltyStatus === "needs_review"
-            ? "Punctele necesită verificare manuală; evidența este păstrată în arhivă."
-            : null,
-          json?.decremented
-            ? "Contorul de ocupare a fost ajustat (-1)."
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      })
-      fetchBookings()
-      if (isViewDialogOpen && selectedBooking?.id === bookingToDelete.id) {
-        setIsViewDialogOpen(false)
-      }
-      setIsDeleteDialogOpen(false)
-      setBookingToDelete(null)
-    } catch (e) {
-      console.error("Delete booking failed", e)
-      toast({
-        title: "Eroare",
-        description: "Nu am putut șterge rezervarea.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsDeleting(false)
     }
   }
 
@@ -3068,17 +3014,11 @@ function BookingsPageContent() {
                                   <DropdownMenuItem
                                     onClick={() => {
                                       setBookingToDelete(booking)
-                                      setIsDeleteDialogOpen(true)
                                     }}
-                                    disabled={isDeleting && bookingToDelete?.id === booking.id}
                                     className="text-red-700 hover:text-white hover:bg-red-700 focus:text-white focus:bg-red-700"
                                   >
-                                    {isDeleting && bookingToDelete?.id === booking.id ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    ) : (
-                                      <Trash2 className="mr-2 h-4 w-4" />
-                                    )}
-                                    Șterge (permanent)
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    Șterge
                                   </DropdownMenuItem>
                                 </>
                               )}
@@ -3132,43 +3072,18 @@ function BookingsPageContent() {
 
       </Tabs>
 
-      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Ștergi rezervarea?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Această acțiune este permanentă. Înainte de ștergere, sistemul va marca ieșirea (dacă mașina este încă
-              „înăuntru”) și va ajusta contorul de ocupare dacă este cazul.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="text-sm text-gray-700">
-            <div>
-              <strong>Nr. API / ID:</strong>{" "}
-              {bookingToDelete?.apiBookingNumber || bookingToDelete?.id || "-"}
-            </div>
-            <div>
-              <strong>Nr. înmatriculare:</strong> {bookingToDelete?.licensePlate || "-"}
-            </div>
-            <div className="text-xs text-gray-500 mt-1">
-              {shouldCancelInMultipark(bookingToDelete)
-                ? "Se va anula și în Multipark înainte de ștergere."
-                : "Rezervarea nu are număr API; ștergerea este doar locală."}
-            </div>
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                setBookingToDelete(null)
-              }}
-            >
-              Renunță
-            </AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteBooking} disabled={!bookingToDelete || isDeleting}>
-              {isDeleting ? "Se șterge..." : "Șterge"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {bookingToDelete && <BookingDeletionDialog key={bookingToDelete.id} bookingId={bookingToDelete.id}
+        onClose={() => setBookingToDelete(null)}
+        onDeleted={async result => {
+          if (isViewDialogOpen && selectedBooking?.id === bookingToDelete.id) setIsViewDialogOpen(false)
+          toast({ title: "Rezervare ștearsă", description: [
+            result.presenceCorrected ? "Prezența a fost corectată și rezervarea arhivată." : "Rezervarea a fost arhivată. Ocuparea nu s-a modificat.",
+            result.multiparkCancelled ? "Rezervarea a fost anulată în Multipark." : null,
+            result.loyaltyStatus === "needs_review" ? "Punctele necesită verificare manuală; evidența este păstrată în arhivă." : null,
+          ].filter(Boolean).join(" ") })
+          await fetchBookings()
+        }} />}
+
 
 
 
