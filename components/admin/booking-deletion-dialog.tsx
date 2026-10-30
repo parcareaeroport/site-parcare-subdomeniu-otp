@@ -83,7 +83,6 @@ export function BookingDeletionDialog({ bookingId, onClose, onDeleted }: {
         {context.blockedReason ? <p role="alert" className="rounded border border-amber-400 bg-amber-50 p-3">{context.blockedReason}</p>
           : context.inside ? <div className="space-y-3 rounded border border-amber-400 bg-amber-50 p-3">
             <p>Mașina apare prezentă. Continuă numai după verificarea fizică. Operația o scoate din evidența ocupării și arhivează rezervarea.</p>
-            <p>Se salvează o corecție manuală a prezenței, fără să inventăm ora plecării. Dacă mașina este încă în parcare, apasă „Renunță”.</p>
             <div className="flex items-start gap-2">
               <Checkbox id="delete-confirm-absent" checked={confirmed} disabled={saving || conflict || completed}
                 onCheckedChange={value => { setConfirmed(value === true); requestId.current = crypto.randomUUID() }} />
