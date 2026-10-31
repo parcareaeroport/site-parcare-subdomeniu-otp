@@ -3,7 +3,7 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict')
 const { spawn } = require('node:child_process'), { createRequire } = require('node:module')
 assert.match(process.env.FIRESTORE_EMULATOR_HOST || '', /^(127\.0\.0\.1|localhost):\d+$/, 'Local emulator required')
-const root = path.resolve(__dirname, '..'), projectId = process.env.LPR_ROLE_FOCUSED ? 'demo-parking-roles' : 'demo-parking-lpr'
+const root = path.resolve(__dirname, '..'), projectId = process.env.LPR_RESTORE_FOCUSED ? 'demo-parking-restoration-ui' : process.env.LPR_ROLE_FOCUSED ? 'demo-parking-roles' : 'demo-parking-lpr'
 const { chromium, expect } = createRequire(path.join(root, '../expo-mobile-app/package.json'))('@playwright/test')
 const { initializeApp, deleteApp } = require('firebase-admin/app'), { getFirestore } = require('firebase-admin/firestore')
 const adminApp = initializeApp({ projectId }, 'browser-lpr-fixture'), db = getFirestore(adminApp)
@@ -14,7 +14,7 @@ write('package.json', '{"private":true}')
 write('tsconfig.json', JSON.stringify({ compilerOptions: { jsx: 'preserve', module: 'esnext', moduleResolution: 'bundler', target: 'es2020', esModuleInterop: true, paths: { '@/*': [root + '/*'] } } }))
 const aliases = { '@/app/actions/booking-actions$': 'actions.ts', '@/app/actions/booking-recovery$': 'actions.ts', '@/context/auth-context$': 'auth.tsx', '@/lib/firebase$': 'firebase.ts', '@/lib/firebase-admin$': 'db.ts', '@/components/admin/occupancy-counter$': 'counter.tsx', '@/components/admin/occupancy-forecast$': 'forecast.tsx' }
 write('next.config.mjs', `export default {devIndicators:false,experimental:{externalDir:true},webpack(c){${Object.entries(aliases).map(([a,b]) => `c.resolve.alias[${JSON.stringify(a)}]=${JSON.stringify(temp+'/'+b)};`).join('')}c.resolve.alias['@']=${JSON.stringify(root)};c.resolve.alias[${JSON.stringify(root+'/lib/firebase.ts')}]=${JSON.stringify(temp+'/firebase.ts')};return c}}`)
-write('actions.ts', `export const cleanupExpiredBookings=async()=>({});export const createManualBooking=async()=>{throw Error('not part of fixture')};export const sendManualBookingEmail=async()=>{};export const recoverSpecificBooking=async()=>{throw Error('not part of fixture')};`)
+write('actions.ts', `export const cleanupExpiredBookings=async()=>({});export const createManualBooking=async()=>{throw Error('not part of fixture')};export const sendManualBookingEmail=async()=>{};export const recoverSpecificBooking=async()=>{throw Error('not part of fixture')};export const cancelBooking=async()=>{throw Error('External cancellation forbidden in fixture')};`)
 write('auth.tsx', `'use client';const users={};export const useAuth=()=>{const role=typeof window==='undefined'?'admin':localStorage.getItem('fixtureRole')||'admin';const user=users[role]||(users[role]={uid:role+'-fixture',email:role+'@example.invalid',getIdToken:async()=>role});return {user,role,isAdmin:role==='admin'}};`)
 const [host, port] = process.env.FIRESTORE_EMULATOR_HOST.split(':')
 write('firebase.ts', `import {initializeApp,getApps} from 'firebase/app';import {getFirestore,connectFirestoreEmulator} from 'firebase/firestore';const app=getApps()[0]||initializeApp({projectId:'${projectId}',apiKey:'emulator-only',appId:'emulator-only'});export const db=getFirestore(app);if(!(globalThis as any).__lprEmulator){connectFirestoreEmulator(db,'${host}',${port});(globalThis as any).__lprEmulator=true;}export const auth={};`)
@@ -26,7 +26,7 @@ write('app/api/admin/manual-lpr-entry/route.ts', `export {POST} from '${root}/ap
 write('app/api/admin/manual-lpr-exit/route.ts', `export {POST} from '${root}/app/api/admin/manual-lpr-exit/route';export const runtime='nodejs';`)
 write('app/api/admin/occupancy/route.ts', `export {GET} from '${root}/app/api/admin/occupancy/route';`)
 write('app/NotificationInfo/TollgateInfo/route.ts', `export {POST} from '${root}/app/NotificationInfo/TollgateInfo/route';export const runtime='nodejs';`)
-for (const route of ['bookings/plate','lpr-review']) write(`app/api/admin/${route}/route.ts`, `export {POST} from '${root}/app/api/admin/${route}/route';export const runtime='nodejs';`)
+for (const route of ['bookings/plate','bookings/delete','lpr-review']) write(`app/api/admin/${route}/route.ts`, `export {POST} from '${root}/app/api/admin/${route}/route';export const runtime='nodejs';`)
 write('app/layout.tsx', `import './globals.css';export default function Layout({children}){return <html lang="ro"><body>{children}</body></html>}`)
 write('app/globals.css', fs.readFileSync(root + '/app/globals.css', 'utf8'))
 write('postcss.config.js', 'module.exports={plugins:{tailwindcss:{}}};')
@@ -47,10 +47,14 @@ let server, browser, logs = ''
   assert.ok(ready, logs)
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
   const page = await browser.newPage({ viewport: { width:1440, height:1000 }, timezoneId:'Europe/Bucharest' })
-  if (!process.env.LPR_ROLE_FOCUSED) await page.clock.setFixedTime(new Date('2026-10-25T12:00:00Z'))
+  if (!process.env.LPR_ROLE_FOCUSED && !process.env.LPR_RESTORE_FOCUSED) await page.clock.setFixedTime(new Date('2026-10-25T12:00:00Z'))
   const errors=[]; page.on('pageerror', e=>errors.push(e.message))
   // Reject accidental traffic to production Firebase endpoints.
   await page.route(/https:\/\/.*(googleapis\.com|firebaseio\.com)/, route => { errors.push('Unexpected external Firebase request: '+route.request().url()); return route.abort() })
+  if (process.env.LPR_RESTORE_FOCUSED) {
+    await require('./test-lpr-restoration-browser.cjs')({page,db,expect,errors})
+    return
+  }
   if (process.env.LPR_ROLE_FOCUSED) {
     await require('./test-lpr-operator-browser.cjs')({page,db,expect,errors})
     return

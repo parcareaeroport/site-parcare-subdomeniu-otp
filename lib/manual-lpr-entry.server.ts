@@ -12,6 +12,7 @@ import { inLprBookingWindow, LPR_ACTIVE_STATUSES } from "@/lib/lpr-booking-windo
 import { ManualExitError, manualExitClock, manualLprInstant, parseManualExitClock, readManualLprContext } from "@/lib/manual-lpr-exit.server"
 import { bookingLprTimes, compareLprTimes, lprTime, type LprTime } from "./lpr-time"
 import type { ManualExitSaveInput } from "@/lib/manual-lpr-exit-contract"
+import { readDeletedVisitRestoration, restoreDeletedVisit } from "./lpr-deleted-visit-restoration.server"
 
 type Actor = { uid: string; email: string | null }
 function fail(code: string, message: string): never { throw new ManualExitError(code, message, 409) }
@@ -71,7 +72,9 @@ function associationCandidate(ctx: Awaited<ReturnType<typeof readManualLprContex
 export async function prepareManualEntry(bookingId: string) {
   return lprTransaction(adminDb, async tx => {
     const ctx = await readManualLprContext(tx, bookingId), candidate = associationCandidate(ctx)
-    return { ...ctx.context, association: candidate ? { bookingId: candidate.bookingId, arrival: candidate.arrival, outsidePeriod: candidate.outsidePeriod } : null }
+    const restoration = await readDeletedVisitRestoration(tx, ctx)
+    return { ...ctx.context, association: candidate ? { bookingId: candidate.bookingId, arrival: candidate.arrival, outsidePeriod: candidate.outsidePeriod } : null,
+      restoration: restoration ? { sourceBookingId: restoration.sourceId, arrival: restoration.arrival, correctedAbsentAt: restoration.correctedAbsentAt, version: restoration.version } : null }
   })
 }
 export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) {
@@ -79,7 +82,8 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
   const eventRef = adminDb.collection("lpr_events").doc(`manual_entry_${input.requestId}`)
   const fingerprint = createHash("sha256").update(JSON.stringify({ bookingId: input.bookingId, version: input.version, actor: actor.uid,
     now: input.useServerNow === true, date: input.useServerNow === true ? null : input.date, time: input.useServerNow === true ? null : input.time, overwrite: input.confirmOverwrite === true, entryMode: input.entryMode, reentry: input.confirmReentry === true,
-    ...(input.entryMode === "associate_visit" ? { association: input.confirmAssociation === true } : {}) })).digest("hex")
+    ...(input.entryMode === "associate_visit" ? { association: input.confirmAssociation === true } : {}),
+    ...(input.entryMode === "restore_deleted_visit" ? { restorationVersion: input.restorationVersion, restorationReason: input.restorationReason, confirmRestoration: input.confirmRestoration === true } : {}) })).digest("hex")
   return lprTransaction(adminDb, async tx => {
     const receipt = await tx.get(eventRef)
     if (receipt.exists) {
@@ -90,6 +94,7 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
     const ctx = await readManualLprContext(tx, input.bookingId)
     const { ref, b, plate, context, state } = ctx
     if (context.version !== input.version) fail("CONTEXT_CHANGED", "Datele s-au schimbat. Reîncarcă și verifică șederea înainte de salvare.")
+    if (input.entryMode === "restore_deleted_visit") return restoreDeletedVisit(tx, ctx, input, actor, eventRef, fingerprint)
     if (input.entryMode === "associate_visit") {
       const candidate = associationCandidate(ctx)
       if (!candidate) fail("ASSOCIATION_UNAVAILABLE", "Șederea nu poate fi asociată automat. Reîncarcă și verifică rezervarea și înregistrările prezente.")

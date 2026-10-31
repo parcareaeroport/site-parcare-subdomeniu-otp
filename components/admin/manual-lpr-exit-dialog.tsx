@@ -28,6 +28,10 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
   const [plateCheck, setPlateCheck] = useState<{version:string;inside:boolean;newPlate:string} | null>(null)
   const [confirmPlate, setConfirmPlate] = useState(false)
   const associating = isEntry && !!context?.association
+  const [restoreMode, setRestoreMode] = useState(false)
+  const [confirmRestore, setConfirmRestore] = useState(false)
+  const [restoreReason, setRestoreReason] = useState("")
+  const restoring = isEntry && !!context?.restoration && restoreMode
   const requestId = useRef("")
   const epoch = useRef(0)
   const loadedAt = useRef(0)
@@ -37,6 +41,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
     const abort = new AbortController()
     setLoading(true); setError(null); setContext(null); setConflict(false)
     setEditingPlate(false); setPlateCheck(null); setConfirmPlate(false); setPlate("")
+    setRestoreMode(false); setConfirmRestore(false); setRestoreReason("")
     setReentry(false); setMissing(false); setDuplicates(false); setOverwrite(false); setUseNow(false); setDate(""); setTime(""); resetRequest()
     void (async () => {
       try {
@@ -45,6 +50,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
         if (!response.ok) throw new Error(body.error)
         if (id !== epoch.current || abort.signal.aborted) return
         setContext(body); loadedAt.current = Date.now()
+        if (isEntry && body.restoration) { setRestoreMode(true); setDate(body.restoration.arrival.slice(0, 10)); setTime(body.restoration.arrival.slice(11, 19)) }
         if (!isEntry && !body.inside && body.departure) { setDate(body.departure.slice(0, 10)); setTime(body.departure.slice(11, 19)) }
       } catch (e) { if (!abort.signal.aborted && id === epoch.current) setError(e instanceof Error ? e.message : "Verificarea nu a reușit.") }
       finally { if (!abort.signal.aborted && id === epoch.current) setLoading(false) }
@@ -58,7 +64,8 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
       const response = await adminAuthorizedFetch(endpoint, user, { method: "POST", body: JSON.stringify({
         action: "save", bookingId, version: context.version, requestId: requestId.current,
         ...(useNow ? { useServerNow: true } : { date, time }),
-        ...(isEntry ? { entryMode: associating ? "associate_visit" : context.inside ? "correct_arrival" : "new_visit", confirmReentry: reentry, confirmAssociation: duplicates } : {}),
+        ...(isEntry ? { entryMode: restoring ? "restore_deleted_visit" : associating ? "associate_visit" : context.inside ? "correct_arrival" : "new_visit", confirmReentry: reentry, confirmAssociation: duplicates } : {}),
+        ...(restoring ? { restorationVersion: context.restoration!.version, restorationReason: restoreReason, confirmRestoration: confirmRestore } : {}),
         confirmMissingArrival: missing, confirmDuplicates: duplicates, confirmOverwrite: overwrite,
       }), cache: "no-store" })
       const body = await response.json()
@@ -88,7 +95,7 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
   }
   const confirm = (id: string, checked: boolean, change: (v: boolean) => void, text: string) => <div className="flex items-start gap-2"><Checkbox id={id} checked={checked} disabled={saving || conflict} onCheckedChange={v => { change(v === true); resetRequest() }} /><Label htmlFor={id} className="leading-relaxed">{text}</Label></div>
   return <Dialog open onOpenChange={open => { if (!open && !saving) onClose() }}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[620px]">
-    <DialogHeader><DialogTitle>{associating ? "Asociază șederea LPR cu rezervarea" : isEntry ? context?.inside ? "Corectează ora intrării" : "Înregistrează o intrare nouă" : "Setează Ieșire LPR (manual)"}</DialogTitle><DialogDescription>Confirmă rezervarea și ora {isEntry ? "sosirii" : "plecării"} reale. Toate orele sunt orele României.</DialogDescription></DialogHeader>
+    <DialogHeader><DialogTitle>{restoring ? "Recuperează șederea după corectarea numărului" : associating ? "Asociază șederea LPR cu rezervarea" : isEntry ? context?.inside ? "Corectează ora intrării" : "Înregistrează o intrare nouă" : "Setează Ieșire LPR (manual)"}</DialogTitle><DialogDescription>Confirmă rezervarea și ora {isEntry ? "sosirii" : "plecării"} reale. Toate orele sunt orele României.</DialogDescription></DialogHeader>
     {onEventTypeChange && <div><Label htmlFor="manual-lpr-type">Tip eveniment</Label><Select value={eventType} onValueChange={v => onEventTypeChange(v as "entry" | "exit")} disabled={saving}><SelectTrigger id="manual-lpr-type"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="entry">Intrare</SelectItem><SelectItem value="exit">Ieșire</SelectItem></SelectContent></Select></div>}
     {loading && <p role="status">Se verifică șederea...</p>}
     {error && <p role="alert" className="text-red-700">{error}</p>}
@@ -106,6 +113,20 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
       <p><strong>Perioada rezervării:</strong> {context.booking.startDate || "?"} {context.booking.startTime || "?"} → {context.booking.endDate || "?"} {context.booking.endTime || "?"}</p>
       <p><strong>Ieșire programată:</strong> {context.booking.endDate ? `${context.booking.endDate.split("-").reverse().join(".")} ${context.booking.endTime || "?"}` : "Necunoscută"}</p>
       <p><strong>Intrare înregistrată pentru șederea actuală:</strong> {display(context.arrival)}</p>
+      {isEntry && context.restoration && <div className="space-y-3 rounded border border-amber-400 bg-amber-50 p-3">
+        <p>La {display(context.restoration.correctedAbsentAt)} s-a confirmat manual absența mașinii și s-a șters șederea LPR. Numărul acestei rezervări a fost corectat ulterior sau în cadrul aceleiași clarificări.</p>
+        <Label htmlFor="manual-entry-operation">Ce s-a întâmplat cu mașina?</Label>
+        <Select value={restoreMode ? "restore" : "new"} disabled={saving || conflict} onValueChange={v => { setRestoreMode(v === "restore"); setConfirmRestore(false); setRestoreReason(""); setUseNow(false); setError(null); setDate(v === "restore" ? context.restoration!.arrival.slice(0, 10) : ""); setTime(v === "restore" ? context.restoration!.arrival.slice(11, 19) : ""); resetRequest() }}>
+          <SelectTrigger id="manual-entry-operation"><SelectValue /></SelectTrigger><SelectContent>
+            <SelectItem value="restore">Nu a plecat — recuperez șederea existentă</SelectItem>
+            <SelectItem value="new">A plecat și a reintrat fizic</SelectItem>
+          </SelectContent></Select>
+        {restoring && <>
+          <p>Intrarea citită de cameră: {display(context.restoration.arrival)}. Verifică ora reală de mai jos. Se recuperează șederea pe rezervarea selectată, fără o prezență suplimentară pentru același număr.</p>
+          {confirm("entry-confirm-restoration", confirmRestore, setConfirmRestore, "Confirm că mașina nu a plecat, este în parcare, iar confirmarea de absență a fost greșită.")}
+          <Label htmlFor="entry-restoration-reason">Motivul rectificării</Label><Input id="entry-restoration-reason" value={restoreReason} maxLength={1000} disabled={saving || conflict} onChange={e => { setRestoreReason(e.target.value); resetRequest() }} />
+        </>}
+      </div>}
       {context.lastEntry && context.lastEntry !== context.arrival && <p><strong>Ultima detectare de intrare:</strong> {display(context.lastEntry)}</p>}
       {isEntry && context.inside && <p className="rounded border bg-slate-50 p-3">Corectezi doar ora sosirii pentru șederea prezentă. Numărul mașinilor și ultima detectare LPR rămân aceleași.</p>}
       {isEntry && !context.inside && context.hasPreviousVisit && <div className="space-y-2 rounded border border-amber-400 bg-amber-50 p-3">
@@ -126,13 +147,13 @@ export function ManualLprExitDialog({ bookingId, onClose, onSaved, eventType = "
           <div><Label htmlFor="manual-lpr-date">Data {isEntry ? "sosirii" : "plecării"} reale</Label><Input id="manual-lpr-date" type="date" value={date} onChange={e => { setDate(e.target.value); setUseNow(false); resetRequest() }} /></div>
           <div><Label htmlFor="manual-lpr-time">Ora {isEntry ? "sosirii" : "plecării"} reale</Label><Input id="manual-lpr-time" type="time" step="1" value={time} onChange={e => { setTime(e.target.value); setUseNow(false); resetRequest() }} /></div>
         </div>
-        <Button type="button" variant="outline" onClick={() => { setUseNow(true); resetRequest(); const clock = new Date(Date.parse(context.serverNow) + Date.now() - loadedAt.current).toISOString(); setDate(clock.slice(0, 10)); setTime(clock.slice(11, 19)) }}>{isEntry ? "A sosit acum" : "A plecat acum"}</Button>
+        {!restoring && <Button type="button" variant="outline" onClick={() => { setUseNow(true); resetRequest(); const clock = new Date(Date.parse(context.serverNow) + Date.now() - loadedAt.current).toISOString(); setDate(clock.slice(0, 10)); setTime(clock.slice(11, 19)) }}>{isEntry ? "A sosit acum" : "A plecat acum"}</Button>}
         {useNow && <p>Se va salva ora serverului din momentul confirmării.</p>}
       </fieldset>}
       {!isEntry && !context.arrival && confirm("exit-confirm-missing", missing, setMissing, "Ora intrării nu poate fi verificată. Confirm că mașina a plecat la data și ora indicate.")}
       {(isEntry ? context.inside : !context.inside && context.departure) && <div className="space-y-2"><p>{isEntry ? "Intrare existentă" : "Ieșire existentă"}: {display(isEntry ? context.arrival : context.departure)}</p>{confirm("exit-confirm-overwrite", overwrite, setOverwrite, "Confirm suprascrierea valorii LPR existente")}</div>}
     </div>}
     {(!context && !loading || conflict) && <Button variant="outline" onClick={() => setReload(v => v + 1)} disabled={saving}>Reîncarcă șederea</Button>}
-    <DialogFooter><Button variant="outline" onClick={onClose} disabled={saving}>Renunță</Button><Button onClick={save} disabled={loading || saving || editingPlate || conflict || !context || (!associating && !useNow && (!date || !time)) || (!!context && ((isEntry && !context.inside && context.hasPreviousVisit === true && !reentry) || (!isEntry && !context.arrival && !missing) || (context.duplicates.length > 0 && (isEntry && !associating || !duplicates)) || ((isEntry ? context.inside : !context.inside && !!context.departure) && !overwrite)))}>{saving ? "Se salvează..." : associating ? "Asociază șederea" : "Salvează"}</Button></DialogFooter>
+    <DialogFooter><Button variant="outline" onClick={onClose} disabled={saving}>Renunță</Button><Button onClick={save} disabled={loading || saving || editingPlate || conflict || !context || (restoring && (!confirmRestore || restoreReason.trim().length < 5)) || (!associating && !useNow && (!date || !time)) || (!!context && ((isEntry && !context.inside && context.hasPreviousVisit === true && !reentry) || (!isEntry && !context.arrival && !missing) || (context.duplicates.length > 0 && (isEntry && !associating || !duplicates)) || ((isEntry ? context.inside : !context.inside && !!context.departure) && !overwrite)))}>{saving ? "Se salvează..." : restoring ? "Recuperează șederea" : associating ? "Asociază șederea" : "Salvează"}</Button></DialogFooter>
   </DialogContent></Dialog>
 }

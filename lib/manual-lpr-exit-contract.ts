@@ -9,11 +9,13 @@ export type ManualExitContext = {
   arrival: string | null; departure: string | null; inside: boolean
   duplicates: ManualExitRow[]
   association?: { bookingId: string; arrival: string; outsidePeriod: boolean } | null
+  restoration?: { sourceBookingId: string; arrival: string; correctedAbsentAt: string; version: string } | null
 }
 export type ManualExitSaveInput = {
   bookingId: string; version: string; requestId: string
   date?: string; time?: string; useServerNow?: boolean
-  entryMode?: "new_visit" | "correct_arrival" | "associate_visit"; confirmReentry?: boolean
+  entryMode?: "new_visit" | "correct_arrival" | "associate_visit" | "restore_deleted_visit"; confirmReentry?: boolean
+  restorationVersion?: string; restorationReason?: string; confirmRestoration?: boolean
   confirmAssociation?: boolean
   confirmMissingArrival?: boolean; confirmDuplicates?: boolean; confirmOverwrite?: boolean
 }
