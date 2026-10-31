@@ -23,24 +23,59 @@ const post=(handler,body,role='admin')=>handler(new Request('http://localhost/ap
 const read=async p=>(await db.doc(p).get()).data()
 const event=(type,at,number='NEW01')=>camera({plateNumber:number,deviceId:type==='entry'?'intrare_1':'iesire_1',direction:type,snapTime:at,accurateTime:at})
 async function totals(n){const r=await occupancy(new Request('http://localhost/api/admin/occupancy',{headers:{Authorization:'Bearer admin'}}));assert.equal(r.status,200);assert.equal((await r.json()).occupiedCount,n);assert.equal((await read('config/parkingLive')).occupiedCount,n)}
-async function setup(){
- const now=wall(),arrival=new Date(Date.parse(now)-3600000).toISOString(),day=now.slice(0,10)
- await db.doc('bookings/target').set({licensePlate:'OLD01',status:'confirmed_paid',startDate:day,startTime:'00:00',endDate:day,endTime:'23:59'})
+async function setup({changed=true,bookingPatch={},arrival:explicitArrival}={}){
+ const now=wall(),arrival=explicitArrival||new Date(Date.parse(now)-3600000).toISOString(),day=now.slice(0,10)
  const cameraResult=await event('entry',arrival),sourceId=cameraResult.matchedBookingId;assert.ok(sourceId);await totals(1)
+ await db.doc('bookings/target').set({licensePlate:changed?'OLD01':'NEW01',status:'confirmed_paid',startDate:day,startTime:'00:00',endDate:day,endTime:'23:59',...bookingPatch})
  const deletion=await prepareBookingDeletion(sourceId)
  const deleteInput={bookingId:sourceId,version:deletion.version,requestId:randomUUID(),confirmNotPresent:true}
  await saveBookingDeletion(deleteInput,actor);await totals(0)
- const p=await post(plate,{action:'prepare',bookingId:'target',plate:'NEW01'});assert.equal(p.status,200);const pc=await p.json()
- assert.equal((await post(plate,{action:'save',bookingId:'target',plate:'NEW01',version:pc.version})).status,200)
+ if(changed){const p=await post(plate,{action:'prepare',bookingId:'target',plate:'NEW01'});assert.equal(p.status,200);const pc=await p.json()
+ assert.equal((await post(plate,{action:'save',bookingId:'target',plate:'NEW01',version:pc.version})).status,200)}
  const ctx=await (await post(entry,{action:'prepare',bookingId:'target'})).json();assert.ok(ctx.restoration,JSON.stringify(ctx))
  const input={action:'save',bookingId:'target',version:ctx.version,entryMode:'restore_deleted_visit',requestId:randomUUID(),
-  restorationVersion:ctx.restoration.version,restorationReason:'Numărul rezervării era greșit; mașina nu a plecat.',confirmRestoration:true,
+  restorationVersion:ctx.restoration.version,restorationReason:'Șederea a fost ștearsă greșit; mașina nu a plecat.',confirmRestoration:true,
   date:arrival.slice(0,10),time:arrival.slice(11,19)}
  return {ctx,input,sourceId,cameraResult,arrival,deleteInput}
 }
 let passed=0
 async function check(name,fn){assert.ok((await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/${project}/databases/(default)/documents`,{method:'DELETE'})).ok);await db.doc('config/parkingLive').set({occupiedCount:0});await fn();console.log('PASS '+name);passed++}
 ;(async()=>{
+ for(const changed of [false,true])for(const early of [false,true])for(const role of ['admin','employee','entriesOperator'])await check(`manual recovery matrix: plateChanged=${changed}, early=${early}, role=${role}`,async()=>{
+  const now=Date.parse(wall()),start=new Date(now-1800000).toISOString(),end=new Date(now+4*86400000).toISOString()
+  const s=await setup({changed,arrival:new Date(now-(early?7:0.25)*3600000).toISOString(),bookingPatch:{startDate:start.slice(0,10),startTime:start.slice(11,16),endDate:end.slice(0,10),endTime:end.slice(11,16)}})
+  assert.equal((await post(entry,s.input,role)).status,200);await totals(1)
+  assert.equal((await post(entry,s.input,role)).status,200);await totals(1)
+  assert.equal((await read('bookings/target')).lpr.visitId,(await read('deleted_bookings/'+s.sourceId)).lpr.visitId)
+ })
+ await check('manual recovery remains possible for a present overdue stay',async()=>{
+  const now=Date.parse(wall()),start=new Date(now-12*3600000).toISOString(),end=new Date(now-4*3600000).toISOString()
+  const s=await setup({changed:false,arrival:new Date(now-7*3600000).toISOString(),bookingPatch:{startDate:start.slice(0,10),startTime:start.slice(11,16),endDate:end.slice(0,10),endTime:end.slice(11,16)}})
+  assert.equal((await post(entry,s.input)).status,200);await totals(1)
+ })
+ for(const role of ['admin','employee','entriesOperator'])await check(role+' records early missing-camera arrival only after presence confirmation',async()=>{
+  const now=Date.parse(wall()),start=new Date(now+6*3600000).toISOString(),end=new Date(now+4*86400000).toISOString(),arrival=new Date(now-60000).toISOString()
+  await db.doc('bookings/target').set({licensePlate:'NEW01',status:'confirmed_paid',startDate:start.slice(0,10),startTime:start.slice(11,16),endDate:end.slice(0,10),endTime:end.slice(11,16)})
+  const ctx=await (await post(entry,{action:'prepare',bookingId:'target'},role)).json()
+  const input={action:'save',bookingId:'target',version:ctx.version,requestId:randomUUID(),entryMode:'new_visit',date:arrival.slice(0,10),time:arrival.slice(11,19)}
+  assert.equal((await post(entry,input,role)).status,409);await totals(0)
+  assert.equal((await post(entry,{...input,confirmPresence:true},role)).status,200);await totals(1)
+  assert.equal((await event('exit',wall())).matchedBookingId,'target');await totals(0)
+  const again=await (await post(entry,{action:'prepare',bookingId:'target'},role)).json();assert.equal(again.hasPreviousVisit,true)
+  await new Promise(r=>setTimeout(r,1100))
+  assert.equal((await post(entry,{action:'save',bookingId:'target',version:again.version,requestId:randomUUID(),entryMode:'new_visit',useServerNow:true,confirmReentry:true},role)).status,200)
+  await totals(1);await new Promise(r=>setTimeout(r,1100));assert.equal((await event('exit',wall())).matchedBookingId,'target');await totals(0)
+ })
+ await check('camera tolerance stays strict; a manual link of the early unmatched stay does not add a place',async()=>{
+  const now=Date.parse(wall()),start=new Date(now+6*3600000).toISOString(),end=new Date(now+4*86400000).toISOString(),arrival=new Date(now-60000).toISOString()
+  await db.doc('bookings/target').set({licensePlate:'NEW01',status:'confirmed_paid',startDate:start.slice(0,10),startTime:start.slice(11,16),endDate:end.slice(0,10),endTime:end.slice(11,16)})
+  const cameraResult=await event('entry',arrival);assert.notEqual(cameraResult.matchedBookingId,'target');await totals(1)
+  const ctx=await (await post(entry,{action:'prepare',bookingId:'target'})).json();assert.ok(ctx.association);assert.equal(ctx.association.outsidePeriod,true)
+  const input={action:'save',bookingId:'target',version:ctx.version,requestId:randomUUID(),entryMode:'associate_visit',confirmAssociation:true}
+  assert.equal((await post(entry,input)).status,200);await totals(1)
+  assert.equal((await post(entry,input)).status,200);await totals(1)
+  assert.equal((await event('exit',wall())).matchedBookingId,'target');await totals(0)
+ })
  for(const role of ['admin','employee','entriesOperator'])await check(role+' restores corrected reservation once; stale camera cannot undo; real exit subtracts once',async()=>{
   const s=await setup(),before=await read('deleted_bookings/'+s.sourceId)
   const response=await post(entry,{...s.input,adminUid:'forged'},role);assert.equal(response.status,200,JSON.stringify(await response.clone().json()))

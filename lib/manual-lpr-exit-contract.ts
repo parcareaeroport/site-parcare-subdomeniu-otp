@@ -17,5 +17,6 @@ export type ManualExitSaveInput = {
   entryMode?: "new_visit" | "correct_arrival" | "associate_visit" | "restore_deleted_visit"; confirmReentry?: boolean
   restorationVersion?: string; restorationReason?: string; confirmRestoration?: boolean
   confirmAssociation?: boolean
+  confirmPresence?: boolean
   confirmMissingArrival?: boolean; confirmDuplicates?: boolean; confirmOverwrite?: boolean
 }

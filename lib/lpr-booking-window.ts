@@ -8,8 +8,9 @@ function bookingClockMillis(date: unknown, time: unknown): number | null {
   return Number.isFinite(ms) && new Date(ms).toISOString() === iso ? ms : null
 }
 
-/** Camera and admin use the same booking window. Preserve the legacy Romania
- * wall-clock-with-Z convention; this is not a migration of historical timestamps. */
+/** Canonical automatic matching window. Manual presence can be confirmed outside
+ * it without changing camera tolerance or the reservation's planned period.
+ * Preserve the legacy Romania wall-clock-with-Z storage convention. */
 export function getLprBookingWindow(data: any): { start: number; end: number } | null {
   const start = bookingClockMillis(data.startDate, data.startTime)
   const end = bookingClockMillis(data.endDate, data.endTime)

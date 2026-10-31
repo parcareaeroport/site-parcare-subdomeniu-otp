@@ -4,7 +4,8 @@ import { FieldValue } from "firebase-admin/firestore"
 import { adminDb } from "@/lib/firebase-admin"
 import { normalizeLicensePlate } from "./utils"
 import { getLprPresenceState, lprTimestampToMillis } from "./lpr-presence"
-import { LPR_ACTIVE_STATUSES, inLprBookingWindow } from "./lpr-booking-window"
+import { LPR_ACTIVE_STATUSES, getLprBookingWindow } from "./lpr-booking-window"
+import { linkLprVisit } from "./lpr-visit.server"
 import { isLaterKnownExit, isTrustedLprReceipt } from "./lpr-entry-evidence"
 import { bookingLprTimes, compareLprTimes, lprTime, receiptLprTime, romaniaCivilClock } from "./lpr-time"
 import { ManualExitError, manualExitClock, manualLprInstant, parseManualExitClock, type readManualLprContext } from "./manual-lpr-exit.server"
@@ -13,15 +14,14 @@ import type { ManualExitSaveInput } from "./manual-lpr-exit-contract"
 type Context = Awaited<ReturnType<typeof readManualLprContext>>
 const reject = (message: string) => { throw new ManualExitError("RESTORE_UNAVAILABLE", message, 409) }
 
-/** Narrow recovery of an unmatched stay removed during a reservation plate fix.
+/** Recovery of an unmatched stay removed by a mistaken manual absence statement.
  * A real exit, another visit, or an ambiguous pointer never becomes an override.
  */
 export async function readDeletedVisitRestoration(tx: FirebaseFirestore.Transaction, ctx: Context) {
   const state = ctx.state.data(), correction = state?.presenceCorrection
   const id = state?.archivedBookingId, eventId = correction?.eventId
   if (ctx.context.inside || ctx.context.hasPreviousVisit || ctx.context.duplicates.length || ctx.b.modificationApplying ||
-    !LPR_ACTIVE_STATUSES.includes(ctx.b.status) || !ctx.b.originalLicensePlate ||
-    normalizeLicensePlate(ctx.b.originalLicensePlate) === ctx.plate || !ctx.b.licensePlateUpdatedAt ||
+    !LPR_ACTIVE_STATUSES.includes(ctx.b.status) || !getLprBookingWindow(ctx.b) ||
     state?.isInside !== false || state.lastEventType !== "presence_correction" || correction?.type !== "confirmed_absent" ||
     typeof id !== "string" || !id || id.includes("/") || state.bookingId !== id ||
     typeof eventId !== "string" || !eventId || eventId.includes("/") || state.lastEventId !== eventId) return null
@@ -33,8 +33,7 @@ export async function readDeletedVisitRestoration(tx: FirebaseFirestore.Transact
   const arrivalMs = lprTimestampToMillis(r.previousLpr?.arrivedAt)
   if (!b || b.status !== "unmatched_lpr" || b.originalBookingId !== id || b.restoredLprToBookingId ||
     normalizeLicensePlate(String(b.licensePlate || "")) !== ctx.plate || b.lpr?.visitId !== r.visitId ||
-    b.lpr?.presenceCorrection?.eventId !== eventId || arrivalMs === null ||
-    !inLprBookingWindow(ctx.b, arrivalMs) || !inLprBookingWindow(ctx.b, Date.parse(manualExitClock()))) return null
+    b.lpr?.presenceCorrection?.eventId !== eventId || arrivalMs === null) return null
   const arrival = new Date(arrivalMs).toISOString(), point = lprTime(arrival, r.previousLpr.arrivedAtInstant)
   const realNow = new Date(), now = manualExitClock(realNow), nowInstant = manualLprInstant(now, true, realNow)
   if (ctx.receipts.docs.some(d => d.id !== eventId && isLaterKnownExit(d.data(), arrivalMs, Date.parse(now), true, point, lprTime(now, nowInstant)))) return null
@@ -61,7 +60,7 @@ export async function restoreDeletedVisit(tx: FirebaseFirestore.Transaction, ctx
   const realNow = new Date(), now = romaniaCivilClock(realNow), instant = realNow.toISOString()
   const absence = candidate.absence.data()
   const order = compareLprTimes(lprTime(at, arrivalInstant), receiptLprTime(absence))
-  if (order === null || order === 1 || !inLprBookingWindow(ctx.b, Date.parse(at))) return reject("Ora sosirii trebuie să corespundă rezervării și șederii de dinaintea confirmării greșite de absență. O reintrare fizică se înregistrează separat.")
+  if (order === null || order === 1) return reject("Ora sosirii trebuie să fie înaintea confirmării greșite de absență. O reintrare fizică se înregistrează separat.")
   const point = lprTime(at, arrivalInstant)
   if (ctx.receipts.docs.some(d => d.id !== candidate.absence.id && isLaterKnownExit(d.data(), Date.parse(at), Date.parse(now), true, point, lprTime(now, instant))) ||
     ctx.history.docs.some(d => d.id !== ctx.ref.id && bookingLprTimes(d.data()).some(p => compareLprTimes(p, point) !== -1)) ||
@@ -79,19 +78,15 @@ export async function restoreDeletedVisit(tx: FirebaseFirestore.Transaction, ctx
     reversesEventId: candidate.absence.id, previousLpr: ctx.b.lpr || null, receivedAt: FieldValue.serverTimestamp() }
   // Arrival is historical; lastSeen/pointer record the operator's present-time
   // assertion. Delayed camera notifications cannot undo the restored presence.
-  tx.update(ctx.ref, { lpr: { ...candidate.previousLpr, isInside: true, visitId: candidate.visitId,
+  const transition = linkLprVisit(tx, adminDb, { target: ctx.ref, source: candidate.archive.ref, sourceKind: "archived",
+    sourceData: candidate.archive.data()!, stateRef: ctx.stateRef, state: ctx.state.data()!,
+    effectiveInsideCount: ctx.effectiveInsideCount, eventId: eventRef.id, actor,
+    lpr: { ...candidate.previousLpr, isInside: true, visitId: candidate.visitId,
     arrivedAt: at, arrivedAtInstant: arrivalInstant, departedAt: null, departedAtInstant: null,
     lastSeenAt: now, lastSeenAtInstant: instant, lastEventType: "entry", lastEventId: eventRef.id,
     lastSeenDeviceId: "manual_admin", lastSeenPlateNumber: ctx.plate, manualOverride: true,
     manualOverrideAt: FieldValue.serverTimestamp(), manualOverrideByUid: actor.uid, manualOverrideByEmail: actor.email,
-    associatedFromBookingId: candidate.sourceId, restoredFromEventId: candidate.absence.id },
-    occupancyIncremented: true, occupancyDecremented: false, occupancyIncrementedAt: FieldValue.serverTimestamp(),
-    occupancyDecrementedAt: null, lastUpdated: FieldValue.serverTimestamp() })
-  tx.set(ctx.stateRef, { bookingId: ctx.ref.id, visitId: candidate.visitId, isInside: true, lastEventAt: now,
-    lastEventAtInstant: instant, lastEventId: eventRef.id, lastEventType: "entry", lastDeviceId: "manual_admin",
-    updatedAt: FieldValue.serverTimestamp() })
-  tx.update(candidate.archive.ref, { restoredLprToBookingId: ctx.ref.id, restoredLprEventId: eventRef.id,
-    restoredLprAt: FieldValue.serverTimestamp(), restoredLprByUid: actor.uid })
+    associatedFromBookingId: candidate.sourceId, restoredFromEventId: candidate.absence.id } })
   // Supersede only the mistaken absence statement. Deletion, payments and
   // archived booking contents remain historical facts, never resurrected.
   tx.update(candidate.absence.ref, { supersededBy: eventRef.id, rectifiedByUid: actor.uid, rectifiedAt: FieldValue.serverTimestamp(), rectificationReason: reason })
@@ -99,10 +94,7 @@ export async function restoreDeletedVisit(tx: FirebaseFirestore.Transaction, ctx
     originalMatchedBookingId: receipt.data().originalMatchedBookingId || candidate.sourceId, associatedByUid: actor.uid, associatedAt: FieldValue.serverTimestamp() })
   for (const event of events.docs) tx.set(ctx.ref.collection("gateEvents").doc(event.id), { ...event.data(),
     matchedBookingId: ctx.ref.id, originalMatchedBookingId: candidate.sourceId, ...(event.id === candidate.absence.id ? { supersededBy: eventRef.id } : {}) })
-  tx.set(adminDb.collection("config").doc("parkingLive"), { occupiedCount: ctx.effectiveInsideCount + 1,
-    lastUpdated: FieldValue.serverTimestamp(), lastChange: { type: "restore_deleted_lpr_visit", bookingId: ctx.ref.id,
-      sourceBookingId: candidate.sourceId, adminUid: actor.uid, at: now } }, { merge: true })
-  const result = { lprEventId: eventRef.id, visitId: candidate.visitId, occupancyChanged: "incremented", restoredFromBookingId: candidate.sourceId }
+  const result = { ...transition, lprEventId: eventRef.id, restoredFromBookingId: candidate.sourceId }
   tx.create(eventRef, { ...audit, requestFingerprint: fingerprint, result })
   tx.create(ctx.ref.collection("gateEvents").doc(eventRef.id), audit)
   return result

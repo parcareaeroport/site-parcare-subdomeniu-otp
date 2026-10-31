@@ -1,4 +1,6 @@
-# Recuperarea șederii după corectarea numărului — 31.10.2026
+# Recuperarea șederilor LPR șterse greșit — 31.10.2026
+
+Regulile au fost generalizate și scrierea prezenței a fost centralizată. Pentru acoperirea și verificările actuale, vezi [fluxul manual de prezență](manual-lpr-presence-2026-10-31.md). Modificarea numărului și toleranța de două ore nu mai sunt condiții de recuperare manuală.
 
 ## Problema și comportamentul
 
@@ -10,9 +12,9 @@ Pentru o sosire de dinaintea confirmării de absență se folosește recuperarea
 
 ## Condiții și protecții
 
-- Rezervare activă, număr corectat documentat, fără ședere proprie anterioară și fără altă prezență pentru același număr.
+- Rezervare activă cu perioadă validă, fără ședere proprie anterioară și fără altă prezență pentru același număr. Numărul poate fi cel original sau unul corectat.
 - Indexul numărului identifică exact o confirmare manuală de absență produsă la ștergere, șederea și documentul arhivat corespunzător. Sursa arhivată trebuie să fie `unmatched_lpr`.
-- Sosirea și momentul recuperării corespund ferestrei LPR a rezervării. Ora sosirii introdusă nu poate fi după confirmarea de absență rectificată.
+- Sosirea manuală poate fi anticipată sau în afara perioadei planificate, cu prezența confirmată explicit. Ora sosirii introdusă nu poate fi după confirmarea de absență rectificată. Toleranța camerelor rămâne neschimbată.
 - Ieșirile reale de cameră, alte confirmări de absență, șederile mai noi sau dovezile contradictorii nu sunt ignorate. Inclusiv o oră introdusă mai devreme este verificată să nu traverseze o ieșire reală anterioară citirii originale.
 - Versiunea contextului acoperă rezervarea, prezențele, indexul și evenimentele; versiunea recuperării include și arhiva. Orice schimbare relevantă cere reverificare.
 - Autorizarea rămâne pentru `admin`, `employee`, `entriesOperator`; identitatea auditului provine exclusiv din tokenul verificat.

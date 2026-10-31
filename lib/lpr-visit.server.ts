@@ -5,6 +5,35 @@ import { getLprPresenceState } from "@/lib/lpr-presence"
 import { lprOccupancyDelta } from "./lpr-occupancy-transition"
 import { uniqueLprInstant } from "./lpr-time"
 
+/** One accounting transition for linking a live stay or recovering an archived
+ * one. Readers validate identity/evidence and finish all reads before this call.
+ * Period/plate-edit history is not a proxy for physical presence.
+ */
+export function linkLprVisit(tx: FirebaseFirestore.Transaction, db: FirebaseFirestore.Firestore, input: {
+  target: FirebaseFirestore.DocumentReference; source: FirebaseFirestore.DocumentReference
+  sourceKind: "open" | "archived"; lpr: Record<string, any>; sourceData: FirebaseFirestore.DocumentData
+  stateRef: FirebaseFirestore.DocumentReference; state: FirebaseFirestore.DocumentData
+  effectiveInsideCount: number; eventId: string; actor: { uid: string; email: string | null }
+}) {
+  const { target, source, lpr, actor } = input, restored = input.sourceKind === "archived"
+  const count = input.effectiveInsideCount + (restored ? 1 : 0)
+  tx.update(target, { lpr, occupancyIncremented: true, occupancyDecremented: false,
+    occupancyIncrementedAt: restored ? FieldValue.serverTimestamp() : input.sourceData.occupancyIncrementedAt || null,
+    occupancyDecrementedAt: restored ? null : input.sourceData.occupancyDecrementedAt || null, lastUpdated: FieldValue.serverTimestamp() })
+  tx.update(source, restored ? { restoredLprToBookingId: target.id, restoredLprEventId: input.eventId,
+    restoredLprAt: FieldValue.serverTimestamp(), restoredLprByUid: actor.uid } : {
+    "lpr.isInside": false, "lpr.associatedToBookingId": target.id, occupancyIncremented: false,
+    occupancyDecremented: false, lastUpdated: FieldValue.serverTimestamp() })
+  tx.set(input.stateRef, restored ? { bookingId: target.id, visitId: lpr.visitId, isInside: true,
+    lastEventAt: lpr.lastSeenAt, lastEventAtInstant: lpr.lastSeenAtInstant,
+    lastEventId: input.eventId, lastEventType: "entry", lastDeviceId: "manual_admin", updatedAt: FieldValue.serverTimestamp() }
+    : { ...input.state, bookingId: target.id, updatedAt: FieldValue.serverTimestamp() })
+  tx.set(db.collection("config").doc("parkingLive"), { occupiedCount: count, lastUpdated: FieldValue.serverTimestamp(),
+    lastChange: { type: restored ? "restore_deleted_lpr_visit" : "visit_association", bookingId: target.id,
+      sourceBookingId: source.id, adminUid: actor.uid, count, ...(restored ? { at: lpr.lastSeenAt } : {}) } }, { merge: true })
+  return { visitId: lpr.visitId as string, occupancyChanged: restored ? "incremented" : "none" }
+}
+
 /** Shared state transition for camera and admin events. The caller must finish all
  * transaction reads (including the per-plate lock) before calling this function.
  * Existing occupancy flags are preserved for compatibility with reservation writers.
