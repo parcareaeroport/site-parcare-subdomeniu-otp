@@ -28,10 +28,14 @@ function load(relative) {
   },mod,mod.exports);return mod.exports
 }
 const {prepareManualExit:prepare,saveManualExit:exit,manualExitClock:clock}=load('lib/manual-lpr-exit.server.ts')
-const {saveManualEntry:save,createManualBookingRecord:create}=load('lib/manual-lpr-entry.server.ts')
+const {saveManualEntry:save,createManualBookingRecord:create,prepareManualEntry}=load('lib/manual-lpr-entry.server.ts')
 const {handleLprEvent}=load('lib/lpr-service.ts')
 const {getLprPresenceState}=load('lib/lpr-presence.ts')
 const {POST}=load('app/api/admin/manual-lpr-entry/route.ts')
+const {POST:platePOST}=load('app/api/admin/bookings/plate/route.ts')
+const platePost=(body,token)=>platePOST(new Request('http://localhost/api/admin/bookings/plate',{
+ method:'POST',headers:token?{Authorization:`Bearer ${token}`}:{},body:JSON.stringify(body),
+}))
 const actor={uid:'admin-test',email:'admin@example.invalid'}
 const base={licensePlate:'TEST01',status:'confirmed_paid',startDate:'2026-07-16',startTime:'10:00',endDate:'2026-07-21',endTime:'20:00'}
 const current=()=>({...base,startDate:clock().slice(0,10),startTime:'00:00',endDate:clock().slice(0,10),endTime:'23:59'})
@@ -171,14 +175,134 @@ async function rejected(p,code){await assert.rejects(p,e=>e.code===code)}
   await camera('exit','2026-07-17T10:00:00Z');assert.equal(await count(),0)
  })
  for(const role of ['admin','employee','entriesOperator']) {
+  await check('HTTP '+role+' associates unmatched stay once, corrects plate and camera exits the same reservation',async()=>{
+   const at=new Date(Date.parse(clock())-3600000).toISOString()
+   const cameraResult=await camera('entry',at)
+   const sourceId=cameraResult.matchedBookingId;assert.ok(sourceId)
+   const source=await read(sourceId);assert.equal(source.status,'unmatched_lpr');assert.equal(await count(),1)
+   await seed('active',current())
+   const prepared=await post({action:'prepare',bookingId:'active'},role);assert.equal(prepared.status,200)
+   const ctx=await prepared.json();assert.equal(ctx.association.bookingId,sourceId)
+   const payload={action:'save',entryMode:'associate_visit',bookingId:'active',version:ctx.version,requestId:require('node:crypto').randomUUID()}
+   assert.equal((await post(payload,role)).status,409)
+   payload.confirmAssociation=true;payload.adminUid='forged'
+   const saved=await post(payload,role);assert.equal(saved.status,200,JSON.stringify(await saved.clone().json()))
+   const result=await saved.json()
+   assert.equal((await post(payload,role)).status,200)
+   assert.equal(await count(),1);assert.equal((await open()).length,1)
+   assert.equal((await read()).lpr.arrivedAt,source.lpr.arrivedAt);assert.equal((await read()).lpr.visitId,source.lpr.visitId)
+   assert.equal((await read(sourceId)).lpr.associatedToBookingId,'active')
+   await rejected(prepare(sourceId),'VISIT_ASSOCIATED')
+   const receipt=(await db.doc('lpr_events/'+cameraResult.savedEventId).get()).data()
+   assert.equal(receipt.matchedBookingId,'active');assert.equal(receipt.originalMatchedBookingId,sourceId)
+   assert.equal((await db.doc('lpr_events/'+result.lprEventId).get()).data().adminUid,role+'-test')
+   const p=await platePost({action:'prepare',bookingId:'active',plate:'TEST02'},role)
+   assert.equal(p.status,200);const pctx=await p.json()
+   assert.equal((await platePost({action:'save',bookingId:'active',plate:'TEST02',version:pctx.version,confirmPresent:true},role)).status,200)
+   assert.equal(await count(),1)
+   assert.equal((await camera('exit',clock(),'TEST02')).matchedBookingId,'active')
+   assert.equal(await count(),0);assert.equal((await open()).length,0)
+  })
+  await check('HTTP '+role+' plate correction preserves booking association before entry and during presence',async()=>{
+   await seed()
+   const change=async(plate,confirmPresent=false)=>{
+    const body={bookingId:'active',plate}
+    const prepared=await platePost({...body,action:'prepare'},role);assert.equal(prepared.status,200)
+    const ctx=await prepared.json()
+    const response=await platePost({...body,action:'save',version:ctx.version,confirmPresent,adminUid:'forged'},role)
+    assert.equal(response.status,200,JSON.stringify(await response.json()))
+   }
+   await change('TEST02')
+   assert.equal((await camera('entry','2026-07-16T10:00:00Z','TEST02')).matchedBookingId,'active')
+   assert.equal(await count(),1)
+   const visit=(await read()).lpr.visitId
+   await change('TEST03',true)
+   assert.equal(await count(),1);assert.equal((await read()).lpr.visitId,visit)
+   assert.equal((await read()).originalLicensePlate,'TEST01')
+   assert.equal((await db.doc('lpr_plate_state/TEST03').get()).data().bookingId,'active')
+   assert.equal((await db.doc('lpr_plate_state/TEST02').get()).data().isInside,false)
+   const audits=await db.collection('bookings/active/plateCorrections').get()
+   assert.equal(audits.size,2);for(const d of audits.docs)assert.equal(d.data().actorUid,role+'-test')
+   assert.equal((await camera('exit','2026-07-17T10:00:00Z','TEST03')).matchedBookingId,'active')
+   assert.equal(await count(),0);assert.equal((await open()).length,0)
+  })
   await check('HTTP '+role+' entry uses verified actor and rejects forged actor',async()=>{
    await seed();const prepared=await post({action:'prepare',bookingId:'active'},role);assert.equal(prepared.status,200)
    const response=await post({...input(await prepared.json()),action:'save',adminUid:'forged'},role);assert.equal(response.status,200)
    const result=await response.json();assert.equal((await db.doc('lpr_events/'+result.lprEventId).get()).data().adminUid,role+'-test')
   })
  }
+ for(const [sourceCounted,targetCounted] of [[true,false],[true,true],[false,true],[false,false]])await check('association consolidates accounting '+sourceCounted+'/'+targetCounted,async()=>{
+  const at=new Date(Date.parse(clock())-3600000).toISOString(), r=await camera('entry',at)
+  await db.doc('bookings/'+r.matchedBookingId).update({occupancyIncremented:sourceCounted})
+  await seed('active',{...current(),occupancyIncremented:targetCounted})
+  await db.doc('config/parkingLive').set({occupiedCount:Number(sourceCounted)+Number(targetCounted)})
+  const ctx=await prepareManualEntry('active')
+  await save({bookingId:'active',version:ctx.version,requestId:require('node:crypto').randomUUID(),entryMode:'associate_visit',confirmAssociation:true},actor)
+  assert.equal(await count(),1);assert.equal((await open()).length,1)
+  await camera('exit',clock());assert.equal(await count(),0)
+ })
+ await check('association preserves an already-reconciled cache despite duplicate legacy flags',async()=>{
+  await camera('entry',new Date(Date.parse(clock())-3600000).toISOString());await seed('active',{...current(),occupancyIncremented:true})
+  assert.equal(await count(),1)
+  const ctx=await prepareManualEntry('active')
+  await save({bookingId:'active',version:ctx.version,requestId:require('node:crypto').randomUUID(),entryMode:'associate_visit',confirmAssociation:true},actor)
+  assert.equal(await count(),1);await camera('exit',clock());assert.equal(await count(),0)
+ })
+ await check('association rejects changed source or contradictory later exit without writes',async()=>{
+  const at=new Date(Date.parse(clock())-3600000).toISOString(), r=await camera('entry',at)
+  await seed('active',current());let ctx=await prepareManualEntry('active')
+  const payload=()=>({bookingId:'active',version:ctx.version,requestId:require('node:crypto').randomUUID(),entryMode:'associate_visit',confirmAssociation:true})
+  await db.doc('bookings/'+r.matchedBookingId).update({lastUpdated:new Date()})
+  await rejected(save(payload(),actor),'CONTEXT_CHANGED')
+  await db.doc('lpr_events/later-exit').set({normalizedPlate:'TEST01',eventType:'exit',eventTime:clock(),associationStatus:'needs_review'})
+  ctx=await prepareManualEntry('active');await rejected(save(payload(),actor),'ASSOCIATION_REQUIRES_REVIEW')
+  assert.equal((await read()).lpr,undefined);assert.equal(await count(),1)
+ })
+ await check('two simultaneous associations cannot duplicate a stay',async()=>{
+  await camera('entry',new Date(Date.parse(clock())-3600000).toISOString());await seed('active',current());await seed('other',current())
+  const results=await Promise.allSettled(['active','other'].map(async bookingId=>{
+   const ctx=await prepareManualEntry(bookingId)
+   return save({bookingId,version:ctx.version,requestId:require('node:crypto').randomUUID(),entryMode:'associate_visit',confirmAssociation:true},actor)
+  }))
+  assert.equal(results.filter(r=>r.status==='fulfilled').length,1);assert.equal((await open()).length,1);assert.equal(await count(),1)
+ })
+ await check('association transaction failure rolls back source, target, pointer, receipts and counter',async()=>{
+  const r=await camera('entry',new Date(Date.parse(clock())-3600000).toISOString());await seed('active',current())
+  const ctx=await prepareManualEntry('active'),before=await read(r.matchedBookingId),receipt=(await db.doc('lpr_events/'+r.savedEventId).get()).data()
+  const original=db.runTransaction.bind(db)
+  db.runTransaction=callback=>original(async tx=>{await callback(tx);throw Error('injected association abort')})
+  try{await assert.rejects(save({bookingId:'active',version:ctx.version,requestId:require('node:crypto').randomUUID(),entryMode:'associate_visit',confirmAssociation:true},actor),/injected association abort/)}finally{db.runTransaction=original}
+  assert.deepEqual(await read(r.matchedBookingId),before);assert.equal((await read()).lpr,undefined)
+  assert.deepEqual((await db.doc('lpr_events/'+r.savedEventId).get()).data(),receipt)
+  assert.equal((await db.doc('lpr_plate_state/TEST01').get()).data().bookingId,r.matchedBookingId);assert.equal(await count(),1)
+ })
+ await check('plate correction rejects overlapping reservations and invalidates stale confirmations',async()=>{
+  await seed('active',current());await seed('other',{...current(),licensePlate:'test-02'})
+  const conflict=await platePost({action:'prepare',bookingId:'active',plate:'TEST02'},'employee')
+  assert.equal(conflict.status,409);assert.equal((await conflict.json()).code,'AMBIGUOUS_RESERVATIONS')
+  await db.doc('bookings/other').delete()
+  const ctx=await (await platePost({action:'prepare',bookingId:'active',plate:'TEST02'},'employee')).json()
+  await seed('other',{...current(),licensePlate:'TEST02'})
+  const stale=await platePost({action:'save',bookingId:'active',plate:'TEST02',version:ctx.version},'employee')
+  assert.equal(stale.status,409);assert.equal((await stale.json()).code,'CONTEXT_CHANGED')
+  assert.equal((await read()).licensePlate,'TEST01');assert.equal((await db.collection('bookings/active/plateCorrections').get()).size,0)
+ })
+ await check('correcting an absent reservation does not steal another car using the old plate',async()=>{
+  const r=await camera('entry',new Date(Date.parse(clock())-3600000).toISOString());await seed('active',current())
+  const ctx=await (await platePost({action:'prepare',bookingId:'active',plate:'TEST02'},'employee')).json()
+  const saved=await platePost({action:'save',bookingId:'active',plate:'TEST02',version:ctx.version},'employee')
+  assert.equal(saved.status,200);assert.equal((await db.doc('lpr_plate_state/TEST01').get()).data().bookingId,r.matchedBookingId)
+  assert.equal((await read(r.matchedBookingId)).lpr.isInside,true);assert.equal(await count(),1)
+  const entered=await camera('entry',new Date(Date.parse(clock())-60000).toISOString(),'TEST02');assert.equal(entered.matchedBookingId,'active');assert.equal(await count(),2)
+  const exited=await camera('exit',clock(),'TEST02');assert.equal(exited.matchedBookingId,'active');assert.equal(await count(),1)
+ })
  await check('HTTP missing/invalid authorization cannot read or write',async()=>{
-  await seed();for(const token of [undefined,'bad'])assert.equal((await post({action:'prepare',bookingId:'active'},token)).status,401)
+  await seed();for(const token of [undefined,'bad']){
+   assert.equal((await post({action:'prepare',bookingId:'active'},token)).status,401)
+   for(const action of ['prepare','save'])assert.equal((await platePost({action,bookingId:'active',plate:'TEST02'},token)).status,401)
+  }
+  assert.equal((await read()).licensePlate,'TEST01');assert.equal((await db.collection('bookings/active/plateCorrections').get()).size,0)
   assert.equal((await open()).length,0);assert.equal((await db.collection('lpr_events').get()).size,0)
  })
  for(const operation of ['entry','creation']) {

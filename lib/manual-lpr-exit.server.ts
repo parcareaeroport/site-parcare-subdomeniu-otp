@@ -10,6 +10,7 @@ import type { ManualExitContext, ManualExitRow, ManualExitSaveInput } from "@/li
 import { compareLprTimes, lprTime, lprTimeCandidates, normalizeLprEventType, receiptLprTime, romaniaCivilClock, uniqueLprInstant } from "./lpr-time"
 import { lprExitConflict } from "./lpr-exit-evidence"
 import { isTrustedLprReceipt } from "./lpr-entry-evidence"
+import { countEffectiveLprOccupancy } from "./lpr-occupancy"
 
 export class ManualExitError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message) }
@@ -46,6 +47,7 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
   const snap = await tx.get(ref)
   if (!snap.exists) throw new ManualExitError("NOT_FOUND", "Rezervarea nu mai există.", 404)
   const b = snap.data()!, plate = normalizeLicensePlate(String(b.licensePlate || ""))
+  if (b.lpr?.associatedToBookingId) throw new ManualExitError("VISIT_ASSOCIATED", `Șederea a fost asociată rezervării ${b.lpr.associatedToBookingId}. Folosește rezervarea respectivă pentru intrare sau ieșire.`, 409)
   if (!plate) throw new ManualExitError("MISSING_PLATE", "Rezervarea nu are un număr valid pentru verificare.")
   const stateRef = adminDb.collection("lpr_plate_state").doc(plate)
   // Same legacy normalization support as the camera matcher. Query is read inside the transaction.
@@ -76,7 +78,8 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
     departure: iso(lpr.departedAt), inside, lastEntry:lastEntry === null ? null : new Date(lastEntry).toISOString(),
     duplicates: open.length > 1 ? open.map(d => row(d.id, d.data())) : open.filter(d => d.id !== snap.id).map(d => row(d.id, d.data())),
   }
-  return { ref, b, plate, context, state, stateRef, linked, receipts, history }
+  return { ref, b, plate, context, state, stateRef, linked, receipts, history,
+    effectiveInsideCount: countEffectiveLprOccupancy(insideSnap.docs.map(d => d.data())) }
 }
 export async function prepareManualExit(bookingId: string) {
   return lprTransaction(adminDb, async tx => (await readManualLprContext(tx, bookingId)).context)

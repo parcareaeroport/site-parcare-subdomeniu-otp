@@ -10,9 +10,12 @@ function bookingClockMillis(date: unknown, time: unknown): number | null {
 
 /** Camera and admin use the same booking window. Preserve the legacy Romania
  * wall-clock-with-Z convention; this is not a migration of historical timestamps. */
-export function inLprBookingWindow(data: any, time: number): boolean {
+export function getLprBookingWindow(data: any): { start: number; end: number } | null {
   const start = bookingClockMillis(data.startDate, data.startTime)
   const end = bookingClockMillis(data.endDate, data.endTime)
-  return start !== null && end !== null && end >= start &&
-    time >= start - LPR_TOLERANCE_MS && time <= end + LPR_TOLERANCE_MS
+  return start !== null && end !== null && end >= start ? { start: start - LPR_TOLERANCE_MS, end: end + LPR_TOLERANCE_MS } : null
+}
+export function inLprBookingWindow(data: any, time: number): boolean {
+  const window = getLprBookingWindow(data)
+  return window !== null && time >= window.start && time <= window.end
 }

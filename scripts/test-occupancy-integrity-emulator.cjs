@@ -147,7 +147,15 @@ async function modification(){await db.doc('bookingModificationRequests/request'
   await Promise.all(plates.map(p=>event('exit','2026-07-16T11:00:00Z',p)));await drain();assert.equal(await count(),0);assert.equal(await counter(),0)
   assert.equal((await observed()).lprAttention.count,0)
  })
- await check('admin routes and retry worker enforce authorization',async()=>{for(const fn of [plateHTTP,reviewHTTP,removeBooking]){assert.equal((await fn(apiReq({},null))).status,401);assert.equal((await fn(apiReq({},'employee'))).status,403)}delete process.env.CRON_SECRET;assert.equal((await workerHTTP(new Request('http://localhost/api/cron/lpr-retry'))).status,503);process.env.CRON_SECRET='fixture-cron';assert.equal((await workerHTTP(new Request('http://localhost/api/cron/lpr-retry'))).status,401);assert.equal((await workerHTTP(new Request('http://localhost/api/cron/lpr-retry',{headers:{Authorization:'Bearer fixture-cron'}}))).status,200)})
+ await check('operator plate access preserves restrictions on review, deletion and retry worker',async()=>{
+  for(const fn of [plateHTTP,reviewHTTP,removeBooking])assert.equal((await fn(apiReq({},null))).status,401)
+  for(const fn of [reviewHTTP,removeBooking])assert.equal((await fn(apiReq({},'employee'))).status,403)
+  // Employees now reach plate input validation; unrelated admin routes stay restricted.
+  assert.equal((await plateHTTP(apiReq({},'employee'))).status,400)
+  delete process.env.CRON_SECRET;assert.equal((await workerHTTP(new Request('http://localhost/api/cron/lpr-retry'))).status,503)
+  process.env.CRON_SECRET='fixture-cron';assert.equal((await workerHTTP(new Request('http://localhost/api/cron/lpr-retry'))).status,401)
+  assert.equal((await workerHTTP(new Request('http://localhost/api/cron/lpr-retry',{headers:{Authorization:'Bearer fixture-cron'}}))).status,200)
+ })
  await check('occupancy list does not use drifting cached counter',async()=>{await seed();await event('entry');await db.doc('config/parkingLive').set({occupiedCount:999});assert.equal(await count(),1)})
  console.log(`PASS ${passed} occupancy integrity scenarios`)
 })().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>deleteApp(app))

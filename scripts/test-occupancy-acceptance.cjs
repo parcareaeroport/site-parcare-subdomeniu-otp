@@ -1,7 +1,25 @@
 // One command owns a new local emulator and runs all suites sequentially.
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),net=require('node:net'),{spawn}=require('node:child_process'),{createHash}=require('node:crypto')
 const root=path.resolve(__dirname,'..')
-const suites=[
+const entriesOnly=process.argv.includes('--entries')
+const exitsOnly=process.argv.includes('--exits')
+if(entriesOnly&&exitsOnly)throw Error('Choose --entries or --exits, not both')
+const entrySuites=[
+ 'test-occupancy-entry-matrix-emulator.cjs','test-occupancy-http-ledger-emulator.cjs',
+ 'test-lpr-association-emulator.cjs','test-lpr-entry-protections-emulator.cjs',
+ 'test-manual-lpr-entry-emulator.cjs','test-lpr-ordering-corrections-emulator.cjs',
+ 'test-unified-occupancy-emulator.cjs','test-lpr-camera-compatibility.cjs','test-occupancy-network-guard.cjs',
+]
+const exitSuites=[
+ 'test-occupancy-exit-matrix-emulator.cjs','test-occupancy-http-ledger-emulator.cjs',
+ 'test-lpr-association-emulator.cjs','test-lpr-exit-protections-emulator.cjs',
+ 'test-manual-lpr-exit-emulator.cjs','test-booking-deletion-emulator.cjs',
+ 'test-lpr-ordering-corrections-emulator.cjs','test-occupancy-integrity-emulator.cjs',
+ 'test-unified-occupancy-emulator.cjs','test-occupancy-network-guard.cjs',
+]
+const suites=entriesOnly?entrySuites:exitsOnly?exitSuites:[
+ 'test-occupancy-exit-matrix-emulator.cjs',
+ 'test-occupancy-entry-matrix-emulator.cjs',
  'test-occupancy-http-ledger-emulator.cjs','test-booking-deletion-emulator.cjs','test-booking-delete-feedback.cjs','test-lpr-association-emulator.cjs',
  'test-lpr-entry-protections-emulator.cjs','test-lpr-exit-protections-emulator.cjs',
  'test-lpr-ordering-corrections-emulator.cjs','test-manual-lpr-entry-emulator.cjs',
@@ -17,7 +35,7 @@ async function childRun(dir){
  for(const suite of suites){
   const file=path.join(dir,suite+'.log'),fd=fs.openSync(file,'w'),started=Date.now()
   const result=await run(process.execPath,[path.join('scripts',suite)],{env:{...process.env,OCCUPANCY_ACCEPTANCE_REPORT_DIR:dir,NODE_OPTIONS:'--require '+path.join(__dirname,'occupancy-network-guard.cjs')},stdio:['ignore',fd,fd],timeout:180000});fs.closeSync(fd)
-  const log=fs.readFileSync(file,'utf8'),checks=log.split(/\r?\n/).filter(l=>/^PASS(?: |:)/.test(l)&&!/^PASS \d+ .*scenarios/.test(l) && !/^PASS [\d/]+ HTTP ledger/.test(l))
+  const log=fs.readFileSync(file,'utf8'),checks=log.split(/\r?\n/).filter(l=>/^PASS(?: |:)/.test(l)&&!/^PASS \d+ .*scenarios/.test(l) && !/^PASS [\d/]+ HTTP ledger/.test(l) && !/^PASS \d+ (entry|exit) matrix cases/.test(l))
   results.push({suite,passed:result.code===0,durationMs:Date.now()-started,checks,log:file,...result})
   fs.writeFileSync(path.join(dir,'results.json'),JSON.stringify({productionWrites:0,nodeVersion:process.version,nodeExecutable:process.execPath,suites:results},null,2))
   console.log(`${result.code===0?'PASS':'FAIL'} ${suite} (${checks.length} checkpoints)`)
@@ -25,7 +43,16 @@ async function childRun(dir){
  }
  const timelineFile=path.join(dir,'timeline.json'),timeline=fs.existsSync(timelineFile)?JSON.parse(fs.readFileSync(timelineFile,'utf8')):[]
  const failures=results.filter(r=>!r.passed)
- const lines=['# Raport acceptare ocupare','',`Rezultat: ${failures.length?'FAIL':'PASS'}`,`Suite: ${results.length-failures.length}/${results.length} trecute`,`Pași HTTP cu ocupare verificată: ${timeline.filter(s=>!s.settling).length}`,'','Exclusiv emulator local și proiecte demo. Autentificarea criptografică și transporturile comerciale sunt simulate.','Nu confirmă citirea camerelor fizice, livrarea Vercel sau corectitudinea istoricului de producție.','','| Scenariu / pas | Așteptat | API Ocupare | Contor | Rezultat |','|---|---:|---:|---:|---|',...timeline.map(s=>`| ${s.scenario} / ${s.step} | ${s.expected} | ${s.api} | ${s.counter} | ${s.settling?'RECOVERY (pending: '+s.pending+')':s.passed?'PASS':'FAIL'} |`),'','## Suite',...results.map(r=>`- ${r.passed?'PASS':'FAIL'} ${r.suite}: ${r.checks.length} checkpoints (${Math.round(r.durationMs/1000)}s)`)]
+ const entriesFile=path.join(dir,'entries-matrix.json')
+ const entries=fs.existsSync(entriesFile)?JSON.parse(fs.readFileSync(entriesFile,'utf8')).rows:[]
+ const lines=[entriesOnly?'# Raport acceptare intrari (+1)':exitsOnly?'# Raport acceptare iesiri (-1)':'# Raport acceptare ocupare','',`Rezultat: ${failures.length?'FAIL':'PASS'}`,`Suite: ${results.length-failures.length}/${results.length} trecute`,`Pași HTTP cu ocupare verificată: ${timeline.filter(s=>!s.settling).length}`,'','Exclusiv emulator local și proiecte demo. Autentificarea criptografică și transporturile comerciale sunt simulate.','Nu confirmă citirea camerelor fizice, livrarea Vercel sau corectitudinea istoricului de producție.','','| Scenariu / pas | Așteptat | API Ocupare | Contor | Rezultat |','|---|---:|---:|---:|---|',...timeline.map(s=>`| ${s.scenario} / ${s.step} | ${s.expected} | ${s.api} | ${s.counter} | ${s.settling?'RECOVERY (pending: '+s.pending+')':s.passed?'PASS':'FAIL'} |`),'','## Suite',...results.map(r=>`- ${r.passed?'PASS':'FAIL'} ${r.suite}: ${r.checks.length} checkpoints (${Math.round(r.durationMs/1000)}s)`)]
+ for(const [kind,rows] of [['intrari',entries],['iesiri',fs.existsSync(path.join(dir,'exits-matrix.json'))?JSON.parse(fs.readFileSync(path.join(dir,'exits-matrix.json'),'utf8')).rows:[]]]) {
+  if(!rows.length)continue
+  lines.push('',`## Matrice ${kind}: efect pe pagina Ocupare`,'','Numaratoarea paginii si cache-ul intern sunt verificate separat.','',
+   '| Flux / pas | Delta asteptata in pagina | Delta obtinuta | Delta cache intern | Rezultat |',
+   '|---|---:|---:|---:|---|',...rows.map(r=>`| ${r.scenario} / ${r.step} | ${r.expectedDelta} | ${r.actualDelta??'?'} | ${r.cacheAfter===undefined?'?':r.cacheAfter-r.cacheBefore} | ${r.passed?'PASS':'FAIL'} |`),
+   '',...[...new Set(rows.filter(r=>r.note).map(r=>r.note))].map(note=>`- ${note}`))
+ }
  fs.writeFileSync(path.join(dir,'report.md'),lines.join('\n')+'\n');console.log(`REPORT ${path.join(dir,'report.md')}`)
  process.exitCode=failures.length?1:0
 }
@@ -46,7 +73,7 @@ async function main(){
  env.FIREBASE_EMULATORS_PATH=process.env.FIREBASE_EMULATORS_PATH||path.join(os.tmpdir(),'parking-occupancy-emulator-cache')
  console.log('Raport și loguri: '+dir)
  const quote=value=>"'"+value.replace(/'/g,"'\\''")+"'"
- const command=`${quote(process.execPath)} ${quote(__filename)} --child ${quote(dir)}`
+ const command=`${quote(process.execPath)} ${quote(__filename)} --child ${quote(dir)}${entriesOnly?' --entries':exitsOnly?' --exits':''}`
  const result=await run('firebase',['emulators:exec','--only','firestore','--project','demo-parking-acceptance','--config',config,command],{cwd:dir,env,stdio:'inherit',timeout:1800000})
  if(result.error)console.error('Firebase CLI required in PATH; Java required for emulator. '+result.error)
  process.exitCode=result.code

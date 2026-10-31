@@ -26,6 +26,7 @@ import {
   limit,
   startAfter,
   documentId,
+  runTransaction,
 } from "firebase/firestore"
 import { db } from "@/lib/firebase"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -1154,6 +1155,7 @@ function BookingsPageContent() {
 
     return (
       <div className="flex flex-col gap-1">
+        {(booking as any).lpr?.associatedToBookingId && <span className="break-all text-xs text-slate-600">Ședere asociată rezervării {(booking as any).lpr.associatedToBookingId}</span>}
         {hasChannelBadge ? (
           <div className="flex flex-wrap items-center gap-1">
             {showManualBadge && (
@@ -2906,7 +2908,7 @@ function BookingsPageContent() {
                               )}
 
                               {/* Completează din LPR pentru rezervările unmatched_lpr */}
-                              {booking.status === "unmatched_lpr" && (
+                              {booking.status === "unmatched_lpr" && !(booking as any).lpr?.associatedToBookingId && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
@@ -2929,7 +2931,7 @@ function BookingsPageContent() {
                                 </>
                               )}
 
-                              {isAdmin && (
+                              {user && (
                                 <>
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem
@@ -3926,7 +3928,10 @@ function BookingsPageContent() {
                   }
 
                   const bookingRef = doc(db, "bookings", lprBookingToComplete.id)
-                  await updateDoc(bookingRef, {
+                  await runTransaction(db, async transaction => {
+                    const current = await transaction.get(bookingRef)
+                    if (!current.exists() || current.data()?.lpr?.associatedToBookingId) throw new Error("Șederea a fost asociată unei rezervări. Folosește rezervarea respectivă.")
+                    transaction.update(bookingRef, {
                     endDate: exitDateStr,
                     endTime: exitTimeStr,
                     durationMinutes,
@@ -3938,6 +3943,7 @@ function BookingsPageContent() {
                     status: "confirmed_pay_on_site",
                     paymentStatus: "pending",
                     lastUpdated: serverTimestamp(),
+                    })
                   })
 
                   toast({

@@ -1,8 +1,8 @@
 import { withLprRequest, lprLog, lprFields, lprError } from "@/lib/lpr-log.server"
 import { NextResponse } from "next/server"
 import { authorizeAdminRequest } from "@/lib/admin-api-auth"
-import { ManualExitError, prepareManualExit } from "@/lib/manual-lpr-exit.server"
-import { saveManualEntry } from "@/lib/manual-lpr-entry.server"
+import { ManualExitError } from "@/lib/manual-lpr-exit.server"
+import { prepareManualEntry, saveManualEntry } from "@/lib/manual-lpr-entry.server"
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
 async function POSTHandler(request: Request) {
@@ -15,7 +15,7 @@ async function POSTHandler(request: Request) {
       confirmOverwrite:input.confirmOverwrite,confirmDuplicates:input.confirmDuplicates,confirmMissingArrival:input.confirmMissingArrival,
       confirmReentry:input.confirmReentry,confirmed:input.confirmed,useServerNow:input.useServerNow,entryMode:input.entryMode})
     if (!input || typeof input !== "object" || typeof input.bookingId !== "string" || !input.bookingId || input.bookingId.includes("/")) { lprFields({reason:"invalid_booking"}); return NextResponse.json({ error: "Rezervare invalidă." }, { status: 400 }) }
-    const result = input.action === "prepare" ? await prepareManualExit(input.bookingId) : input.action === "save" ? await saveManualEntry(input, auth.user) : null
+    const result = input.action === "prepare" ? await prepareManualEntry(input.bookingId) : input.action === "save" ? await saveManualEntry(input, auth.user) : null
     if (!result) { lprFields({reason:"invalid_action"}); return NextResponse.json({ error: "Acțiune invalidă." }, { status: 400 }) }
     lprLog(input.action === "prepare" ? "manual_prepared" : "manual_saved",{eventId:(result as any).lprEventId,visitId:(result as any).visitId})
     return NextResponse.json(result, { headers: { "Cache-Control": "no-store" } })

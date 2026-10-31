@@ -37,7 +37,7 @@ async function POSTHandler(
   if (process.env.LPR_API_ACTIVE === "false") {
     lprFields({reason:"disabled",outcome:"disabled"})
     // Nu procesăm mesajul când endpointul este dezactivat.
-    return new Response("", { status: 204 }); // No Content
+    return new Response(null, { status: 204 }); // No Content: 204 responses must not contain a body.
   }
 
   // ---------------------------------------------------------------------------

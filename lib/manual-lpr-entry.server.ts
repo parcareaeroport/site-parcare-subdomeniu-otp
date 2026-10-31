@@ -6,6 +6,7 @@ import { adminDb } from "@/lib/firebase-admin"
 import { getLprPresenceState, lprTimestampToMillis } from "@/lib/lpr-presence"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { isBeforePlateCorrection, isLaterKnownExit } from "@/lib/lpr-entry-evidence"
+import { lprExitConflict } from "@/lib/lpr-exit-evidence"
 import { writeLprVisit, correctLprArrival } from "@/lib/lpr-visit.server"
 import { inLprBookingWindow, LPR_ACTIVE_STATUSES } from "@/lib/lpr-booking-window"
 import { ManualExitError, manualExitClock, manualLprInstant, parseManualExitClock, readManualLprContext } from "@/lib/manual-lpr-exit.server"
@@ -13,7 +14,7 @@ import { bookingLprTimes, compareLprTimes, lprTime, type LprTime } from "./lpr-t
 import type { ManualExitSaveInput } from "@/lib/manual-lpr-exit-contract"
 
 type Actor = { uid: string; email: string | null }
-const fail = (code: string, message: string) => { throw new ManualExitError(code, message, 409) }
+function fail(code: string, message: string): never { throw new ManualExitError(code, message, 409) }
 function checkEntry(booking: any, at: string, now: string, history: LprTime[], instant: string, nowInstant: string) {
   const point = lprTime(at, instant)
   if (compareLprTimes(point, lprTime(now, nowInstant), 1000) === 1) fail("FUTURE_ENTRY", "Intrarea nu poate fi în viitor. Introdu ora sosirii reale.")
@@ -50,11 +51,35 @@ function auditEntry(tx: FirebaseFirestore.Transaction, ref: FirebaseFirestore.Do
   tx.set(eventRef, { ...audit, associationStatus: "manual", receivedAt: FieldValue.serverTimestamp(), ...extra })
   tx.set(ref.collection("gateEvents").doc(eventRef.id), { ...audit, ...extra, lprEventId: eventRef.id, createdAt: FieldValue.serverTimestamp() })
 }
+// Reuse an unmatched camera stay, never manufacture a second physical entry.
+// The version includes the source, plate pointer and receipts, so camera/manual
+// changes invalidate the confirmation and concurrent associations serialize.
+function associationCandidate(ctx: Awaited<ReturnType<typeof readManualLprContext>>) {
+  if (ctx.context.inside || ctx.context.hasPreviousVisit || ctx.context.duplicates.length !== 1 ||
+    ctx.b.modificationApplying || !LPR_ACTIVE_STATUSES.includes(ctx.b.status)) return null
+  const id = ctx.context.duplicates[0].id
+  const source = ctx.history.docs.find(d => d.id === id) || (ctx.linked?.id === id ? ctx.linked : null)
+  const b = source?.data(), pointer = ctx.state.data()
+  if (!source || !b || b.status !== "unmatched_lpr" || b.modificationApplying ||
+    !getLprPresenceState(b).isEffectivelyInside || !b.lpr?.visitId || !b.lpr?.arrivedAt ||
+    pointer?.bookingId !== id || pointer?.visitId !== b.lpr.visitId || pointer?.isInside !== true ||
+    lprTimestampToMillis(b.lpr.arrivedAt) === null ||
+    !inLprBookingWindow(ctx.b, Date.parse(manualExitClock()))) return null
+  return { source, b, bookingId: id, arrival: new Date(lprTimestampToMillis(b.lpr.arrivedAt)!).toISOString(),
+    outsidePeriod: !inLprBookingWindow(ctx.b, lprTimestampToMillis(b.lpr.arrivedAt)!) }
+}
+export async function prepareManualEntry(bookingId: string) {
+  return lprTransaction(adminDb, async tx => {
+    const ctx = await readManualLprContext(tx, bookingId), candidate = associationCandidate(ctx)
+    return { ...ctx.context, association: candidate ? { bookingId: candidate.bookingId, arrival: candidate.arrival, outsidePeriod: candidate.outsidePeriod } : null }
+  })
+}
 export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) {
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestId || "")) fail("INVALID_REQUEST", "Identificator de salvare invalid.")
   const eventRef = adminDb.collection("lpr_events").doc(`manual_entry_${input.requestId}`)
   const fingerprint = createHash("sha256").update(JSON.stringify({ bookingId: input.bookingId, version: input.version, actor: actor.uid,
-    now: input.useServerNow === true, date: input.useServerNow === true ? null : input.date, time: input.useServerNow === true ? null : input.time, overwrite: input.confirmOverwrite === true, entryMode: input.entryMode, reentry: input.confirmReentry === true })).digest("hex")
+    now: input.useServerNow === true, date: input.useServerNow === true ? null : input.date, time: input.useServerNow === true ? null : input.time, overwrite: input.confirmOverwrite === true, entryMode: input.entryMode, reentry: input.confirmReentry === true,
+    ...(input.entryMode === "associate_visit" ? { association: input.confirmAssociation === true } : {}) })).digest("hex")
   return lprTransaction(adminDb, async tx => {
     const receipt = await tx.get(eventRef)
     if (receipt.exists) {
@@ -62,8 +87,57 @@ export async function saveManualEntry(input: ManualExitSaveInput, actor: Actor) 
       lprLog("manual_replay",{eventId:eventRef.id,bookingId:input.bookingId,replayed:true,occupancyDelta:0,outcome:"duplicate"})
       return receipt.data()!.result
     }
-    const { ref, b, plate, context, state } = await readManualLprContext(tx, input.bookingId)
+    const ctx = await readManualLprContext(tx, input.bookingId)
+    const { ref, b, plate, context, state } = ctx
     if (context.version !== input.version) fail("CONTEXT_CHANGED", "Datele s-au schimbat. Reîncarcă și verifică șederea înainte de salvare.")
+    if (input.entryMode === "associate_visit") {
+      const candidate = associationCandidate(ctx)
+      if (!candidate) fail("ASSOCIATION_UNAVAILABLE", "Șederea nu poate fi asociată automat. Reîncarcă și verifică rezervarea și înregistrările prezente.")
+      if (input.confirmAssociation !== true) fail("CONFIRM_ASSOCIATION", "Confirmă că șederea LPR existentă aparține acestei rezervări.")
+      const realNow = new Date(), now = manualExitClock(realNow), instant = manualLprInstant(now, true, realNow)
+      const source = candidate.b, visitId = source.lpr.visitId
+      const conflict = lprExitConflict({ bookingId: candidate.bookingId, booking: source,
+        state: state.data(), receipts: ctx.receipts.docs.map(d => d.data()), at: lprTime(now, instant), manual: true })
+      if (conflict || ctx.receipts.docs.some(d => isLaterKnownExit(d.data(), Date.parse(candidate.arrival), Date.parse(now), true))) {
+        fail("ASSOCIATION_REQUIRES_REVIEW", "Există evenimente LPR contradictorii. Verifică prezența și succesiunea intrărilor/ieșirilor înainte de asociere.")
+      }
+      // Transfer the accounting responsibility as well as the physical stay,
+      // without inventing a camera departure or a second physical entry.
+      const related = ctx.receipts.docs.filter(d => d.data().matchedBookingId === candidate.bookingId && d.data().visitId === visitId)
+      const gateEvents = await tx.get(candidate.source.ref.collection("gateEvents").where("visitId", "==", visitId))
+      if (related.length + gateEvents.size > 400) fail("ASSOCIATION_REQUIRES_REVIEW", "Șederea are prea multe evenimente pentru asocierea directă. Necesită verificarea istoricului.")
+      const accounting = { occupancyIncremented: true, occupancyDecremented: false,
+        occupancyIncrementedAt: source.occupancyIncrementedAt || null, occupancyDecrementedAt: source.occupancyDecrementedAt || null }
+      tx.update(ref, { lpr: { ...source.lpr, associatedFromBookingId: candidate.bookingId }, ...accounting, lastUpdated: FieldValue.serverTimestamp() })
+      tx.update(candidate.source.ref, { "lpr.isInside": false, "lpr.associatedToBookingId": ref.id,
+        occupancyIncremented: false, occupancyDecremented: false, lastUpdated: FieldValue.serverTimestamp() })
+      tx.set(ctx.stateRef, { bookingId: ref.id, updatedAt: FieldValue.serverTimestamp() }, { merge: true })
+      // The physical count stays identical. Reconcile the derived cache from the
+      // same transactional effective-presence snapshot used by Occupancy, rather
+      // than guessing from legacy per-reservation accounting flags.
+      tx.set(adminDb.collection("config").doc("parkingLive"), {
+        occupiedCount: ctx.effectiveInsideCount, lastUpdated: FieldValue.serverTimestamp(),
+        lastChange: { type: "visit_association", bookingId: ref.id, sourceBookingId: candidate.bookingId, adminUid: actor.uid, count: ctx.effectiveInsideCount },
+      }, { merge: true })
+      // Retain camera payloads and original linkage; update their operational
+      // association so same-second exits/replays still refer to the same visit.
+      for (const receipt of related) {
+        tx.update(receipt.ref, { matchedBookingId: ref.id, originalMatchedBookingId: receipt.data().originalMatchedBookingId || candidate.bookingId,
+          associatedByUid: actor.uid, associatedAt: FieldValue.serverTimestamp() })
+      }
+      for (const gate of gateEvents.docs) tx.set(ref.collection("gateEvents").doc(gate.id), {
+        ...gate.data(), matchedBookingId: ref.id, originalMatchedBookingId: candidate.bookingId,
+        associatedByUid: actor.uid, associatedAt: FieldValue.serverTimestamp(),
+      })
+      const result = { visitId, occupancyChanged: "none", associatedFromBookingId: candidate.bookingId, lprEventId: eventRef.id }
+      const audit = { eventType: "visit_association", matchedBookingId: ref.id, sourceBookingId: candidate.bookingId, normalizedPlate: plate,
+        plateNumber: plate, visitId, eventTime: now, eventInstant: instant, manual: true, adminUid: actor.uid, adminEmail: actor.email,
+        associationStatus: "manual", confirmed: true, outsidePeriod: candidate.outsidePeriod, requestFingerprint: fingerprint, result, receivedAt: FieldValue.serverTimestamp() }
+      tx.create(eventRef, audit)
+      tx.create(ref.collection("gateEvents").doc(eventRef.id), audit)
+      tx.create(candidate.source.ref.collection("gateEvents").doc(eventRef.id), audit)
+      return result
+    }
     if (context.duplicates.length) fail("DUPLICATE_PRESENCE", "Necesită verificare ADMIN: numărul este deja prezent pe altă rezervare. Intrarea nu a fost salvată.")
     const expectedMode = context.inside ? "correct_arrival" : "new_visit"
     if (input.entryMode !== expectedMode) fail("ENTRY_MODE_REQUIRED", context.inside

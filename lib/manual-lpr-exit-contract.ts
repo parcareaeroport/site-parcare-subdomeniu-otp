@@ -8,10 +8,12 @@ export type ManualExitContext = {
   lastEntry?: string | null
   arrival: string | null; departure: string | null; inside: boolean
   duplicates: ManualExitRow[]
+  association?: { bookingId: string; arrival: string; outsidePeriod: boolean } | null
 }
 export type ManualExitSaveInput = {
   bookingId: string; version: string; requestId: string
   date?: string; time?: string; useServerNow?: boolean
-  entryMode?: "new_visit" | "correct_arrival"; confirmReentry?: boolean
+  entryMode?: "new_visit" | "correct_arrival" | "associate_visit"; confirmReentry?: boolean
+  confirmAssociation?: boolean
   confirmMissingArrival?: boolean; confirmDuplicates?: boolean; confirmOverwrite?: boolean
 }

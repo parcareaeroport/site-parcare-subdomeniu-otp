@@ -3,7 +3,7 @@
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), assert = require('node:assert/strict')
 const { spawn } = require('node:child_process'), { createRequire } = require('node:module')
 assert.match(process.env.FIRESTORE_EMULATOR_HOST || '', /^(127\.0\.0\.1|localhost):\d+$/, 'Local emulator required')
-const root = path.resolve(__dirname, '..'), projectId = 'demo-parking-lpr'
+const root = path.resolve(__dirname, '..'), projectId = process.env.LPR_ROLE_FOCUSED ? 'demo-parking-roles' : 'demo-parking-lpr'
 const { chromium, expect } = createRequire(path.join(root, '../expo-mobile-app/package.json'))('@playwright/test')
 const { initializeApp, deleteApp } = require('firebase-admin/app'), { getFirestore } = require('firebase-admin/firestore')
 const adminApp = initializeApp({ projectId }, 'browser-lpr-fixture'), db = getFirestore(adminApp)
@@ -47,10 +47,14 @@ let server, browser, logs = ''
   assert.ok(ready, logs)
   browser = await chromium.launch({ headless: true, channel: 'chrome' })
   const page = await browser.newPage({ viewport: { width:1440, height:1000 }, timezoneId:'Europe/Bucharest' })
-  await page.clock.setFixedTime(new Date('2026-10-25T12:00:00Z'))
+  if (!process.env.LPR_ROLE_FOCUSED) await page.clock.setFixedTime(new Date('2026-10-25T12:00:00Z'))
   const errors=[]; page.on('pageerror', e=>errors.push(e.message))
   // Reject accidental traffic to production Firebase endpoints.
   await page.route(/https:\/\/.*(googleapis\.com|firebaseio\.com)/, route => { errors.push('Unexpected external Firebase request: '+route.request().url()); return route.abort() })
+  if (process.env.LPR_ROLE_FOCUSED) {
+    await require('./test-lpr-operator-browser.cjs')({page,db,expect,errors})
+    return
+  }
   await page.goto('http://localhost:3182/admin/dashboard/entries-exits')
   await page.getByRole('tab', { name:'Ieșiri', exact:true }).click()
   await expect(page.locator('#exits-late')).toContainText('UIOLD01', { timeout:30000 })
@@ -162,7 +166,7 @@ let server, browser, logs = ''
   await foreignPage.goto('http://localhost:3182/admin/dashboard/entries-exits')
   await foreignPage.getByRole('tab',{name:'Intrări',exact:true}).click()
   await foreignPage.getByRole('button',{name:'ENTRY01',exact:true}).filter({visible:true}).click()
-  await expect(foreignPage.getByRole('dialog')).toContainText('Necesită verificare ADMIN')
+  await expect(foreignPage.getByRole('dialog')).toContainText('Număr deja prezent pe altă înregistrare')
   await expect(foreignPage.getByRole('dialog')).toContainText('ui-entry-duplicate')
   await expect(foreignPage.getByRole('dialog').getByRole('button',{name:'Salvează',exact:true})).toBeDisabled()
   await foreignPage.getByRole('dialog').getByRole('button',{name:'Renunță',exact:true}).click()
@@ -257,6 +261,7 @@ let server, browser, logs = ''
   console.log('PASS automatic Occupancy refresh, stale-data warning, timeout and recovery')
 
   // Protected plate correction, real Bookings UI and API, at desktop/mobile widths.
+  await page.evaluate(()=>localStorage.setItem('fixtureRole','employee'))
   for (const width of [1440,390]) {
     const id='plate-ui-'+width, plate='EDIT'+width, target='FIX'+width
     await db.doc('bookings/'+id).set({...base,licensePlate:plate,createdAt:new Date('2026-10-25T10:00:00Z'),lpr:{isInside:true,visitId:id,arrivedAt:'2026-10-20T10:00:00Z',lastSeenAt:'2026-10-20T10:00:00Z',lastEventType:'entry'}})
@@ -284,11 +289,14 @@ let server, browser, logs = ''
     await page.screenshot({path:'/tmp/parking-stage3-plate-'+width+'.png'})
     await pd.getByRole('button',{name:'Salvează',exact:true}).click();await expect(pd).toHaveCount(0)
     const changed=(await db.doc('bookings/'+id).get()).data();assert.equal(changed.licensePlate,target);assert.equal(changed.lpr.isInside,true)
+    const corrections=await db.collection('bookings/'+id+'/plateCorrections').get()
+    assert.equal(corrections.size,1);assert.equal(corrections.docs[0].data().actorUid,'employee-fixture')
     assert.equal((await db.doc('lpr_plate_state/'+target).get()).data().bookingId,id)
     assert.equal((await db.doc('lpr_plate_state/'+plate).get()).data().isInside,false)
     assert.equal((await db.doc('lpr_plate_state/'+plate).get()).data().plateCorrection.bookingId,id)
-    console.log('PASS plate correction UI: duplicate, explicit confirmation, changed context, atomic pointer, width '+width)
+    console.log('PASS employee plate correction UI: duplicate, explicit confirmation, changed context, atomic pointer, width '+width)
   }
+  await page.evaluate(()=>localStorage.setItem('fixtureRole','admin'))
   // Ambiguous receipts visibly warn about uncertainty; confirmation is audited, count unaffected.
   await db.doc('lpr_events/ui-review').set({normalizedPlate:'REVIEW01',eventType:'entry',eventTime:'2026-10-25T11:00:00Z',associationStatus:'needs_review',associationReason:'ambiguous_reservations',candidateBookingIds:['candidate-a','candidate-b']})
   await page.goto('http://localhost:3182/admin/dashboard/ocupare')
