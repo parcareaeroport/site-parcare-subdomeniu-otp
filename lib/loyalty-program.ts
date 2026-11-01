@@ -10,9 +10,8 @@ import {
 import type { ProfileCollection } from "@/lib/mobile-user-service"
 import {
   computeBookingTotal,
-  getMobileOnlineTierTotal,
   loadPriceTiersFromFirestore,
-  resolvePriceTier,
+  resolveMobileBookingPrice,
   type PaymentMethod,
 } from "@/lib/booking-pricing"
 import { getPricingSettings } from "@/lib/pricing-settings"
@@ -40,12 +39,7 @@ export function calculateMobileBookingPriceFromTiers(
   paymentMethod: PaymentMethod,
   mobileOnlineDiscountPercent: number
 ): number {
-  const tier = resolvePriceTier(days, tiers)
-  if (!tier) return 0
-  if (paymentMethod === "at_parking") {
-    return Math.round(tier.standardPrice * 100) / 100
-  }
-  return Math.round(getMobileOnlineTierTotal(tier, mobileOnlineDiscountPercent) * 100) / 100
+  return resolveMobileBookingPrice(days, tiers, paymentMethod, mobileOnlineDiscountPercent)?.total ?? 0
 }
 
 export function calculateBookingPriceFromTiers(
@@ -115,14 +109,8 @@ export async function resolveMobileBookingAmountWithLoyalty(params: {
   ])
   const mobileDiscount = pricingSettings.mobileOnlineDiscountPercent
   const days = Math.max(1, Math.floor(Number(params.billableDays) || 1))
-  const baseAmount =
-    params.paymentMethod === "online"
-      ? calculateMobileBookingPriceFromTiers(tiers, days, "online", mobileDiscount)
-      : calculateBookingPriceFromTiers(tiers, days, params.paymentMethod)
-  const oneDayPrice =
-    params.paymentMethod === "online"
-      ? calculateMobileBookingPriceFromTiers(tiers, 1, "online", mobileDiscount)
-      : calculateBookingPriceFromTiers(tiers, 1, params.paymentMethod)
+  const baseAmount = calculateMobileBookingPriceFromTiers(tiers, days, params.paymentMethod, mobileDiscount)
+  const oneDayPrice = calculateMobileBookingPriceFromTiers(tiers, 1, params.paymentMethod, mobileDiscount)
   const discounted = applyLoyaltyDiscountToAmount(
     baseAmount,
     oneDayPrice,

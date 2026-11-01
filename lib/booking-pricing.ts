@@ -145,11 +145,22 @@ export function resolvePriceTier(days: number, tiers: PriceTier[]): PriceTier | 
   return exact || sorted.find((tier) => tier.days >= days) || sorted[sorted.length - 1] || null
 }
 
+// Mobile long stays retain the configured 30-day package, then add 30.77 lei/day.
+export function resolveMobilePriceTier(days: number, tiers: PriceTier[]): PriceTier | null {
+  if (days <= 30) return resolvePriceTier(days, tiers)
+  const base = tiers.find((tier) => tier.days === 30)
+  if (!base || !Number.isFinite(days)) return null
+  return {
+    days,
+    standardPrice: (Math.round(base.standardPrice * 100) + (days - 30) * 3077) / 100,
+  }
+}
+
 export function getMobileOnlineTierTotal(
   tier: PriceTier,
   mobileOnlineDiscountPercent: number
 ): number {
-  return roundPrice(tier.standardPrice * (1 - mobileOnlineDiscountPercent / 100))
+  return Math.round(Math.round(tier.standardPrice * 100) * (100 - mobileOnlineDiscountPercent) / 100) / 100
 }
 
 export function getTierTotal(tier: PriceTier, paymentMethod: PaymentMethod): number {
@@ -246,7 +257,7 @@ export function resolveMobileBookingPrice(
   paymentMethod: PaymentMethod,
   mobileOnlineDiscountPercent: number
 ): ResolvedPriceTier | null {
-  const tier = resolvePriceTier(days, tiers)
+  const tier = resolveMobilePriceTier(days, tiers)
   if (!tier) return null
   const total =
     paymentMethod === "at_parking"
