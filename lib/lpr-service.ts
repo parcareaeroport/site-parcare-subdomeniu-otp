@@ -1,5 +1,6 @@
 import { lprLog, lprFields, lprError, lprTransaction, withLprFields } from "@/lib/lpr-log.server"
 import { createHash } from "node:crypto"
+import { readExitPointerEvidence, exitPointerDecision } from "./lpr-exit-pointer.server"
 import { FieldValue } from "firebase-admin/firestore"
 import { correctedCameraTime, cameraClockOffsetSeconds, type CameraTimeMode } from "@/lib/lpr-camera-config.server"
 import { manualExitClock, manualLprInstant } from "@/lib/manual-lpr-exit.server"
@@ -249,9 +250,14 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
           })
         }
       }
+      const pointerEvidence = eventType === "exit" ? await readExitPointerEvidence(tx, db, bookingRef.id, state) : { linked: null, archived: null }
+      const exitPointer = eventType === "exit" ? exitPointerDecision({ bookingId: bookingRef.id, booking: data, plate: normalizedPlate,
+        state: stateSnap.exists ? state : undefined, openBookingIds: open.map(row => row.id), evidence: pointerEvidence, at: point }) : null
+      if (exitPointer?.conflict) return review(exitPointer.conflict, [bookingRef.id])
       const instant = new Date(instants[0]).toISOString()
       writeLprVisit(tx, db, { ref: bookingRef, data, plate: normalizedPlate, at, instant,
         eventType, eventId: saved.id, visitId, deviceId: input.deviceId, create: isNew, patch,
+        ...(exitPointer ? { updatePointer: exitPointer.updatePointer } : {}),
         unmatched: isNew || data.status === "unmatched_lpr",
         lprExtra: { lastSeenLaneNo: input.laneNo ?? null, lastEventAccurateTime: input.accurateTime ?? null },
       })
@@ -259,11 +265,13 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
         eventType, plateNumber: normalizedPlate, laneNo: input.laneNo ?? null,
         deviceId: input.deviceId ?? null, direction: input.direction ?? null,
         snapTime: input.snapTime ?? null, accurateTime: input.accurateTime ?? null,
+        ...(exitPointer?.reconciliation ? { pointerReconciliation: exitPointer.reconciliation } : {}),
         lprEventId: saved.id, visitId, eventTime: at, eventInstant: instant, createdAt: serverTimestamp(),
       })
       updateReceipt(tx, eventRef, {
         matchedBookingId: bookingRef.id, visitId, nextAttemptAt:FieldValue.delete(), associationReason:null,
         associationStatus: isNew || data.status === "unmatched_lpr" ? "unmatched_visit" : "matched",
+        ...(exitPointer?.reconciliation ? { pointerReconciliation: exitPointer.reconciliation } : {}),
       })
       return { savedEventId: saved.id, matchedBookingId: bookingRef.id, eventType }
     })

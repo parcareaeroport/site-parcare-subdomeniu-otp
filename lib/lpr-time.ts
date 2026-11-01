@@ -62,8 +62,23 @@ function legacyLinkedCameraClock(r: any): string | null {
   const ms = Date.parse(wall)
   return Number.isFinite(ms) && new Date(ms).toISOString() === wall ? wall : null
 }
+/** Legacy admin writers omitted manual=true and eventTime. Recognize only the
+ * explicit admin provenance AND a linked booking, never arbitrary camera clocks.
+ * This is a read-time compatibility rule; original receipts are not rewritten.
+ */
+function legacyLinkedManualClock(r: any): string | null {
+  if (r.manual != null || r.associationStatus !== "manual" || r.deviceId !== "manual_admin" ||
+    r.direction !== "manual" || !["entry", "exit"].includes(String(r.eventType).trim().toLowerCase()) ||
+    typeof r.matchedBookingId !== "string" || !r.matchedBookingId || r.matchedBookingId.includes("/") ||
+    r.clockOffsetSeconds != null || r.timestampMode && r.timestampMode !== "romania_wall_clock") return null
+  const raw = r.accurateTime ?? r.snapTime
+  if (typeof raw !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(raw)) return null
+  const wall = raw.replace(/(?:\.(\d{1,3}))?Z$/, (_match, fraction: string | undefined) => `.${(fraction || "").padEnd(3, "0")}Z`)
+  const ms = Date.parse(wall)
+  return Number.isFinite(ms) && new Date(ms).toISOString() === wall ? wall : null
+}
 export function receiptLprTime(r: any): LprTime {
-  return lprTime(r.eventTime ?? (r.manual === true ? r.accurateTime ?? r.snapTime : legacyLinkedCameraClock(r)), r.eventInstant)
+  return lprTime(r.eventTime ?? (r.manual === true ? r.accurateTime ?? r.snapTime : legacyLinkedManualClock(r) ?? legacyLinkedCameraClock(r)), r.eventInstant)
 }
 export function normalizeLprEventType(value: unknown): "entry" | "exit" | null {
   const type = String(value || "").trim().toLowerCase()

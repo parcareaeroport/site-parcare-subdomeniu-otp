@@ -5,6 +5,7 @@ const entriesOnly=process.argv.includes('--entries')
 const exitsOnly=process.argv.includes('--exits')
 if(entriesOnly&&exitsOnly)throw Error('Choose --entries or --exits, not both')
 const entrySuites=[
+ 'test-lpr-legacy-manual-exit-emulator.cjs',
  'test-lpr-deleted-visit-restoration-emulator.cjs',
  'test-occupancy-entry-matrix-emulator.cjs','test-occupancy-http-ledger-emulator.cjs',
  'test-lpr-association-emulator.cjs','test-lpr-entry-protections-emulator.cjs',
@@ -12,6 +13,7 @@ const entrySuites=[
  'test-unified-occupancy-emulator.cjs','test-lpr-camera-compatibility.cjs','test-occupancy-network-guard.cjs',
 ]
 const exitSuites=[
+ 'test-lpr-legacy-manual-exit-emulator.cjs',
  'test-lpr-deleted-visit-restoration-emulator.cjs',
  'test-occupancy-exit-matrix-emulator.cjs','test-occupancy-http-ledger-emulator.cjs',
  'test-lpr-association-emulator.cjs','test-lpr-exit-protections-emulator.cjs',
@@ -20,6 +22,7 @@ const exitSuites=[
  'test-unified-occupancy-emulator.cjs','test-occupancy-network-guard.cjs',
 ]
 const suites=entriesOnly?entrySuites:exitsOnly?exitSuites:[
+ 'test-lpr-legacy-manual-exit-emulator.cjs',
  'test-lpr-deleted-visit-restoration-emulator.cjs',
  'test-occupancy-exit-matrix-emulator.cjs',
  'test-occupancy-entry-matrix-emulator.cjs',

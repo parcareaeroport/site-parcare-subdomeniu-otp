@@ -1,5 +1,6 @@
 import { lprTransaction, lprLog } from "@/lib/lpr-log.server"
 import "server-only"
+import { readExitPointerEvidence, exitPointerDecision } from "./lpr-exit-pointer.server"
 import { writeLprVisit } from "@/lib/lpr-visit.server"
 import { createHash } from "node:crypto"
 import { FieldValue } from "firebase-admin/firestore"
@@ -58,6 +59,7 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
   ])
   const linkedId = state.data()?.bookingId
   const linked = typeof linkedId === "string" && linkedId !== bookingId && !linkedId.includes("/") ? await tx.get(adminDb.collection("bookings").doc(linkedId)) : null
+  const pointerEvidence = await readExitPointerEvidence(tx, adminDb, bookingId, state.data(), linked)
   const open = insideSnap.docs.filter(d => normalizeLicensePlate(String(d.data().licensePlate || "")) === plate && getLprPresenceState(d.data()).isEffectivelyInside).sort((a, b) => a.id.localeCompare(b.id))
   const lpr = b.lpr || {}, inside = getLprPresenceState(b).isEffectivelyInside
   const arrived = validMillis(lpr.arrivedAt), departed = validMillis(lpr.departedAt)
@@ -68,6 +70,7 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
     id: snap.id, version: snap.updateTime?.toDate().toISOString(), nanos: snap.updateTime?.nanoseconds,
     open: open.map(d => [d.id, d.updateTime?.seconds, d.updateTime?.nanoseconds]),
     pointer: [state.updateTime?.seconds, state.updateTime?.nanoseconds], linked:[linked?.id,linked?.updateTime?.seconds,linked?.updateTime?.nanoseconds],
+    archive: [pointerEvidence.archived?.id, pointerEvidence.archived?.exists, pointerEvidence.archived?.updateTime?.seconds, pointerEvidence.archived?.updateTime?.nanoseconds],
     receipts: receipts.docs.map(d => [d.id, d.updateTime?.seconds, d.updateTime?.nanoseconds]).sort(),
     history: history.docs.map(d => [d.id, d.updateTime?.seconds, d.updateTime?.nanoseconds]).sort(),
   })).digest("hex")
@@ -78,7 +81,7 @@ export async function readManualLprContext(tx: FirebaseFirestore.Transaction, bo
     departure: iso(lpr.departedAt), inside, lastEntry:lastEntry === null ? null : new Date(lastEntry).toISOString(),
     duplicates: open.length > 1 ? open.map(d => row(d.id, d.data())) : open.filter(d => d.id !== snap.id).map(d => row(d.id, d.data())),
   }
-  return { ref, b, plate, context, state, stateRef, linked, receipts, history,
+  return { ref, b, plate, context, state, stateRef, linked, receipts, history, pointerEvidence, openBookingIds: open.map(d => d.id),
     effectiveInsideCount: countEffectiveLprOccupancy(insideSnap.docs.map(d => d.data())) }
 }
 export async function prepareManualExit(bookingId: string) {
@@ -102,7 +105,7 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       lprLog("manual_replay",{eventId:eventRef.id,bookingId:input.bookingId,replayed:true,occupancyDelta:0,outcome:"duplicate"})
       return receipt.data()!.result
     }
-    const { ref, b, plate, context, state, linked, receipts, history } = await readManualLprContext(tx, input.bookingId)
+    const { ref, b, plate, context, state, linked, receipts, history, pointerEvidence, openBookingIds } = await readManualLprContext(tx, input.bookingId)
     if (context.version !== input.version) throw changed()
     const realNow = new Date(), now = manualExitClock(realNow)
     const at = input.useServerNow === true ? now : parseManualExitClock(input.date, input.time)
@@ -125,6 +128,8 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
           : "evidențele șederii sunt contradictorii"
       throw new ManualExitError(conflict === "exit_before_last_entry" ? "EXIT_BEFORE_LAST_ENTRY" : "EXIT_REQUIRES_REVIEW", `Necesită verificare ADMIN: ${detail}. Ieșirea nu a fost salvată.`, 409)
     }
+    const exitPointer = exitPointerDecision({ bookingId: ref.id, booking: b, plate, state: state.data(), openBookingIds, evidence: pointerEvidence, at: point })
+    if (exitPointer.conflict) throw new ManualExitError("EXIT_REQUIRES_REVIEW", "Necesită verificare ADMIN: referința șederii nu poate fi reconciliată în siguranță. Ieșirea nu a fost salvată.", 409)
     // A correction to a closed visit cannot move its departure into a later visit.
     const pointer = state.data()
     const pointerTime = validMillis(pointer?.lastEventAt)
@@ -153,7 +158,7 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       return r.eventType === "exit" && !r.supersededBy && r.matchedBookingId === ref.id &&
         (b.lpr?.visitId && r.visitId === b.lpr.visitId || !r.visitId && iso(r.eventTime ?? r.accurateTime ?? r.snapTime) === context.departure)
     }) : []
-    const audit = { eventType: "exit", plateNumber: plate, normalizedPlate: plate, deviceId: "manual_admin", direction: "manual", eventTime: at, eventInstant: instant, snapTime: at, accurateTime: at, matchedBookingId: ref.id, visitId: b.lpr?.visitId || null, manual: true, adminUid: actor.uid, adminEmail: actor.email, confirmations, reviewedDocuments: context.duplicates.map(d => d.id), supersedes: superseded.map(d => d.id), previousLpr: b.lpr || null }
+    const audit = { eventType: "exit", plateNumber: plate, normalizedPlate: plate, deviceId: "manual_admin", direction: "manual", eventTime: at, eventInstant: instant, snapTime: at, accurateTime: at, matchedBookingId: ref.id, visitId: b.lpr?.visitId || null, manual: true, adminUid: actor.uid, adminEmail: actor.email, confirmations, reviewedDocuments: context.duplicates.map(d => d.id), supersedes: superseded.map(d => d.id), ...(exitPointer.reconciliation ? { pointerReconciliation: exitPointer.reconciliation } : {}), previousLpr: b.lpr || null }
     for (const old of superseded) {
       const replacement = { supersededBy: eventRef.id, supersededAt: FieldValue.serverTimestamp(), supersededByUid: actor.uid }
       tx.update(old.ref, replacement)
@@ -165,8 +170,10 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       deviceId: "manual_admin", manual: true, actor,
       lprExtra: { lastEventAccurateTime: at },
       // A historical correction must never close a different visit's pointer.
-      updatePointer: state.exists && !otherVisit,
+      updatePointer: exitPointer.updatePointer,
     })
+    if (exitPointer.reconciliation) lprLog("exit_pointer_reconciled", { bookingId: ref.id, visitId: b.lpr?.visitId,
+      candidateBookingIds: [exitPointer.reconciliation.previousBookingId], reason: "archived_reference", occupancyDelta: 0, outcome: "committed" })
     return result
   })
 }
