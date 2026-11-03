@@ -2,6 +2,33 @@ import { getLprPresenceState, lprTimestampToMillis } from "./lpr-presence"
 import { isTrustedLprReceipt } from "./lpr-entry-evidence"
 import { compareLprTimes, lprTime, normalizeLprEventType, receiptLprTime, type LprTime } from "./lpr-time"
 
+/** Old admin arrival corrections rewrote lastSeenAt but left the plate pointer at
+ * the camera observation. Accept only a proven correction of that SAME visit.
+ * Never relax identity, exit ordering, newer-event or transaction/version guards.
+ */
+export function legacyManualArrivalCorrection(bookingId: string, booking: any, state: any, receipts: any[]) {
+  const lpr = booking.lpr || {}
+  if (!state || state.bookingId !== bookingId || !lpr.visitId || state.visitId !== lpr.visitId ||
+    state.isInside !== true || state.lastEventType !== "entry" || lpr.lastEventType !== "entry" ||
+    lpr.manualOverride !== true || lpr.lastSeenDeviceId !== "manual_admin" ||
+    lpr.lastEventId != null || state.lastEventId != null || lpr.departedAt != null ||
+    compareLprTimes(lprTime(lpr.arrivedAt), lprTime(lpr.lastSeenAt)) !== 0) return null
+  const correctedAt = lprTimestampToMillis(lpr.manualOverrideAt), pointerUpdated = lprTimestampToMillis(state.updatedAt)
+  if (correctedAt === null || pointerUpdated === null || correctedAt < pointerUpdated) return null
+  const original = receipts.find(r => isTrustedLprReceipt(r, false) && r.eventType === "entry" &&
+    ["matched", "unmatched_visit"].includes(r.associationStatus) && r.matchedBookingId === bookingId &&
+    r.visitId === lpr.visitId && r.deviceId === state.lastDeviceId &&
+    compareLprTimes(receiptLprTime(r), lprTime(state.lastEventAt, state.lastEventAtInstant)) === 0 &&
+    lprTimestampToMillis(r.receivedAt) !== null && lprTimestampToMillis(r.receivedAt)! <= pointerUpdated)
+  const correction = receipts.find(r => r.manual == null && r.eventTime == null && r.eventInstant == null &&
+    r.associationStatus === "manual" && r.deviceId === "manual_admin" && r.direction === "manual" &&
+    r.eventType === "entry" && r.matchedBookingId === bookingId && !r.supersededBy &&
+    (!r.visitId || r.visitId === lpr.visitId) && lprTimestampToMillis(r.receivedAt) === correctedAt &&
+    compareLprTimes(receiptLprTime(r), lprTime(lpr.lastSeenAt, lpr.lastSeenAtInstant)) === 0)
+  return original && correction ? { reason: "legacy_manual_arrival_correction", visitId: lpr.visitId,
+    previousPointerAt: state.lastEventAt, correctedArrivalAt: lpr.arrivedAt } : null
+}
+
 /** Shared camera/manual/retry gate. Call after transactionally reading the plate's
  * receipts AND pointer. A receipt still awaiting association is evidence too. */
 export function lprExitConflict(input: { bookingId: string; booking: any; state: any; receipts: any[]; at: LprTime; manual?: boolean }): string | null {
@@ -21,7 +48,8 @@ export function lprExitConflict(input: { bookingId: string; booking: any; state:
       const beforePointer = compareLprTimes(at, pointerTime, precision)
       if (beforePointer === null) return "ambiguous_exit_order"
       if (beforePointer === -1) return "inconsistent_visit_state"
-      if (lprTimestampToMillis(lpr.lastSeenAt) !== null && compareLprTimes(pointerTime, lprTime(lpr.lastSeenAt, lpr.lastSeenAtInstant)) !== 0) return "inconsistent_visit_state"
+      if (lprTimestampToMillis(lpr.lastSeenAt) !== null && compareLprTimes(pointerTime, lprTime(lpr.lastSeenAt, lpr.lastSeenAtInstant)) !== 0 &&
+        !legacyManualArrivalCorrection(bookingId, booking, state, receipts)) return "inconsistent_visit_state"
     }
   }
   for (const r of receipts) {

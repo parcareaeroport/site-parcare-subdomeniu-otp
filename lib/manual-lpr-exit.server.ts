@@ -9,7 +9,7 @@ import { getLprPresenceState, lprTimestampToMillis } from "@/lib/lpr-presence"
 import { normalizeLicensePlate } from "@/lib/utils"
 import type { ManualExitContext, ManualExitRow, ManualExitSaveInput } from "@/lib/manual-lpr-exit-contract"
 import { compareLprTimes, lprTime, lprTimeCandidates, normalizeLprEventType, receiptLprTime, romaniaCivilClock, uniqueLprInstant } from "./lpr-time"
-import { lprExitConflict } from "./lpr-exit-evidence"
+import { legacyManualArrivalCorrection, lprExitConflict } from "./lpr-exit-evidence"
 import { isTrustedLprReceipt } from "./lpr-entry-evidence"
 import { countEffectiveLprOccupancy } from "./lpr-occupancy"
 
@@ -158,7 +158,8 @@ export async function saveManualExit(input: ManualExitSaveInput, actor: { uid: s
       return r.eventType === "exit" && !r.supersededBy && r.matchedBookingId === ref.id &&
         (b.lpr?.visitId && r.visitId === b.lpr.visitId || !r.visitId && iso(r.eventTime ?? r.accurateTime ?? r.snapTime) === context.departure)
     }) : []
-    const audit = { eventType: "exit", plateNumber: plate, normalizedPlate: plate, deviceId: "manual_admin", direction: "manual", eventTime: at, eventInstant: instant, snapTime: at, accurateTime: at, matchedBookingId: ref.id, visitId: b.lpr?.visitId || null, manual: true, adminUid: actor.uid, adminEmail: actor.email, confirmations, reviewedDocuments: context.duplicates.map(d => d.id), supersedes: superseded.map(d => d.id), ...(exitPointer.reconciliation ? { pointerReconciliation: exitPointer.reconciliation } : {}), previousLpr: b.lpr || null }
+    const legacyCorrection = legacyManualArrivalCorrection(ref.id, b, state.data(), receipts.docs.map(d => d.data()))
+    const audit = { ...(legacyCorrection ? { legacyArrivalReconciliation: legacyCorrection } : {}), eventType: "exit", plateNumber: plate, normalizedPlate: plate, deviceId: "manual_admin", direction: "manual", eventTime: at, eventInstant: instant, snapTime: at, accurateTime: at, matchedBookingId: ref.id, visitId: b.lpr?.visitId || null, manual: true, adminUid: actor.uid, adminEmail: actor.email, confirmations, reviewedDocuments: context.duplicates.map(d => d.id), supersedes: superseded.map(d => d.id), ...(exitPointer.reconciliation ? { pointerReconciliation: exitPointer.reconciliation } : {}), previousLpr: b.lpr || null }
     for (const old of superseded) {
       const replacement = { supersededBy: eventRef.id, supersededAt: FieldValue.serverTimestamp(), supersededByUid: actor.uid }
       tx.update(old.ref, replacement)

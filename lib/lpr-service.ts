@@ -12,7 +12,7 @@ import { writeLprVisit } from "@/lib/lpr-visit.server"
 import { LPR_ACTIVE_STATUSES as ACTIVE_STATUSES, LPR_TOLERANCE_MS as TOLERANCE_MS, inLprBookingWindow as inBookingWindow } from "@/lib/lpr-booking-window"
 import { normalizeLicensePlate } from "@/lib/utils"
 import { bookingLprTimes, compareLprTimes, lprTime, lprTimeCandidates, receiptLprTime } from "./lpr-time"
-import { lprExitConflict } from "./lpr-exit-evidence"
+import { legacyManualArrivalCorrection, lprExitConflict } from "./lpr-exit-evidence"
 
 type Nullable<T> = T | null
 export interface LprEventInput {
@@ -254,6 +254,7 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
       const exitPointer = eventType === "exit" ? exitPointerDecision({ bookingId: bookingRef.id, booking: data, plate: normalizedPlate,
         state: stateSnap.exists ? state : undefined, openBookingIds: open.map(row => row.id), evidence: pointerEvidence, at: point }) : null
       if (exitPointer?.conflict) return review(exitPointer.conflict, [bookingRef.id])
+      const legacyCorrection = eventType === "exit" ? legacyManualArrivalCorrection(bookingRef.id, data, state, plateReceipts.docs.map(d => d.data())) : null
       const instant = new Date(instants[0]).toISOString()
       writeLprVisit(tx, db, { ref: bookingRef, data, plate: normalizedPlate, at, instant,
         eventType, eventId: saved.id, visitId, deviceId: input.deviceId, create: isNew, patch,
@@ -265,12 +266,14 @@ export async function processSavedLprEvent(id: string): Promise<LprResult> {
         eventType, plateNumber: normalizedPlate, laneNo: input.laneNo ?? null,
         deviceId: input.deviceId ?? null, direction: input.direction ?? null,
         snapTime: input.snapTime ?? null, accurateTime: input.accurateTime ?? null,
+        ...(legacyCorrection ? { legacyArrivalReconciliation: legacyCorrection } : {}),
         ...(exitPointer?.reconciliation ? { pointerReconciliation: exitPointer.reconciliation } : {}),
         lprEventId: saved.id, visitId, eventTime: at, eventInstant: instant, createdAt: serverTimestamp(),
       })
       updateReceipt(tx, eventRef, {
         matchedBookingId: bookingRef.id, visitId, nextAttemptAt:FieldValue.delete(), associationReason:null,
         associationStatus: isNew || data.status === "unmatched_lpr" ? "unmatched_visit" : "matched",
+        ...(legacyCorrection ? { legacyArrivalReconciliation: legacyCorrection } : {}),
         ...(exitPointer?.reconciliation ? { pointerReconciliation: exitPointer.reconciliation } : {}),
       })
       return { savedEventId: saved.id, matchedBookingId: bookingRef.id, eventType }

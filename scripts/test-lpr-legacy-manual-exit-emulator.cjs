@@ -5,6 +5,11 @@ assert.match(process.env.FIRESTORE_EMULATOR_HOST || '', /^(127\.0\.0\.1|localhos
 const { initializeApp, deleteApp } = require('firebase-admin/app'), { getFirestore } = require('firebase-admin/firestore')
 const project = 'demo-parking-legacy-manual-exit', app = initializeApp({ projectId: project }, 'legacy-manual-exit'), db = getFirestore(app)
 const root = path.resolve(__dirname, '..'), cache = new Map()
+// Freeze application time; old camera fixtures must not age into stale_event_time.
+class FixtureDate extends Date {
+  constructor(...args) { super(...(args.length ? args : ['2026-11-01T18:00:00Z'])) }
+  static now() { return Date.parse('2026-11-01T18:00:00Z') }
+}
 let failWrite = false
 const proxy = new Proxy(db, { get(t, k) {
   if (k === 'runTransaction') return fn => t.runTransaction(tx => fn(new Proxy(tx, { get(tr, field) {
@@ -20,7 +25,7 @@ function load(relative) {
   const full = path.resolve(root, relative); if (cache.has(full)) return cache.get(full).exports
   const m = { exports: {} }; cache.set(full, m)
   const js = ts.transpileModule(fs.readFileSync(full, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, esModuleInterop: true } }).outputText
-  new Function('require', 'module', 'exports', js)(name => {
+  new Function('require', 'module', 'exports', 'Date', js)(name => {
     if (name === 'server-only') return {}
     if (name === '@/lib/firebase-admin') return { adminDb: proxy, adminAuth: { verifyIdToken: async token => {
       if (!['admin', 'employee', 'entriesOperator'].includes(token)) throw Error('Invalid fixture identity')
@@ -29,7 +34,7 @@ function load(relative) {
     if (name.startsWith('@/')) return load(name.slice(2) + '.ts')
     if (name.startsWith('.')) return load(path.relative(root, path.resolve(path.dirname(full), name)) + '.ts')
     return require(name)
-  }, m, m.exports)
+  }, m, m.exports, FixtureDate)
   return m.exports
 }
 const { POST: manual } = load('app/api/admin/manual-lpr-exit/route.ts')
@@ -87,6 +92,22 @@ async function check(name, fn) {
   for (const key of ['LPR_AUTH_SECRET', 'LPR_INGEST_SECRET', 'LPR_CAMERA_CLOCK_OFFSETS_SECONDS_JSON', 'LPR_DEVICES_JSON']) delete process.env[key]
   assert.ok((await fetch(`http://${process.env.FIRESTORE_EMULATOR_HOST}/emulator/v1/projects/${project}/databases/(default)/documents`, { method: 'DELETE' })).ok)
   await fn(); passed++; console.log('PASS ' + name)
+}
+// CT30WWK legacy schema: manual correction changed booking observation only.
+async function correctedArrivalFixture() {
+  await fixture()
+  const corrected = new Date('2026-10-29T09:13:18.823Z'), observed = new Date('2026-10-29T09:13:09.375Z')
+  await db.doc('bookings/active').update({ lpr: { isInside: true, visitId: 'legacy-camera',
+    arrivedAt: '2026-10-29T11:12:00Z', departedAt: null, lastSeenAt: '2026-10-29T11:12:00Z',
+    lastEventType: 'entry', lastSeenDeviceId: 'manual_admin', manualOverride: true, manualOverrideAt: corrected } })
+  await db.doc('lpr_plate_state/' + plate).set({ bookingId: 'active', visitId: 'legacy-camera', isInside: true,
+    lastEventType: 'entry', lastDeviceId: 'intrare_1', lastEventAt: '2026-10-29T12:05:37.707Z', updatedAt: observed })
+  await db.doc('lpr_events/legacy-camera').set({ normalizedPlate: plate, eventType: 'entry', deviceId: 'intrare_1',
+    accurateTime: '2026-10-29 12:05:37.707', snapTime: '2026-10-29 12:05:37', matchedBookingId: 'active',
+    visitId: 'legacy-camera', associationStatus: 'matched', receivedAt: new Date('2026-10-29T09:13:08.119Z') })
+  await db.doc('lpr_events/legacy-manual').set({ ...legacyManual, accurateTime: '2026-10-29T11:12:00Z',
+    snapTime: '2026-10-29T11:12:00Z', receivedAt: corrected })
+  await db.doc('lpr_events/legacy-duplicate').delete()
 }
 async function main() {
   await check('strict read-time clock compatibility for proven linked manual receipt', async () => {
@@ -181,6 +202,59 @@ async function main() {
     await fixture(); await db.doc('lpr_plate_state/' + plate).delete(); const archive = await read('deleted_bookings/archived')
     await post(input(await context())); await totals(0); assert.equal((await read('lpr_plate_state/' + plate)).isInside, false)
     assert.deepEqual(await read('deleted_bookings/archived'), archive)
+  })
+  for (const role of ['admin', 'employee', 'entriesOperator']) await check('CT30WWK corrected legacy arrival / ' + role + ': exit once and audit reconciliation', async () => {
+    await correctedArrivalFixture(); const old = await read('lpr_events/legacy-manual')
+    const request = input(await context(role)), result = await post(request, role); await totals(0)
+    const audit = await read('lpr_events/' + result.lprEventId)
+    assert.equal(audit.legacyArrivalReconciliation.reason, 'legacy_manual_arrival_correction')
+    assert.equal(audit.legacyArrivalReconciliation.previousPointerAt, '2026-10-29T12:05:37.707Z')
+    assert.equal((await read('lpr_plate_state/' + plate)).isInside, false)
+    assert.deepEqual(await read('lpr_events/legacy-manual'), old)
+    await post(request, role); await totals(0)
+  })
+  await check('CT30WWK camera exit and repeated exit: 1 -> 0 -> 0', async () => {
+    await correctedArrivalFixture(); await cameraAt('exit', '2026-11-01 15:20:00'); await totals(0)
+    const exits = await db.collection('lpr_events').where('eventType', '==', 'exit').get()
+    assert.ok(exits.docs.some(d => d.data().legacyArrivalReconciliation))
+    await cameraAt('exit', '2026-11-01 15:21:00'); await totals(0)
+  })
+  for (const [name, target, patch] of [
+    ['different pointer visit', 'lpr_plate_state/' + plate, { visitId: 'new-stay' }],
+    ['pointer already exited', 'lpr_plate_state/' + plate, { isInside: false }],
+    ['missing manual provenance', 'lpr_events/legacy-manual', { direction: 'unknown' }],
+    ['correction belongs to another booking', 'lpr_events/legacy-manual', { matchedBookingId: 'another' }],
+    ['correction belongs to another visit', 'lpr_events/legacy-manual', { visitId: 'new-stay' }],
+    ['correction timestamp does not match', 'lpr_events/legacy-manual', { receivedAt: new Date('2026-10-29T09:13:19Z') }],
+    ['camera receipt does not match pointer', 'lpr_events/legacy-camera', { accurateTime: '2026-10-29 12:06:37.707' }],
+    ['modern inconsistent pointer', 'lpr_plate_state/' + plate, { lastEventId: 'modern-entry' }],
+  ]) await check('CT30WWK rejects ' + name + ' without occupancy changes', async () => {
+    await correctedArrivalFixture(); await db.doc(target).update(patch); const before = await snapshots()
+    await post(input(await context()), 'admin', 409); await totals(1)
+    await cameraAt('exit', '2026-11-01 15:20:00'); await totals(1); assert.deepEqual(await snapshots(), before)
+  })
+  await check('CT30WWK cannot exit before original camera observation or after a later entry receipt', async () => {
+    await correctedArrivalFixture(); const before = await snapshots()
+    await post(input(await context(), { date: '2026-10-29', time: '11:30:00' }), 'admin', 409)
+    await totals(1); assert.deepEqual(await snapshots(), before)
+    await db.doc('lpr_events/new-entry').set({ normalizedPlate: plate, eventType: 'entry', eventTime: '2026-11-01T15:30:00Z',
+      eventInstant: '2026-11-01T13:30:00Z', associationStatus: 'needs_review' })
+    await post(input(await context()), 'admin', 409); await totals(1)
+    await cameraAt('exit', '2026-11-01 15:20:00'); await totals(1); assert.deepEqual(await snapshots(), before)
+  })
+  await check('CT30WWK concurrent edit invalidates context; rollback writes nothing', async () => {
+    await correctedArrivalFixture(); const request = input(await context())
+    await db.doc('lpr_plate_state/' + plate).update({ visitId: 'reentry' })
+    assert.equal((await post(request, 'admin', 409)).code, 'CONTEXT_CHANGED'); await totals(1)
+    await correctedArrivalFixture(); failWrite = true; const before = await snapshots()
+    await post(input(await context()), 'admin', 503); await totals(1); assert.deepEqual(await snapshots(), before)
+  })
+  await check('CT30WWK camera/manual race and new stay cannot be closed by replay', async () => {
+    await correctedArrivalFixture(); const request = input(await context())
+    await Promise.all([post(request, 'admin', [200, 409]), cameraAt('exit', '2026-11-01 15:20:00')]); await totals(0)
+    await cameraAt('entry', '2026-11-01 15:40:00'); await totals(1)
+    await post(request, 'admin', [200, 409]); await totals(1)
+    await cameraAt('exit', '2026-11-01 15:50:00'); await totals(0)
   })
   console.log(`PASS ${passed} legacy manual exit scenarios`)
 }
