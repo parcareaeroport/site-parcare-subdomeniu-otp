@@ -1135,7 +1135,7 @@ function BookingsPageContent() {
   }
 
   const isOnlinePaidBooking = (b: Booking) => {
-    if (isPayOnSiteBooking(b)) return false
+    if (!isOnlineBooking(b)) return false
     return b.paymentStatus === "paid" || String(b.status || "") === "confirmed_paid"
   }
 
